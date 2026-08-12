@@ -1,22 +1,42 @@
 ## Purpose
 
-Gives the administrator a single web interface to run the system — see its health, connect chat platforms, manage the document knowledge base, configure intent spaces, and read the analytics — without touching the database, the filesystem, or the API directly.
+Gives the administrator a single web interface to run the system — see its health, connect chat platforms, manage the document knowledge base, configure intent spaces, and read the analytics — laid out as the modular card-based dashboard the project brief's visual guidance describes.
 
 ## ADDED Requirements
 
-### Requirement: Five admin screens
+### Requirement: Five core screens
 
-The system SHALL provide an admin console with five screens — Dashboard, Frontend Integrations, Knowledge Base, Intent Configuration, and Analytics — reachable from persistent navigation.
+The system SHALL provide an admin console with five screens — Dashboard, Frontend Integration, Knowledge Base Management, Intent Space Configuration, and Analytics — all reachable from a persistent top or side navigation menu.
 
-#### Scenario: All screens reachable
+#### Scenario: All screens reachable from navigation
 
-- **WHEN** an admin signs in to the console
-- **THEN** all five screens are available from the navigation
-- **AND** each screen can be opened without leaving the console
+- **WHEN** an admin signs in
+- **THEN** all five screens are available from a persistent navigation menu
+- **AND** each can be opened without leaving the console
 
-### Requirement: Admin authentication
+### Requirement: Modular card layout and visual scheme
 
-The system SHALL require a password before any screen is shown, SHALL compare it in a way that does not leak timing information, and SHALL keep the session authenticated until sign-out.
+The system SHALL present each section as a card with rounded corners of 12 pixels and padding of 16 pixels under a clear heading, SHALL use a neutral light background, and SHALL give each module a distinct accent colour — blue for Frontend Integration, green for Knowledge Base, purple for Intent Space Configuration.
+
+#### Scenario: Sections rendered as cards
+
+- **WHEN** any screen is displayed
+- **THEN** its sections appear as cards with 12-pixel rounded corners, 16-pixel padding, and clear headings
+
+#### Scenario: Module accent colours applied
+
+- **WHEN** an admin moves between modules
+- **THEN** Frontend Integration is accented blue, Knowledge Base green, and Intent Space Configuration purple
+- **AND** the page background remains a neutral white or light grey
+
+#### Scenario: Primary actions are prominent
+
+- **WHEN** a screen offers a primary action such as adding an integration, uploading a document, or creating an intent space
+- **THEN** that action is visually prominent rather than buried among secondary controls
+
+### Requirement: Admin sign-in
+
+The system SHALL require a password before any screen is shown and SHALL keep the session authenticated until sign-out.
 
 #### Scenario: Correct password grants access
 
@@ -32,11 +52,11 @@ The system SHALL require a password before any screen is shown, SHALL compare it
 #### Scenario: Sign-out ends the session
 
 - **WHEN** an admin signs out
-- **THEN** the password is required again before any screen is shown
+- **THEN** the password is required again
 
 ### Requirement: Console accesses data only through the backend API
 
-The system SHALL have the console read and write all state through the backend HTTP API, and SHALL NOT have it access the database, the vector indexes, or the filesystem directly.
+The system SHALL have the console read and write all state through the backend HTTP API, and SHALL NOT have it access the database, the indexes, the configuration file, or the filesystem directly.
 
 #### Scenario: Console is a pure API client
 
@@ -47,110 +67,190 @@ The system SHALL have the console read and write all state through the backend H
 #### Scenario: Backend unreachable
 
 - **WHEN** the backend API cannot be reached
-- **THEN** the console shows a clear connection error
-- **AND** it does not present stale data as if it were current
+- **THEN** the console shows a clear connection error rather than presenting stale data as current
 
 ### Requirement: Dashboard screen
 
-The system SHALL provide a Dashboard screen showing document and chunk counts, per-space document counts, per-channel connection status, recent query volume, the active AI provider and models, and the current threshold settings.
+The system SHALL provide a Dashboard screen summarising document and chunk counts, per-space document counts, per-channel connection status, recent query volume, the active AI provider and models, and the current threshold settings, and SHALL provide a "Try a query" box that runs a question through the full pipeline without involving a chat channel.
 
-#### Scenario: Dashboard summarizes system state
+#### Scenario: Dashboard summarises system state
 
 - **WHEN** an admin opens the Dashboard
 - **THEN** knowledge base size, per-space document counts, channel statuses, recent query volume, and provider configuration are shown
 
 #### Scenario: Dashboard highlights problems
 
-- **WHEN** any channel is in an error state or any document failed ingestion
+- **WHEN** any channel is disconnected or any document failed processing
 - **THEN** the Dashboard surfaces that condition prominently
 - **AND** links to the screen where it can be resolved
 
-### Requirement: Frontend Integrations screen
+#### Scenario: Try a query from the Dashboard
 
-The system SHALL provide a Frontend Integrations screen where an admin can enter and update per-channel credentials, set the public base URL, enable or disable each channel, view per-channel status with last success time and last error, and run the end-to-end test.
+- **WHEN** an admin submits a question in the "Try a query" box
+- **THEN** the detected intent space, confidence, answer, sources, and latency are displayed
+- **AND** no chat channel is involved
 
-#### Scenario: Credentials entered and saved
+### Requirement: Frontend Integration screen
 
-- **WHEN** an admin enters credentials for a channel and saves
-- **THEN** the credentials are stored encrypted
-- **AND** the screen redisplays them masked
+The system SHALL provide a Frontend Integration screen presenting one card per supported chat tool, each showing a Connected or Disconnected status indicator, the configuration details including only the last four characters of the configured credential, and a test button that sends a sample query to verify the integration.
 
-#### Scenario: Test run from the screen
+#### Scenario: One card per tool
 
-- **WHEN** an admin runs the end-to-end test for a channel
-- **THEN** the result and the measured latency are displayed on the screen
+- **WHEN** an admin opens Frontend Integration
+- **THEN** Telegram and Microsoft Teams each appear as their own card
 
-#### Scenario: Setup guidance shown
+#### Scenario: Status indicator shown
 
-- **WHEN** an admin views an unconfigured channel
-- **THEN** the screen shows what that platform requires and the endpoint URL to register with it
+- **WHEN** a channel has valid credentials and has completed an exchange
+- **THEN** its card shows Connected
+- **AND** a channel that is unconfigured or failing shows Disconnected with the recorded reason
 
-### Requirement: Knowledge Base screen
+#### Scenario: Credential shown only as last four characters
 
-The system SHALL provide a Knowledge Base screen for uploading documents, listing them with their intent space, status, chunk count, and upload time, reassigning a document's intent space, re-parsing, deleting, and viewing the error message of a failed document.
+- **WHEN** a card displays its configuration details
+- **THEN** only the last four characters of the credential are shown
+- **AND** the full value is never displayed
 
-#### Scenario: Document uploaded from the screen
+#### Scenario: Test button verifies the integration
 
-- **WHEN** an admin uploads a supported document
-- **THEN** it appears in the list with status `pending`
-- **AND** the status updates as processing proceeds without a manual page reload being required to eventually see completion
+- **WHEN** an admin presses the test button on a card
+- **THEN** a sample query is sent through the full pipeline and delivered to that channel
+- **AND** the outcome and measured latency are displayed on the card
+
+#### Scenario: Setup guidance for an unconfigured channel
+
+- **WHEN** a channel has no credential configured
+- **THEN** the card names the environment variable to set and what the platform requires
+
+### Requirement: Knowledge Base Management screen
+
+The system SHALL provide a Knowledge Base Management screen listing documents in a table with columns for document name, upload date, format, size, status, and actions.
+
+#### Scenario: Document table columns present
+
+- **WHEN** an admin opens Knowledge Base Management
+- **THEN** the table shows document name, upload date, format, size, status, and actions for each document
+
+#### Scenario: Status values displayed
+
+- **WHEN** a document is listed
+- **THEN** its status reads Processed, Pending, or Error
+
+#### Scenario: Row actions available
+
+- **WHEN** an admin views a document row
+- **THEN** actions to view, update, and delete that document are available
+
+#### Scenario: View action shows document detail
+
+- **WHEN** an admin chooses the view action
+- **THEN** the document's assigned intent space, chunk count, and extracted chunks are shown
+
+#### Scenario: Update action re-parses the document
+
+- **WHEN** an admin chooses the update action
+- **THEN** the document is re-parsed and re-indexed
+- **AND** its status returns to Pending while processing
 
 #### Scenario: Failure reason visible
 
-- **WHEN** a document has failed ingestion
-- **THEN** its status is shown as failed with its error message
+- **WHEN** a document has status Error
+- **THEN** its recorded error message is shown
 - **AND** the admin can retry or delete it from the same screen
 
-#### Scenario: Intent reassigned from the screen
+### Requirement: Document upload area
 
-- **WHEN** an admin changes a document's intent space
-- **THEN** the change is applied and reflected in the list
+The system SHALL provide a prominent upload area accepting drag-and-drop or file selection, SHALL state the supported formats, and SHALL show a progress indicator while a document is being processed.
 
-#### Scenario: Document deleted from the screen
+#### Scenario: Drag-and-drop upload
 
-- **WHEN** an admin deletes a document and confirms
-- **THEN** it is removed from the list and from retrieval
+- **WHEN** an admin drags a supported file onto the upload area
+- **THEN** the upload begins
 
-### Requirement: Intent Configuration screen
+#### Scenario: Supported formats stated
 
-The system SHALL provide an Intent Configuration screen listing every intent space with its description and document count, allowing creation, editing, and deletion of custom spaces, and allowing the confidence threshold and relevance floor to be adjusted.
+- **WHEN** an admin views the upload area
+- **THEN** the accepted formats are stated in the interface
 
-#### Scenario: Spaces listed with usage
+#### Scenario: Processing progress indicated
 
-- **WHEN** an admin opens Intent Configuration
-- **THEN** every space is listed with its description and the number of documents assigned to it
+- **WHEN** a document is uploaded
+- **THEN** a progress indicator reflects its processing state until it reaches Processed or Error
 
-#### Scenario: Threshold adjusted from the screen
+### Requirement: Document search and filter
 
-- **WHEN** an admin changes the confidence threshold and saves
-- **THEN** the new value takes effect for subsequent queries
-- **AND** the screen confirms the saved value
+The system SHALL allow documents to be found by name or keyword and filtered by format, upload date, and associated intent space.
+
+#### Scenario: Search by name
+
+- **WHEN** an admin types part of a document name into the search bar
+- **THEN** only matching documents are listed
+
+#### Scenario: Filter by format
+
+- **WHEN** an admin filters by a document format
+- **THEN** only documents of that format are listed
+
+#### Scenario: Filter by intent space
+
+- **WHEN** an admin filters by an intent space
+- **THEN** only documents assigned to that space are listed
+
+#### Scenario: Filter by upload date
+
+- **WHEN** an admin filters by an upload date range
+- **THEN** only documents uploaded in that range are listed
+
+### Requirement: Intent Space Configuration screen
+
+The system SHALL provide an Intent Space Configuration screen presenting each intent space as a card showing its name, description, number of associated documents, and classification accuracy rate, together with the query classification log and an editor form.
+
+#### Scenario: Intent spaces shown as cards
+
+- **WHEN** an admin opens Intent Space Configuration
+- **THEN** each space appears as a card with its name, description, associated document count, and classification accuracy rate
+
+#### Scenario: Editor form covers name, description, and keywords
+
+- **WHEN** an admin creates or edits an intent space
+- **THEN** a form provides fields for name, description, and classification keywords
+
+#### Scenario: Query classification log present
+
+- **WHEN** an admin opens Intent Space Configuration
+- **THEN** a table of recent queries with detected intent space, classification confidence score, and response status is shown
 
 #### Scenario: Protected space cannot be deleted
 
-- **WHEN** an admin views the General space
+- **WHEN** an admin views the General space card
 - **THEN** no delete action is offered
-- **AND** the screen explains that General is the required fallback space
+- **AND** the card states that General is the required fallback space
 
-#### Scenario: Description role explained
+#### Scenario: Thresholds adjustable
 
-- **WHEN** an admin edits a space description
-- **THEN** the screen states that the description is used by the classifier and affects routing accuracy
+- **WHEN** an admin changes the confidence threshold or relevance floor and saves
+- **THEN** the new values take effect for subsequent queries
+- **AND** the screen confirms the saved values
+
+#### Scenario: Keyword role explained
+
+- **WHEN** an admin edits an intent space
+- **THEN** the form states that description and keywords are used by the classifier and affect routing accuracy
 
 ### Requirement: Analytics screen
 
-The system SHALL provide an Analytics screen with a date range selector showing intent distribution, confidence distribution, fallback rate, measured classification accuracy, most-accessed documents, unused documents, no-match rate and top no-match questions, latency statistics, the filterable query history, and a CSV export action.
+The system SHALL provide an Analytics screen with a period selector showing intent space distribution, most accessed documents, the query log, and a CSV export action.
 
 #### Scenario: Metrics shown for a selected period
 
-- **WHEN** an admin selects a date range
-- **THEN** every metric on the screen reflects that range
+- **WHEN** an admin selects a period
+- **THEN** intent space distribution and most accessed documents reflect that period
 
-#### Scenario: History reviewed and corrected
+#### Scenario: Query log browsable and filterable
 
-- **WHEN** an admin reviews a logged query
-- **THEN** the classification can be marked correct or incorrect from the screen
-- **AND** an incorrect classification can be assigned the space it should have used
+- **WHEN** an admin views the query log
+- **THEN** entries are listed newest first and can be filtered by intent space and status
+- **AND** selecting an entry shows the full answer, citations, and latency
 
 #### Scenario: Export downloaded
 
@@ -164,7 +264,7 @@ The system SHALL provide an Analytics screen with a date range selector showing 
 
 ### Requirement: Destructive actions confirmed
 
-The system SHALL require explicit confirmation before deleting a document, deleting an intent space, or clearing stored credentials.
+The system SHALL require explicit confirmation before deleting a document or an intent space.
 
 #### Scenario: Deletion confirmed
 
@@ -174,7 +274,7 @@ The system SHALL require explicit confirmation before deleting a document, delet
 
 ### Requirement: Actionable error feedback
 
-The system SHALL surface backend validation and operation errors in the console as readable messages naming what failed and what to do about it, rather than raw status codes or stack traces.
+The system SHALL surface backend validation and operation errors as readable messages naming what failed and what to do about it, rather than raw status codes or stack traces.
 
 #### Scenario: Validation error displayed readably
 

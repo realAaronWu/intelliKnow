@@ -1,32 +1,38 @@
 ## Why
 
-Enterprise knowledge is fragmented across documents nobody can find, and the people who need it live in chat tools, not in yet another portal. IntelliKnow KMS closes that gap: admins drop documents into a web console, the system parses and indexes them into named intent domains, and employees ask questions from Telegram or Microsoft Teams and get cited answers drawn from those documents. This change defines the complete MVP — there is no existing system, so everything here is new.
+Enterprise knowledge is fragmented across documents nobody can find, and the people who need it live in chat tools, not in yet another portal. IntelliKnow KMS closes that gap. This change defines the complete MVP — there is no existing system, so everything here is new.
+
+Three goals define the scope. Everything else in this change exists only to serve them:
+
+1. **Seamless integration with common frontend communication tools** — users ask questions from Telegram and Microsoft Teams and get answers there.
+2. **A backend that automatically builds and updates a knowledge base from uploaded documents** — PDF, Word, and Excel go in; a searchable, citable knowledge base comes out.
+3. **Categorizing user queries into predefined intent spaces** — HR, Legal, Finance, Operations — to route each query to the relevant knowledge domain and produce accurate, context-aware responses.
 
 ## What Changes
 
-- **New backend service** (FastAPI + SQLite + FAISS) exposing an internal admin API, two chat webhook endpoints, and a synchronous query pipeline.
-- **Document-driven knowledge base**: admins upload PDF, DOCX, and XLSX files; the system parses them (including embedded tables), chunks the content, generates embeddings, assigns an intent space, and indexes the chunks for semantic search. Documents can be re-parsed and deleted.
-- **Intent spaces**: HR, Legal, Finance, and General ship as defaults; admins can create, rename, describe, and delete custom spaces. General is a protected fallback space that cannot be deleted.
-- **Query orchestrator**: every inbound question is classified into exactly one intent space with a confidence score. Above the configurable threshold (default 0.70) retrieval is hard-filtered to that space; below it, the query falls back to General, which searches every space.
-- **Cited answer generation**: retrieved chunks are synthesized into a concise answer with document citations, formatted for the originating chat channel, with an explicit "no match" response when retrieval finds nothing relevant.
-- **Two chat frontends**: Telegram (Bot API) and Microsoft Teams (Bot Framework). Admins store bot credentials encrypted at rest through the console, monitor per-channel connection status, and run an end-to-end self-test from the UI.
-- **Pluggable AI provider layer**: a narrow `LLMProvider` / `EmbeddingProvider` interface with Anthropic, OpenAI, and local implementations selected by environment variable, so generation, classification, and embeddings can each be pointed at a different backend without touching call sites.
-- **Analytics and history**: every query is logged with timestamp, channel, classified intent, confidence, fallback flag, answer, latency, and the chunks that were retrieved. The console reports intent distribution, classification confidence, most-accessed documents, and no-match rate, and exports the log as CSV.
-- **Streamlit admin console** with five screens: Dashboard, Frontend Integrations, Knowledge Base, Intent Configuration, and Analytics.
-- **Local deployment**: Docker Compose runs the API and console; a cloudflared tunnel supplies the public HTTPS URL the Teams and Telegram webhooks require.
+- **RAG engine built from named, individually testable components** rather than a single retrieval step: structure-aware chunker, embedder, FAISS vector store, SQLite FTS5 keyword index, hybrid retriever with reciprocal-rank fusion, context builder, answer generator, and citation verifier.
+- **Document-driven knowledge base**: admins upload PDF, DOCX, and XLSX; the system parses them (including embedded tables), chunks structure-aware, embeds, writes both a vector index and a keyword index, and files the result under an intent space. Documents can be re-parsed, reassigned, and deleted.
+- **Hybrid retrieval**: dense vector search catches paraphrase, BM25 keyword search catches exact tokens (policy numbers, "Band L4", "Section 4.2"), and reciprocal-rank fusion merges them without weight tuning.
+- **Intent spaces as configuration**: HR, Legal, Finance, Operations, and General are declared in the config file with a name, description, and **classification keywords**, all editable from the console. Classification assigns exactly one space per query with a confidence score; above the threshold retrieval is hard-filtered to that space, below it the query falls back to searching everything. Editing keywords is the brief's "admin-guided accuracy improvement" mechanism and takes effect on the next query with no re-indexing.
+- **Two chat frontends**: Telegram (long-polling by default — no public URL, no tunnel) and Microsoft Teams (Bot Framework, testable locally against the Bot Framework Emulator).
+- **Single configuration file**: one `config.yaml` holds every tunable — LLM provider and models, embedding model, chunk sizes, retrieval parameters, confidence threshold, relevance floor, intent spaces, and channel settings. Secrets live in `.env` and nowhere else. The console edits `config.yaml` and changes take effect without a restart.
+- **Pluggable AI provider layer**: a two-method `LLMProvider` / `EmbeddingProvider` interface with Anthropic, OpenAI, and local implementations selected from config.
+- **Query classification log and analytics**: recent queries with timestamp, channel, question, detected intent space, confidence score, and status (Success / No match / Failed), plus intent space distribution, most accessed documents, and CSV export.
+- **Streamlit admin console** with the five screens the brief names — Dashboard, Frontend Integration, Knowledge Base Management, Intent Space Configuration, Analytics — laid out as accent-coloured cards with the document table, drag-and-drop upload zone, search and filters, and intent space card view the brief's visual guidance specifies.
 
 ## Capabilities
 
 ### New Capabilities
 
-- `ai-provider`: Provider-agnostic interfaces for text generation and embeddings, backend selection by configuration, startup validation, and failure surfacing.
-- `document-ingestion`: Upload, parse, table extraction, chunking, embedding, indexing, re-parsing, and deletion of PDF/DOCX/XLSX source documents.
-- `intent-management`: Lifecycle of intent spaces, protected defaults, per-space document association, and the configurable classification confidence threshold.
-- `query-orchestration`: Intent classification of inbound questions, confidence scoring, threshold enforcement, and routing to the correct knowledge domain.
-- `knowledge-retrieval`: Semantic search within the routed domain, answer synthesis with citations, no-match handling, and channel-aware response formatting.
-- `frontend-integration`: Telegram and Microsoft Teams adapters, encrypted credential storage, inbound/outbound message handling, connection status monitoring, and the admin-triggered end-to-end test.
-- `analytics-and-history`: Query logging, retrieval-hit tracking, aggregate metrics, and CSV export.
-- `admin-console`: The five admin screens, admin authentication, and the interactions each screen has with the backend API.
+- `configuration`: The single config file, its schema and defaults, runtime reload, secret separation, and validation.
+- `ai-provider`: Provider-agnostic text generation and embedding interfaces, backend selection from config, and error normalization.
+- `document-ingestion`: Upload, parse, table extraction, structure-aware chunking, embedding, dual-index writes, re-parse, reassign, and delete.
+- `intent-management`: Intent spaces declared in config with name, description and keywords, the protected General fallback, per-space document counts and accuracy rate, index lifecycle, and the classification threshold.
+- `query-orchestration`: Intent classification, confidence scoring, threshold enforcement, and routing to the correct knowledge domain.
+- `knowledge-retrieval`: The RAG read path — hybrid retrieval, rank fusion, relevance gating, context assembly, grounded answer generation, citation verification, and channel-appropriate formatting.
+- `frontend-integration`: Telegram and Teams adapters, message normalization, delivery, status, and the end-to-end connection test.
+- `analytics-and-history`: Query logging, the query classification log, intent space distribution, most accessed documents, and CSV export.
+- `admin-console`: The five admin screens, their layout and visual scheme, and admin sign-in.
 
 ### Modified Capabilities
 
@@ -34,8 +40,7 @@ None — this is the first change in the project.
 
 ## Impact
 
-- **New repository layout**: `app/` (FastAPI service), `admin/` (Streamlit console), `tests/`, `docs/`, `sample_docs/`, `docker-compose.yml`, `Dockerfile`, `.env.example`.
-- **New runtime dependencies**: `fastapi`, `uvicorn`, `streamlit`, `faiss-cpu`, `sentence-transformers`, `pypdf`, `pdfplumber`, `python-docx`, `openpyxl`, `anthropic`, `openai`, `cryptography`, `httpx`, `botbuilder-core`, `pydantic-settings`, `sqlalchemy`.
-- **New persistent state**: a SQLite database file and a directory of FAISS index files, both mounted as Docker volumes so they survive container restarts.
-- **New external dependencies**: a Telegram bot token from BotFather, an Azure Bot registration (App ID + password) for Teams, an AI provider API key, and a cloudflared tunnel for public HTTPS ingress.
-- **Secrets handling**: bot credentials are encrypted with a Fernet key supplied by environment variable; the encryption key and provider API keys never enter the database or the repository.
+- **New repository layout**: `app/` (FastAPI service), `admin/` (Streamlit console), `tests/`, `docs/`, `sample_docs/`, `config.yaml`, `.env.example`.
+- **New runtime dependencies**: `fastapi`, `uvicorn`, `streamlit`, `faiss-cpu`, `sentence-transformers`, `pypdf`, `pdfplumber`, `python-docx`, `openpyxl`, `anthropic`, `openai`, `httpx`, `botbuilder-core`, `pydantic`, `pyyaml`, `sqlalchemy`. SQLite FTS5 ships with Python's `sqlite3` — no dependency.
+- **New persistent state**: one SQLite file and a directory of FAISS index files under `data/`.
+- **New external dependencies**: a Telegram bot token from BotFather, an AI provider API key, and — only for Teams against a real tenant — an Azure Bot registration. Neither Docker nor a public tunnel is required to run or demo the system.

@@ -1,49 +1,44 @@
 ## Purpose
 
-Turns admin-uploaded documents into searchable knowledge: validating the upload, extracting text and tabular content, splitting it into chunks, generating embeddings, filing the result under an intent space, and keeping the document's processing state visible and correctable.
+The RAG write path: turns admin-uploaded documents into retrievable knowledge by extracting text and tables, chunking with structural awareness, embedding, and writing both a dense vector index and a keyword index — while keeping each document's processing state visible and correctable.
 
 ## ADDED Requirements
 
 ### Requirement: Supported upload formats
 
-The system SHALL accept uploads in PDF (`.pdf`), Word (`.docx`), and Excel (`.xlsx`) formats, and SHALL reject any other format with an error naming the accepted formats.
+The system SHALL accept uploads in the formats listed in configuration — PDF, DOCX, and XLSX by default — and SHALL reject any other format with an error naming the accepted formats.
 
 #### Scenario: PDF accepted
 
 - **WHEN** an admin uploads a `.pdf` file
-- **THEN** the upload is accepted and queued for parsing
+- **THEN** the upload is accepted and queued for processing
 
 #### Scenario: DOCX accepted
 
 - **WHEN** an admin uploads a `.docx` file
-- **THEN** the upload is accepted and queued for parsing
+- **THEN** the upload is accepted and queued for processing
 
 #### Scenario: XLSX accepted
 
 - **WHEN** an admin uploads an `.xlsx` file
-- **THEN** the upload is accepted and queued for parsing
+- **THEN** the upload is accepted and queued for processing
 
 #### Scenario: Unsupported format rejected
 
-- **WHEN** an admin uploads a file whose extension is not `.pdf`, `.docx`, or `.xlsx`
+- **WHEN** an admin uploads a file whose extension is not in the configured list
 - **THEN** the upload is rejected with an error listing the accepted formats
 - **AND** no document record is created
 
 ### Requirement: Upload validation
 
-The system SHALL enforce a maximum upload size of 25 MB, SHALL verify that the file's detected content type matches its extension, and SHALL sanitize the filename before it is used on disk.
+The system SHALL enforce the configured maximum upload size and SHALL reject a file whose content hash matches an already-indexed document.
 
 #### Scenario: Oversized upload rejected
 
-- **WHEN** an admin uploads a file larger than 25 MB
-- **THEN** the upload is rejected with an error stating the size limit
+- **WHEN** an admin uploads a file larger than the configured limit
+- **THEN** the upload is rejected with an error stating the limit
 
-#### Scenario: Extension does not match content
-
-- **WHEN** an uploaded file's detected content type does not match its extension
-- **THEN** the upload is rejected with an error describing the mismatch
-
-#### Scenario: Duplicate content detected
+#### Scenario: Duplicate content rejected
 
 - **WHEN** an admin uploads a file whose content hash matches an existing indexed document
 - **THEN** the upload is rejected with an error naming the existing document
@@ -53,48 +48,57 @@ The system SHALL enforce a maximum upload size of 25 MB, SHALL verify that the f
 
 The system SHALL accept an upload and return immediately, SHALL process it in the background, and SHALL expose a document status of `pending`, `parsing`, `indexed`, or `failed` throughout.
 
-#### Scenario: Upload returns before parsing completes
+#### Scenario: Upload returns before processing completes
 
 - **WHEN** an admin uploads a document
 - **THEN** the request returns promptly with a document identifier and status `pending`
-- **AND** the admin is not blocked while parsing proceeds
 
 #### Scenario: Status progresses to indexed
 
 - **WHEN** background processing completes successfully
-- **THEN** the document status becomes `indexed`
+- **THEN** the status becomes `indexed`
 - **AND** the document reports its chunk count and indexed timestamp
 
-### Requirement: Text and table extraction
+### Requirement: Structured document loading
 
-The system SHALL extract body text from every supported format, and SHALL additionally extract tabular content — PDF tables, DOCX tables, and XLSX sheets — rendering each table into a text representation that preserves its row and column structure.
+The system SHALL extract each document into an ordered sequence of typed blocks — heading, paragraph, and table — each carrying a source reference identifying its page, paragraph, or sheet range of origin.
 
-#### Scenario: PDF body text extracted
+#### Scenario: PDF loaded into blocks
 
-- **WHEN** a text-bearing PDF is parsed
-- **THEN** its body text is extracted and available for chunking
+- **WHEN** a text-bearing PDF is loaded
+- **THEN** its paragraphs and tables are produced as ordered blocks
+- **AND** each block carries its page number as a source reference
 
-#### Scenario: PDF table preserved as structure
+#### Scenario: DOCX headings preserved
 
-- **WHEN** a PDF containing a bordered table is parsed
-- **THEN** the table is extracted as a structured text representation with its rows and columns intact
-- **AND** the values are searchable rather than collapsed into an unordered run of text
+- **WHEN** a Word document containing headings is loaded
+- **THEN** headings are produced as heading blocks distinct from paragraphs
 
-#### Scenario: Excel sheets extracted per sheet
+#### Scenario: Excel sheets loaded per sheet
 
-- **WHEN** a workbook with multiple sheets is parsed
-- **THEN** each sheet is extracted as a separate structured region
-- **AND** each region records its sheet name for citation
+- **WHEN** a workbook with multiple sheets is loaded
+- **THEN** each sheet produces its own table block
+- **AND** each carries its sheet name and cell range as a source reference
+
+### Requirement: Table structure preservation
+
+The system SHALL render extracted tables into a text representation that preserves rows and columns, so that tabular and numeric content is both embeddable and keyword-searchable.
+
+#### Scenario: Table rendered with structure intact
+
+- **WHEN** a document containing a bordered table is processed
+- **THEN** the table becomes text whose rows and columns remain distinguishable
+- **AND** individual cell values are searchable rather than collapsed into an unordered run of text
 
 ### Requirement: AI-assisted recovery of poorly extracted tables
 
 The system SHALL detect when deterministic table extraction produces a ragged result — inconsistent column counts across rows, or a majority of empty cells — and SHALL pass that region's raw text to the LLM provider with a schema requesting a clean structured table, using the result in place of the ragged extraction.
 
-#### Scenario: Ragged table is restructured
+#### Scenario: Ragged table restructured
 
 - **WHEN** table extraction produces rows with inconsistent column counts
 - **THEN** the region is sent to the LLM provider for restructuring
-- **AND** the returned structured table is used as the chunk text
+- **AND** the returned structured table is used as the block content
 
 #### Scenario: Restructuring failure falls back to raw text
 
@@ -107,135 +111,169 @@ The system SHALL detect when deterministic table extraction produces a ragged re
 - **WHEN** table extraction produces a consistent, well-formed table
 - **THEN** no LLM call is made for that region
 
-### Requirement: Chunking
+### Requirement: Structure-aware chunking
 
-The system SHALL split extracted content into overlapping chunks of approximately 800 characters with approximately 100 characters of overlap, SHALL never split a table row across two chunks, and SHALL record a source reference for each chunk identifying its page, paragraph, or sheet of origin.
+The system SHALL split blocks into chunks of the configured target size with the configured overlap, SHALL never split a table row across chunks, SHALL keep a table smaller than 1.5 times the target size whole, SHALL prefix each chunk with the heading path it falls under, and SHALL not apply overlap across a heading boundary.
 
-#### Scenario: Long text is chunked with overlap
+#### Scenario: Long text chunked with overlap
 
-- **WHEN** a document's extracted text substantially exceeds the chunk size
+- **WHEN** a run of paragraphs substantially exceeds the target chunk size
 - **THEN** multiple chunks are produced with overlapping content at their boundaries
 
-#### Scenario: Table rows stay intact
+#### Scenario: Table rows never split
 
-- **WHEN** a table region would fall across a chunk boundary
-- **THEN** the boundary is adjusted so that no table row is split
+- **WHEN** a table would fall across a chunk boundary
+- **THEN** the boundary is adjusted so that no table row is divided
+
+#### Scenario: Small table kept whole
+
+- **WHEN** a table is larger than the target chunk size but under 1.5 times it
+- **THEN** the table is stored as a single chunk
+
+#### Scenario: Heading path carried into the chunk
+
+- **WHEN** a chunk is created from content under a heading hierarchy
+- **THEN** the chunk text is prefixed with that heading path
+- **AND** the path is stored so it can be shown in citations
+
+#### Scenario: Overlap does not cross headings
+
+- **WHEN** a chunk boundary coincides with a heading boundary
+- **THEN** no overlap content is carried across it
+
+### Requirement: Chunk source references
+
+The system SHALL record a source reference on every chunk identifying where in the document it came from, and SHALL make it available for citation.
 
 #### Scenario: Source reference recorded
 
-- **WHEN** a chunk is created from a PDF page, a DOCX paragraph, or an XLSX sheet
-- **THEN** the chunk records a source reference naming that location
-- **AND** the reference is available for citation in answers
+- **WHEN** a chunk is created
+- **THEN** it stores the page, paragraph, or sheet reference of its originating blocks
 
 ### Requirement: Intent space assignment at ingest
 
-The system SHALL suggest an intent space for each uploaded document using the LLM provider, presenting the available spaces with their descriptions and a sample of the document's content, and SHALL allow the admin to override the suggestion.
+The system SHALL suggest an intent space for each uploaded document using the LLM provider, presenting the configured spaces with their descriptions and a sample of the document's content, and SHALL allow the admin to override the suggestion.
 
 #### Scenario: Space suggested at upload
 
-- **WHEN** a document finishes parsing
-- **THEN** an intent space is assigned based on the model's suggestion
+- **WHEN** a document finishes loading
+- **THEN** an intent space is assigned from the model's suggestion
 - **AND** the suggestion is visible to the admin
 
 #### Scenario: Admin overrides the suggestion
 
 - **WHEN** an admin reassigns a document to a different intent space
-- **THEN** the document's chunks are moved to the destination space's index
+- **THEN** its chunks are moved to the destination space's vector index and their recorded space is updated
 - **AND** the document is not re-parsed or re-embedded
 
 #### Scenario: Suggestion unavailable
 
 - **WHEN** the LLM provider fails during intent suggestion
-- **THEN** the document is assigned to the General space
+- **THEN** the document is assigned to the fallback space
 - **AND** ingestion completes so the admin can reassign it manually
 
-### Requirement: Embedding and indexing
+### Requirement: Dual index writes
 
-The system SHALL generate an embedding for every chunk using the configured embedding provider, SHALL add each vector to the index belonging to the document's intent space, and SHALL batch embedding calls rather than issuing one call per chunk.
+The system SHALL write every chunk to both the dense vector index of its intent space and the full-text keyword index, and SHALL keep both consistent with the stored chunk records.
 
-#### Scenario: Chunks embedded and indexed
+#### Scenario: Chunk indexed in both stores
 
-- **WHEN** a document's chunks are generated
-- **THEN** every chunk receives an embedding
-- **AND** every vector is written to the index of the document's assigned intent space
+- **WHEN** a chunk is persisted
+- **THEN** its embedding is added to its intent space's vector index
+- **AND** its text is added to the keyword index
 
-#### Scenario: Embedding calls are batched
+#### Scenario: Deletion removes from both stores
+
+- **WHEN** a chunk is removed
+- **THEN** it is removed from the vector index and from the keyword index
+
+#### Scenario: Reassignment moves vector entries only
+
+- **WHEN** a document's intent space changes
+- **THEN** its vectors move between space indexes
+- **AND** its keyword index entries remain valid with their recorded space updated
+
+### Requirement: Batched embedding
+
+The system SHALL generate chunk embeddings through the configured embedding provider in batches of the configured size rather than one call per chunk.
+
+#### Scenario: Embedding calls batched
 
 - **WHEN** a document produces many chunks
-- **THEN** embeddings are requested in batches rather than individually
+- **THEN** embeddings are requested in batches
+
+### Requirement: Embedding model recorded at first ingest
+
+The system SHALL record the embedding model name and vector dimension when the first document is indexed, and SHALL make that record available so that a later configuration mismatch can be detected.
+
+#### Scenario: Model recorded on first ingest
+
+- **WHEN** the first document is indexed
+- **THEN** the embedding model name and dimension are persisted alongside the indexes
+
+#### Scenario: Record updated by a full re-index
+
+- **WHEN** a full re-index completes
+- **THEN** the recorded model name and dimension reflect the currently configured model
 
 ### Requirement: Re-parsing an existing document
 
-The system SHALL allow an admin to re-parse an already-ingested document, replacing all of its chunks and vectors with freshly generated ones while preserving the document's identity and intent space assignment.
+The system SHALL allow an admin to re-parse an already-ingested document, replacing all of its chunks and index entries with freshly generated ones while preserving its identity and intent space.
 
 #### Scenario: Re-parse replaces prior chunks
 
 - **WHEN** an admin re-parses an indexed document
-- **THEN** its previous chunks and vectors are removed
-- **AND** newly generated chunks and vectors replace them
+- **THEN** its previous chunks and index entries are removed and replaced
 - **AND** the document keeps its identifier and intent space
 
-#### Scenario: Re-parse failure preserves the prior state
+#### Scenario: Re-parse failure is visible
 
 - **WHEN** re-parsing fails partway through
-- **THEN** the document's status becomes `failed` with an error message
+- **THEN** the status becomes `failed` with an error message
 - **AND** the document remains listed so the admin can retry
+
+### Requirement: Full re-index
+
+The system SHALL provide an operation that re-embeds and re-indexes every document using the currently configured embedding model, without re-uploading the source files.
+
+#### Scenario: Re-index rebuilds all indexes
+
+- **WHEN** an admin runs a full re-index
+- **THEN** every document's chunks are re-embedded with the configured model
+- **AND** the vector and keyword indexes are rebuilt
 
 ### Requirement: Document deletion
 
-The system SHALL allow an admin to delete a document, removing its chunks from the database and its vectors from the intent space index, while preserving historical query log entries that referenced it.
+The system SHALL allow an admin to delete a document, removing its chunks and index entries, while preserving query history that referenced it.
 
-#### Scenario: Deletion removes chunks and vectors
+#### Scenario: Deletion removes chunks and index entries
 
 - **WHEN** an admin deletes a document
-- **THEN** its chunks are removed from the database
-- **AND** its vectors are removed from the intent space index
+- **THEN** its chunks and both index entries are removed
 - **AND** it no longer appears in retrieval results
 
 #### Scenario: History survives deletion
 
 - **WHEN** a document that had been retrieved by past queries is deleted
 - **THEN** existing query log entries remain intact
-- **AND** analytics can still report that the document was accessed historically
 
 ### Requirement: Ingestion error handling
 
-The system SHALL capture any failure during parsing, chunking, embedding, or indexing, SHALL set the document status to `failed`, SHALL store a human-readable error message, and SHALL leave the rest of the knowledge base unaffected.
+The system SHALL capture any failure during loading, chunking, embedding, or indexing, SHALL set the document status to `failed` with a human-readable message, and SHALL leave the rest of the knowledge base unaffected.
 
 #### Scenario: Corrupt file fails cleanly
 
 - **WHEN** an uploaded file cannot be parsed
-- **THEN** the document status becomes `failed` with an explanatory message
-- **AND** no partial chunks are left in the index
+- **THEN** the status becomes `failed` with an explanatory message
+- **AND** no partial chunks remain in either index
 
 #### Scenario: Provider outage during embedding
 
-- **WHEN** the embedding provider is unavailable while a document is being processed
-- **THEN** the document status becomes `failed` with an error naming the provider failure
+- **WHEN** the embedding provider is unavailable while a document is processing
+- **THEN** the status becomes `failed` with an error naming the provider failure
 - **AND** other indexed documents remain searchable
 
 #### Scenario: Scanned PDF with no extractable text
 
 - **WHEN** a PDF yields no extractable text
-- **THEN** the document status becomes `failed` with a message stating that no text could be extracted and that scanned documents are not supported
-
-### Requirement: Embedding model consistency
-
-The system SHALL record the embedding model name and vector dimension on first ingest, and SHALL refuse to start when the configured embedding model differs from the recorded one while indexed documents exist.
-
-#### Scenario: Model recorded on first ingest
-
-- **WHEN** the first document is indexed
-- **THEN** the embedding model name and dimension are persisted
-
-#### Scenario: Mismatched model blocks startup
-
-- **WHEN** the service starts with an embedding model different from the recorded one and indexed documents exist
-- **THEN** the service refuses to start
-- **AND** the error names both models and directs the operator to re-index
-
-#### Scenario: Re-index clears the mismatch
-
-- **WHEN** an admin runs a full re-index
-- **THEN** every document is re-embedded with the currently configured model
-- **AND** the recorded model and dimension are updated
+- **THEN** the status becomes `failed` with a message stating that no text could be extracted and that scanned documents are not supported

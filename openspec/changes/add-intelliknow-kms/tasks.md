@@ -1,116 +1,98 @@
-## 1. Project setup and prerequisites
+Ordered as a 7-day solo plan per the brief's timeline constraint. Each day ends with something demonstrable.
 
-- [ ] 1.1 Initialize the Python project with `uv` (Python 3.12), `pyproject.toml`, and pinned dependencies: fastapi, uvicorn, streamlit, faiss-cpu, sentence-transformers, pypdf, pdfplumber, python-docx, openpyxl, anthropic, openai, cryptography, httpx, botbuilder-core, pydantic-settings, sqlalchemy, pytest
-- [ ] 1.2 **Verify Azure Bot registration access before writing any Teams code** — create the Azure Bot resource and capture App ID + password, or report the blocker to the user (this gates all of section 8)
-- [ ] 1.3 Create the Telegram bot via BotFather and capture the token
-- [ ] 1.4 Write `.env.example` covering provider selection, both model settings, embedding model, admin password, admin API token, Fernet credential key, public base URL, and Telegram mode
-- [ ] 1.5 Write `Dockerfile` and `docker-compose.yml` for the API and console services with volumes for `data/sqlite` and `data/faiss`; verify the image builds for the host architecture
-- [ ] 1.6 Add a container smoke test asserting FAISS can build, persist, and reload an index
+## 1. Day 1 — Foundation, configuration, provider layer
 
-## 2. Data layer
+- [ ] 1.1 Initialize the project with `uv` (Python 3.12) and pinned dependencies: fastapi, uvicorn, streamlit, faiss-cpu, sentence-transformers, pypdf, pdfplumber, python-docx, openpyxl, anthropic, openai, httpx, botbuilder-core, pydantic, pyyaml, sqlalchemy, pytest
+- [ ] 1.2 Create the Telegram bot via BotFather and capture the token; confirm the Bot Framework Emulator runs locally (Azure Bot registration is optional and only needed for a real Teams tenant)
+- [ ] 1.3 Define the typed configuration schema and write `config.yaml` with all documented defaults, including the five intent spaces with descriptions and keywords
+- [ ] 1.4 Implement `ConfigService`: load, validate, expose, atomic write with backup, in-place reload; reject unknown fields and out-of-range values at startup
+- [ ] 1.5 Write `.env.example` for secrets only (provider keys, `TELEGRAM_BOT_TOKEN`, `TEAMS_APP_ID`, `TEAMS_APP_PASSWORD`, `ADMIN_PASSWORD`)
+- [ ] 1.6 Define `LLMProvider` / `EmbeddingProvider` protocols, `LLMResult`, and `ProviderError` with its four categories
+- [ ] 1.7 Implement `AnthropicLLM` with structured output, plus `OpenAILLM` and `LocalLLM` against the same interface
+- [ ] 1.8 Implement `SentenceTransformerEmbedding` (default, normalized), `OpenAIEmbedding`, and `LocalEmbedding`
+- [ ] 1.9 Implement the provider factory: selection from config, separate classify/generate models, unknown-name rejection, startup credential validation
+- [ ] 1.10 Implement shared timeout, exponential-backoff retry, schema-validation retry, and error normalization
+- [ ] 1.11 Unit-test the provider layer against fakes: order preservation, dimension match, schema retry, each error category
+- [ ] 1.12 Create the SQLite schema (`document`, `chunk`, `chunk_fts`, `query_log`), enable WAL, and verify the FTS5 virtual table builds
 
-- [ ] 2.1 Define SQLAlchemy models for `intent_space`, `document`, `chunk`, `integration`, `query_log`, `chunk_hit`, and `app_setting` per design.md — Data model
-- [ ] 2.2 Implement schema creation on startup, enable WAL mode, and seed the four default intent spaces idempotently
-- [ ] 2.3 Implement the `app_setting` accessor with typed defaults for confidence threshold (0.70), relevance floor (0.35), embedding model, and embedding dimension
-- [ ] 2.4 Implement the FAISS index store: per-space create, load, add, remove-by-id, search, move-vectors-between-indexes, and delete, with persistence to disk
+## 2. Day 2 — Document loading and chunking
 
-## 3. AI provider layer
+- [ ] 2.1 Define the `Block` model (heading / paragraph / table) with source reference, and the loader interface
+- [ ] 2.2 Implement the PDF loader: `pypdf` body text plus `pdfplumber` table extraction, per-page source references
+- [ ] 2.3 Implement the DOCX loader: `python-docx` headings, paragraphs, and tables with paragraph references
+- [ ] 2.4 Implement the XLSX loader: `openpyxl` sheets rendered as tables with sheet-range references
+- [ ] 2.5 Implement markdown table rendering shared by all three loaders
+- [ ] 2.6 Implement ragged-table detection (inconsistent column counts, majority-empty cells) and the LLM restructuring fallback, falling back to raw text on model failure
+- [ ] 2.7 Implement `StructuralChunker`: target size and overlap from config, table rows never split, small tables kept whole, heading path prefixed, no overlap across heading boundaries
+- [ ] 2.8 Test loaders and chunker against an HR PDF with a salary-grid table, a Legal DOCX with headings, and a Finance XLSX; assert table rows survive intact
 
-- [ ] 3.1 Define the `LLMProvider` and `EmbeddingProvider` protocols, the `LLMResult` type, and the `ProviderError` type with its four categories
-- [ ] 3.2 Implement `AnthropicLLM` using `claude-opus-5` by default, with structured output via `output_config.format` for the schema path
-- [ ] 3.3 Implement `OpenAILLM` and `LocalLLM` (Ollama-compatible HTTP) against the same interface
-- [ ] 3.4 Implement `SentenceTransformerEmbedding` (default), `OpenAIEmbedding`, and `LocalEmbedding`, each reporting its dimension
-- [ ] 3.5 Implement the provider factory: selection from `LLM_PROVIDER` / `EMBEDDING_PROVIDER`, separate classify and generate models, unknown-name rejection, and startup credential validation
-- [ ] 3.6 Implement shared timeout, exponential-backoff retry, schema-validation retry, and error normalization across all implementations
-- [ ] 3.7 Unit-test the provider layer against fakes: order preservation, dimension match, schema retry, and each error category
+## 3. Day 3 — Indexing and the RAG write path
 
-## 4. Intent management
+- [ ] 3.1 Implement the FAISS index store: per-space create, load, add, remove-by-id, search, move-vectors-between-spaces, delete, and disk persistence
+- [ ] 3.2 Add a startup smoke check asserting a FAISS index round-trips through write and reload
+- [ ] 3.3 Implement `IndexWriter` keeping `chunk`, `chunk_fts`, and the space's FAISS index consistent on add, remove, and reassign
+- [ ] 3.4 Implement batched embedding at the configured batch size
+- [ ] 3.5 Implement `data/index_meta.json`: record embedding model and dimension at first ingest; refuse config changes to either while documents exist; update on full re-index
+- [ ] 3.6 Implement upload validation: configured extensions, configured size cap, SHA-256 duplicate rejection
+- [ ] 3.7 Implement LLM-suggested intent assignment from space names, descriptions, and keywords plus the document's first 2000 characters, defaulting to the fallback space on provider failure
+- [ ] 3.8 Implement the background ingestion worker with the full status machine and per-stage error capture
+- [ ] 3.9 Implement re-parse, reassign (vectors move, no re-embed), delete (history preserved), and full re-index
+- [ ] 3.10 Expose document endpoints on the admin API, including list with search by name/keyword and filters by format, upload date, and intent space
+- [ ] 3.11 Test ingestion end to end plus the failure cases: corrupt file, scanned PDF with no text, duplicate upload, embedding provider outage
 
-- [ ] 4.1 Implement intent space CRUD with slug uniqueness and kebab-case normalization
-- [ ] 4.2 Enforce General as protected: block deletion and slug changes, allow name and description edits
-- [ ] 4.3 Implement space deletion with required document reassignment, defaulting to General
-- [ ] 4.4 Wire index lifecycle to space lifecycle: create on add, delete on remove, move vectors on document reassignment
-- [ ] 4.5 Implement runtime threshold and relevance floor settings with range validation and no-restart application
-- [ ] 4.6 Expose intent management over the admin API
+## 4. Day 4 — RAG read path and orchestrator
 
-## 5. Document ingestion
+- [ ] 4.1 Implement dense retrieval across the supplied space indexes with per-space top-N and score-ordered merge
+- [ ] 4.2 Implement BM25 keyword retrieval over `chunk_fts` filtered to the same spaces, disabled cleanly when the configured count is zero
+- [ ] 4.3 Implement reciprocal rank fusion with the configured constant and final top-K selection
+- [ ] 4.4 Implement the relevance gate on best dense cosine, returning no-match with no generation call
+- [ ] 4.5 Implement `ContextBuilder`: near-duplicate removal, document-and-ordinal ordering, `[S#]` tagging with title/source ref/heading path, character budget enforcement
+- [ ] 4.6 Implement `AnswerGenerator` with grounding rules, channel formatting profile, and citation instructions
+- [ ] 4.7 Implement `CitationVerifier` resolving `[S#]` markers to supplied chunks and dropping unresolvable ones
+- [ ] 4.8 Implement the no-match response naming the searched domain, and generation-failure handling
+- [ ] 4.9 Implement classification with the structured schema, prompt built from live space names, descriptions, and keywords
+- [ ] 4.10 Implement threshold enforcement, General-means-all-spaces, unknown-slug handling, and classification failure/timeout fallback
+- [ ] 4.11 Run classification and query embedding concurrently
+- [ ] 4.12 Implement the `POST /admin/test-query` operation returning intent, confidence, answer, sources, and latency without any channel
+- [ ] 4.13 Test the read path: single-space isolation, hybrid finding an exact token dense search misses, below-floor no-match, citation verification dropping an unretrieved document, empty knowledge base
+- [ ] 4.14 Test routing: above threshold, below threshold, exactly at threshold, General-classified, unknown slug, provider failure
 
-- [ ] 5.1 Implement upload validation: extension allowlist, MIME sniff, 25 MB cap, filename sanitization, and SHA-256 duplicate rejection
-- [ ] 5.2 Implement the PDF parser: pypdf body text plus pdfplumber table extraction rendered to markdown tables, with per-page source references
-- [ ] 5.3 Implement the DOCX parser: python-docx paragraphs and tables, with paragraph source references
-- [ ] 5.4 Implement the XLSX parser: openpyxl sheets rendered to markdown tables, with sheet-range source references
-- [ ] 5.5 Implement ragged-table detection and the LLM restructuring fallback, including fallback-to-raw-text on model failure
-- [ ] 5.6 Implement the chunker: ~800 chars with ~100-char overlap, table rows never split, source reference carried per chunk
-- [ ] 5.7 Implement LLM-suggested intent assignment at ingest, defaulting to General when the provider fails
-- [ ] 5.8 Implement batched embedding and index writes into the assigned space
-- [ ] 5.9 Implement the background ingestion worker with the full status machine and per-stage error capture
-- [ ] 5.10 Implement re-parse (replace all chunks and vectors), delete (preserving `chunk_hit` history), and full re-index
-- [ ] 5.11 Implement embedding model consistency: record on first ingest, fail startup on mismatch, clear on re-index
-- [ ] 5.12 Expose document management over the admin API
-- [ ] 5.13 Test ingestion against sample HR PDF (with a salary-grid table), Legal DOCX, and Finance XLSX; plus corrupt-file, scanned-PDF, and duplicate-upload failure cases
+## 5. Day 5 — Chat channels
 
-## 6. Query orchestration
+- [ ] 5.1 Define `InboundMessage` / `OutboundAnswer` and the channel adapter interface
+- [ ] 5.2 Implement the Telegram adapter in long-polling mode: receive, send, typing indicator, MarkdownV2 escaping, 4096-character enforcement
+- [ ] 5.3 Implement Telegram webhook mode as the configurable alternative, mutually exclusive with polling
+- [ ] 5.4 Implement the Teams adapter on `botbuilder-core` mounted on a FastAPI route, with typing activity and Teams-compatible formatting
+- [ ] 5.5 Implement the deterministic per-channel formatter: escaping, list translation, word-boundary truncation with marker
+- [ ] 5.6 Implement non-text message handling and inbound error isolation with platform acknowledgement
+- [ ] 5.7 Implement per-channel Connected/Disconnected status with last success time, and channel error logging
+- [ ] 5.8 Implement the per-channel end-to-end test reporting outcome, failing stage, and measured latency
+- [ ] 5.9 Implement query logging after delivery with failure suppression, recording status, confidence, fallback flag, citations, retrieved document ids, and latency
+- [ ] 5.10 Verify both channels end to end — Telegram against a real bot, Teams against the Bot Framework Emulator
 
-- [ ] 6.1 Implement the classification call with the structured schema `{intent_slug, confidence, reasoning}`, building the prompt from live space names and descriptions
-- [ ] 6.2 Implement threshold enforcement, General-means-all-spaces handling, and unknown-slug handling
-- [ ] 6.3 Implement classification failure and timeout fallback to General without erroring the user
-- [ ] 6.4 Run classification and query embedding concurrently
-- [ ] 6.5 Implement the routing hand-off passing an explicit space list to retrieval
-- [ ] 6.6 Test routing: above threshold, below threshold, exactly at threshold, General-classified, unknown slug, and provider failure
+## 6. Day 6 — Admin console
 
-## 7. Knowledge retrieval and answer generation
+- [ ] 6.1 Build the Streamlit shell: password gate, sign-out, five-screen navigation, API client, and the shared CSS for 12px-radius / 16px-padding cards on a neutral base with per-module accent colours
+- [ ] 6.2 Build the Dashboard: KB size, per-space counts, channel status, recent query volume, provider/model summary, problem highlighting with links, and the "Try a query" box
+- [ ] 6.3 Build Frontend Integration: one card per tool with Connected/Disconnected indicator, credential last-4, setup guidance, and the test button reporting latency
+- [ ] 6.4 Build Knowledge Base Management: document table (Name, Upload Date, Format, Size, Status, Actions), drag-and-drop upload zone stating supported formats, processing progress indicator, and status rendered as Processed/Pending/Error
+- [ ] 6.5 Build the KB search bar and filters by format, upload date, and intent space
+- [ ] 6.6 Build the KB row actions: View (intent space, chunk count, extracted chunks), Update (re-parse), Delete with confirmation, and error message display
+- [ ] 6.7 Build Intent Space Configuration: card per space with name, description, document count, and classification accuracy rate with its derivation stated
+- [ ] 6.8 Build the intent editor form (name, description, keywords) with the note that description and keywords drive classification, plus threshold and relevance-floor controls and protected-space handling
+- [ ] 6.9 Build the query classification log on the Intent screen: recent queries, detected space, confidence, status, with filters
+- [ ] 6.10 Build Analytics: period selector, intent space distribution, most accessed documents, query log with detail view, CSV export, and empty state
+- [ ] 6.11 Implement readable error feedback preserving entered values, and destructive-action confirmations
 
-- [ ] 7.1 Implement multi-index search with score merging and top-5 selection
-- [ ] 7.2 Implement the relevance floor gate producing a no-match without a generation call
-- [ ] 7.3 Implement the grounded generation prompt: chunks delimited as untrusted data, answer-only-from-context instruction, channel profile injected
-- [ ] 7.4 Implement citation construction and verification against the retrieved chunk set
-- [ ] 7.5 Implement the no-match response naming the searched domain, recorded as success rather than error
-- [ ] 7.6 Implement the deterministic per-channel formatter: markup escaping, list translation, word-boundary truncation with marker
-- [ ] 7.7 Implement `chunk_hit` recording
-- [ ] 7.8 Implement generation failure handling with a user-facing message
-- [ ] 7.9 Test retrieval: single-space isolation, multi-space merge, below-floor no-match, citation verification dropping an unretrieved document, and empty knowledge base
+## 7. Day 7 — Verification, documentation, delivery
 
-## 8. Frontend integrations
-
-- [ ] 8.1 Implement encrypted credential storage with Fernet, masked API reads, and startup failure on a missing or invalid key
-- [ ] 8.2 Define the normalized `InboundMessage` / `OutboundAnswer` types and the channel adapter interface
-- [ ] 8.3 Implement the Telegram adapter: webhook endpoint with secret-token verification, send, typing indicator, and MarkdownV2 escaping within the 4096-character limit
-- [ ] 8.4 Implement Telegram webhook registration on save and re-registration on startup, surfacing failures to channel status
-- [ ] 8.5 Implement Telegram polling mode as an alternative to webhook mode, mutually exclusive with it
-- [ ] 8.6 Implement the Teams adapter on `botbuilder-core` `CloudAdapter` mounted on a FastAPI route, with Bot Framework JWT validation, typing activity, and Teams-compatible formatting
-- [ ] 8.7 Implement non-text message handling and inbound error isolation returning platform acknowledgement
-- [ ] 8.8 Implement per-channel status tracking with last success time and last error
-- [ ] 8.9 Implement the per-channel end-to-end test reporting outcome, failing stage, and measured latency
-- [ ] 8.10 Test both adapters end to end; verify Teams against the Bot Framework Emulator as well as a real tenant
-
-## 9. Analytics and history
-
-- [ ] 9.1 Implement post-delivery query logging with failure suppression
-- [ ] 9.2 Implement history listing with date, channel, intent, fallback, and no-match filters
-- [ ] 9.3 Implement classification metrics: intent distribution, confidence distribution, fallback rate
-- [ ] 9.4 Implement admin classification review with corrections and measured accuracy over reviewed queries
-- [ ] 9.5 Implement KB usage metrics: most-accessed documents, unused documents, no-match rate, top no-match questions
-- [ ] 9.6 Implement latency reporting: mean and p95, overall and per channel
-- [ ] 9.7 Implement CSV export including the empty-period header-only case
-- [ ] 9.8 Expose analytics over the admin API
-
-## 10. Admin console
-
-- [ ] 10.1 Build the Streamlit shell: password gate with constant-time comparison, sign-out, navigation, and the API client holding the bearer token server-side
-- [ ] 10.2 Build the Dashboard screen including problem highlighting with links to the resolving screen
-- [ ] 10.3 Build the Frontend Integrations screen: credential entry, masked redisplay, enable/disable, status, setup guidance, and the test action
-- [ ] 10.4 Build the Knowledge Base screen: upload, list with status polling, reassign, re-parse, delete, and failure-reason display
-- [ ] 10.5 Build the Intent Configuration screen: space CRUD, protected-space handling, threshold and floor controls, and the description-affects-routing note
-- [ ] 10.6 Build the Analytics screen: date range, all metrics, filterable history with correction controls, CSV export, and empty state
-- [ ] 10.7 Implement destructive-action confirmations and readable error feedback that preserves entered values
-
-## 11. Integration, verification, and delivery
-
-- [ ] 11.1 Assemble `sample_docs/` — at minimum an HR PDF containing a salary-grid table, a Legal DOCX, and a Finance XLSX
-- [ ] 11.2 Run the full demo path: compose up, tunnel, configure both channels, upload all samples, query from Telegram and Teams, verify cited answers
-- [ ] 11.3 Verify routing behavior against a scripted question set covering each intent space plus deliberately ambiguous questions
-- [ ] 11.4 Measure end-to-end latency against the ≤3s target on both channels and record the result; tune `LLM_MODEL_CLASSIFY` if the budget is missed
-- [ ] 11.5 Verify analytics reflect the demo traffic and that CSV export round-trips
-- [ ] 11.6 Write the README: architecture overview, setup, environment variables, both integration guides including Azure Bot registration, the cloudflared tunnel-URL caveat, and troubleshooting
-- [ ] 11.7 Write `docs/AI_USAGE.md` covering the required reflection: turning points, iteration speed, adjustments to AI output, and the two named scenarios (table extraction from the HR salary grid, channel-adaptive response formatting)
-- [ ] 11.8 Publish the public GitHub repository with code, docs, and sample documents
+- [ ] 7.1 Assemble `sample_docs/`: an HR PDF with a salary-grid table, a Legal DOCX, and a Finance XLSX
+- [ ] 7.2 Run the full demo path: start both processes, upload all samples, verify each reaches Processed, query from Telegram and Teams, confirm cited answers
+- [ ] 7.3 Verify routing against a scripted question set covering every intent space plus deliberately ambiguous questions; tune keywords and re-test via "Try a query"
+- [ ] 7.4 Measure end-to-end latency against the ≤3s target on both channels; if missed, switch `model_classify` to a faster model and re-measure
+- [ ] 7.5 Verify the classification log, intent distribution, most accessed documents, and CSV export all reflect the demo traffic
+- [ ] 7.6 Walk `traceability.md` end to end and confirm every source-document clause is satisfied or listed as a deviation
+- [ ] 7.7 Write the README: architecture overview, tech stack, setup, configuration reference, both integration guides, and troubleshooting
+- [ ] 7.8 Write `docs/AI_USAGE.md`: key moments AI was used, how it sped up iteration, adjustments made to AI output, and the two named scenarios (salary-grid table extraction, channel-adaptive response formatting)
+- [ ] 7.9 Push to the public GitHub repository with code, docs, and sample documents
+- [ ] 7.10 Optional if time remains: add `Dockerfile` and `docker-compose.yml`, and document the cloudflared tunnel path for Teams against a real tenant

@@ -1,34 +1,42 @@
 ## Purpose
 
-Records what was asked, how it was routed, and what answered it, then turns that history into the measurements an admin needs to judge whether classification is working and which knowledge is actually being used.
+Records what was asked, how it was classified, and whether it was answered, then presents that as the query classification log the admin scans to see routing working, plus the knowledge base usage figures and export the project brief requires.
 
 ## ADDED Requirements
 
-### Requirement: Per-query logging
+### Requirement: Query logging
 
-The system SHALL write a log entry for every query carrying the timestamp, originating channel, external user identifier, question text, classified intent space, confidence value, fallback flag, no-match flag, delivered answer, citations, and end-to-end latency in milliseconds.
+The system SHALL write one log entry per query carrying the timestamp, originating channel, an identifier for the asking user, the question text, the detected intent space, the classification confidence, whether the fallback was used, the response status, the delivered answer, the verified citations, the documents that were retrieved, and the end-to-end latency.
 
-#### Scenario: Successful query logged completely
+#### Scenario: Answered query logged
 
 - **WHEN** a query is answered
-- **THEN** a log entry records every listed field
-- **AND** the latency reflects the full round trip from inbound message to delivered answer
+- **THEN** a log entry records every listed field with status `success`
 
 #### Scenario: No-match query logged
 
 - **WHEN** a query resolves to no-match
-- **THEN** a log entry is written with the no-match flag set
-- **AND** the searched intent space is recorded
+- **THEN** a log entry is written with status `no_match`
+- **AND** the intent space that was searched is recorded
 
 #### Scenario: Failed query logged
 
 - **WHEN** a query fails during processing
-- **THEN** a log entry is written recording the error
-- **AND** the entry is distinguishable from a successful answer and from a no-match
+- **THEN** a log entry is written with status `failed` and the error message
+
+### Requirement: Response status values
+
+The system SHALL record exactly one status per query from `success`, `no_match`, or `failed`, and SHALL present them as Success, No match, and Failed.
+
+#### Scenario: Statuses are distinguishable
+
+- **WHEN** an admin views the log
+- **THEN** an answered query, a query with no matching knowledge, and a query that errored are visually distinct
+- **AND** a no-match is not presented as a failure
 
 ### Requirement: Logging never blocks the user
 
-The system SHALL write the query log entry after the answer has been handed to the channel adapter for delivery, and SHALL suppress any logging failure rather than propagating it to the user.
+The system SHALL write the log entry after the answer has been handed to the channel adapter for delivery, and SHALL suppress any logging failure rather than propagating it to the user.
 
 #### Scenario: Logging occurs after delivery
 
@@ -39,129 +47,75 @@ The system SHALL write the query log entry after the answer has been handed to t
 
 - **WHEN** writing the log entry fails
 - **THEN** the user still receives their answer
-- **AND** the logging failure is reported to the service log only
+- **AND** the failure is reported only to the service log
 
-### Requirement: Retrieval hit tracking
+### Requirement: Query classification log
 
-The system SHALL record every chunk returned by retrieval for a query along with its rank, similarity score, and source document, and SHALL retain these records after the source document is deleted.
+The system SHALL expose recent queries newest first as a table showing the timestamp, channel, question, detected intent space, classification confidence score, and response status.
 
-#### Scenario: Hits linked to the query
+#### Scenario: Log listed newest first
 
-- **WHEN** retrieval returns chunks
-- **THEN** each is recorded against the query with its rank, score, and source document
+- **WHEN** an admin opens the query classification log
+- **THEN** entries appear newest first with those six columns
 
-#### Scenario: Hit history survives document deletion
+#### Scenario: Log is paginated
 
-- **WHEN** a document that was previously retrieved is deleted
-- **THEN** its historical hit records remain
-- **AND** analytics can still attribute past usage to it
+- **WHEN** the log contains more entries than fit on one page
+- **THEN** the admin can page through them
 
-### Requirement: Query history browsing
+#### Scenario: Log filtered by intent space and status
 
-The system SHALL expose the query history to the admin, newest first, with filters for date range, channel, intent space, fallback status, and no-match status.
+- **WHEN** an admin filters by intent space or by status
+- **THEN** only matching entries are listed
 
-#### Scenario: History listed newest first
+### Requirement: Query detail view
 
-- **WHEN** an admin opens the query history
-- **THEN** entries are listed newest first with their question, intent space, confidence, and latency
+The system SHALL allow an admin to open a single logged query and see the full answer, the verified citations with their source documents, and the measured latency.
 
-#### Scenario: Filtering by intent space
+#### Scenario: Detail opened from the log
 
-- **WHEN** an admin filters by a specific intent space
-- **THEN** only queries routed to that space are returned
+- **WHEN** an admin selects a row in the log
+- **THEN** the full answer, its citations, and the latency are shown
 
-#### Scenario: Filtering to fallback queries
+#### Scenario: Detail for a failed query
 
-- **WHEN** an admin filters to queries where the fallback was used
-- **THEN** only those queries are returned
-- **AND** the admin can review what the classifier was uncertain about
+- **WHEN** an admin opens a query with status `failed`
+- **THEN** the recorded error message is shown
 
-### Requirement: Classification accuracy metrics
+### Requirement: Intent space distribution
 
-The system SHALL report classification metrics over a selected period: the distribution of queries across intent spaces, the mean and distribution of confidence values, and the proportion of queries that used the fallback.
+The system SHALL report how many queries were classified into each intent space over a selected period.
 
-#### Scenario: Intent distribution reported
+#### Scenario: Distribution reported
 
-- **WHEN** an admin opens analytics for a period
-- **THEN** the query count per intent space is reported
+- **WHEN** an admin views analytics for a period
+- **THEN** the query count per intent space is shown
+- **AND** the most common intent spaces are identifiable
 
-#### Scenario: Confidence distribution reported
+### Requirement: Knowledge base usage
 
-- **WHEN** an admin opens analytics for a period
-- **THEN** the mean confidence and its distribution are reported
-- **AND** the admin can judge whether the configured threshold is well placed
-
-#### Scenario: Fallback rate reported
-
-- **WHEN** an admin opens analytics for a period
-- **THEN** the proportion of queries that fell back to General is reported
-
-### Requirement: Admin-confirmed classification correctness
-
-The system SHALL allow an admin to mark a logged query's classification as correct or incorrect and, when incorrect, to record the space it should have been routed to, and SHALL report measured accuracy over the reviewed queries.
-
-#### Scenario: Query marked incorrect
-
-- **WHEN** an admin marks a query's classification as incorrect and selects the correct space
-- **THEN** the correction is stored against that query
-
-#### Scenario: Measured accuracy reported
-
-- **WHEN** queries have been reviewed
-- **THEN** analytics reports the proportion judged correct out of those reviewed
-- **AND** the reviewed count is shown alongside so the figure is not mistaken for a whole-population measure
-
-#### Scenario: Corrections guide tuning
-
-- **WHEN** an admin views corrections for a space
-- **THEN** the misrouted questions are listed so the space's description can be improved
-
-### Requirement: Knowledge base usage metrics
-
-The system SHALL report, over a selected period, the most frequently retrieved documents ranked by hit count, the documents that have never been retrieved, and the no-match rate.
+The system SHALL report which documents were retrieved most often across logged queries over a selected period.
 
 #### Scenario: Most accessed documents ranked
 
-- **WHEN** an admin opens analytics for a period
-- **THEN** documents are ranked by how often their chunks were retrieved
+- **WHEN** an admin views analytics for a period
+- **THEN** documents are ranked by how often they appear among the retrieved documents of logged queries
 
-#### Scenario: Unused documents identified
+#### Scenario: Deleted documents remain attributable
 
-- **WHEN** an admin opens analytics for a period
-- **THEN** indexed documents that were never retrieved in that period are listed
-
-#### Scenario: No-match rate reported
-
-- **WHEN** an admin opens analytics for a period
-- **THEN** the proportion of queries that produced no match is reported
-- **AND** the most frequent no-match questions are listed as knowledge gaps
-
-### Requirement: Latency reporting
-
-The system SHALL report mean and 95th-percentile end-to-end query latency over a selected period, broken down by channel.
-
-#### Scenario: Latency percentiles reported
-
-- **WHEN** an admin opens analytics for a period
-- **THEN** the mean and 95th-percentile latency are reported
-- **AND** the admin can verify the round-trip target against real traffic
-
-#### Scenario: Latency broken down by channel
-
-- **WHEN** queries have arrived from more than one channel
-- **THEN** latency is reported per channel as well as overall
+- **WHEN** a document that was retrieved in the past has since been deleted
+- **THEN** its historical usage is still reported
 
 ### Requirement: Data export
 
-The system SHALL export the query history for a selected period as CSV, including every logged field, with one row per query.
+The system SHALL export the query log as CSV with one row per query and a header row naming each field.
 
-#### Scenario: Export produced for a period
+#### Scenario: Log exported as CSV
 
-- **WHEN** an admin exports the history for a date range
-- **THEN** a CSV file is produced containing one row per query in that range
-- **AND** the header row names every exported field
+- **WHEN** an admin triggers the export
+- **THEN** a CSV is produced with one row per logged query
 
-#### Scenario: Empty period exports headers only
+#### Scenario: Empty log exports headers only
 
-- **WHEN** an admin exports a period containing no queries
+- **WHEN** the export runs with no logged queries
 - **THEN** a CSV containing only the header row is produced rather than an error

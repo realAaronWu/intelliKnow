@@ -1,6 +1,6 @@
 ## Purpose
 
-Connects the KMS to the chat tools people already use — Telegram and Microsoft Teams — by receiving messages over each platform's protocol, normalizing them for the orchestrator, delivering answers in each platform's native format, and giving admins a way to configure credentials, watch connection health, and prove the whole path works.
+Connects the KMS to the chat tools people already use — Telegram and Microsoft Teams — by receiving messages over each platform's protocol, normalizing them for the orchestrator, delivering answers in each platform's native format, and giving admins connection status, error logging, and a test that proves the whole path works.
 
 ## ADDED Requirements
 
@@ -22,151 +22,123 @@ The system SHALL provide message integrations for Telegram and Microsoft Teams, 
 
 #### Scenario: One channel unconfigured does not affect the other
 
-- **WHEN** only one channel has valid credentials configured
+- **WHEN** only one channel has credentials configured
 - **THEN** that channel continues to serve queries normally
-- **AND** the unconfigured channel reports status `unconfigured` without affecting the other
+- **AND** the other reports Disconnected without affecting it
+
+### Requirement: Response latency
+
+The system SHALL deliver a response to the originating channel within 3 seconds of receiving a question under normal operation, and SHALL record the measured end-to-end latency for every query.
+
+#### Scenario: Round trip within budget
+
+- **WHEN** a user asks a question on either channel
+- **THEN** the answer is delivered within 3 seconds under normal operation
+
+#### Scenario: Latency recorded
+
+- **WHEN** any query completes
+- **THEN** its measured end-to-end latency is recorded and reportable
 
 ### Requirement: Normalized inbound message
 
-The system SHALL translate each platform's inbound payload into a common internal message carrying the channel name, an external user identifier, the message text, and the conversation reference needed to reply, so that no downstream component handles platform-specific payloads.
+The system SHALL translate each platform's inbound payload into a common internal message carrying the channel name, an identifier for the asking user, the message text, and the reference needed to reply, so that no downstream component handles platform-specific payloads.
 
 #### Scenario: Platform payload normalized
 
 - **WHEN** a message arrives from either platform
 - **THEN** it is converted into the common internal message shape before reaching the orchestrator
 
-#### Scenario: Non-text message ignored gracefully
+#### Scenario: Non-text message handled gracefully
 
 - **WHEN** an inbound message contains no usable text, such as an image or sticker
 - **THEN** the user receives a short message explaining that only text questions are supported
 - **AND** no query pipeline run is started
 
-### Requirement: Inbound request authentication
+### Requirement: Telegram long-polling by default
 
-The system SHALL verify the authenticity of every inbound webhook request — Telegram via its configured secret token header, Teams via Bot Framework JWT validation — and SHALL reject unverified requests.
+The system SHALL operate the Telegram integration in long-polling mode by default, requiring no publicly reachable URL, and SHALL support webhook mode as a configurable alternative.
 
-#### Scenario: Valid Telegram request accepted
+#### Scenario: Polling mode needs no public URL
 
-- **WHEN** a Telegram webhook request carries the correct secret token header
-- **THEN** the request is processed
+- **WHEN** Telegram is configured in the default polling mode
+- **THEN** inbound messages are retrieved and answered
+- **AND** no public base URL or webhook registration is required
 
-#### Scenario: Invalid Telegram secret rejected
+#### Scenario: Webhook mode available
 
-- **WHEN** a Telegram webhook request carries a missing or incorrect secret token
-- **THEN** the request is rejected with an authorization error
-- **AND** no query is processed
-
-#### Scenario: Teams JWT validated
-
-- **WHEN** a Teams request arrives with a valid Bot Framework token
-- **THEN** the request is processed
-
-#### Scenario: Invalid Teams token rejected
-
-- **WHEN** a Teams request carries an invalid or expired token
-- **THEN** the request is rejected with an authorization error
-
-### Requirement: Encrypted credential storage
-
-The system SHALL store chat platform credentials encrypted at rest using a key supplied by environment variable, SHALL never return credential values in plaintext through the API, and SHALL fail startup when the encryption key is missing or invalid.
-
-#### Scenario: Credentials encrypted on save
-
-- **WHEN** an admin saves a bot token
-- **THEN** the value is encrypted before being persisted
-- **AND** the stored value is not readable without the encryption key
-
-#### Scenario: Credentials masked on read
-
-- **WHEN** the admin console displays configured credentials
-- **THEN** only a masked form showing the last few characters is returned
-- **AND** the full value is never sent to the console
-
-#### Scenario: Missing encryption key blocks startup
-
-- **WHEN** the service starts without a valid credential encryption key
-- **THEN** startup fails with an error naming the missing configuration
-- **AND** credentials are never stored unencrypted as a fallback
-
-### Requirement: Admin credential configuration
-
-The system SHALL allow an admin to enter, update, and clear the credentials for each channel — a bot token for Telegram, an application identifier and password for Teams — and to enable or disable each channel independently.
-
-#### Scenario: Telegram credentials configured
-
-- **WHEN** an admin saves a Telegram bot token
-- **THEN** the channel becomes usable without a service restart
-
-#### Scenario: Teams credentials configured
-
-- **WHEN** an admin saves a Teams application identifier and password
-- **THEN** the channel becomes usable without a service restart
-
-#### Scenario: Channel disabled
-
-- **WHEN** an admin disables a channel
-- **THEN** inbound messages on that channel are rejected
-- **AND** the stored credentials are retained for later re-enabling
-
-### Requirement: Telegram webhook registration
-
-The system SHALL register its public webhook URL with Telegram when credentials and a public base URL are configured, and SHALL re-register on startup so that a changed tunnel URL does not silently break the integration.
-
-#### Scenario: Webhook registered on configuration
-
-- **WHEN** an admin saves a Telegram token together with a public base URL
-- **THEN** the webhook is registered with Telegram
-- **AND** the outcome is reported to the admin
-
-#### Scenario: Webhook re-registered on startup
-
-- **WHEN** the service starts with Telegram configured and a public base URL set
-- **THEN** the webhook registration is refreshed
-
-#### Scenario: Registration failure surfaced
-
-- **WHEN** webhook registration fails
-- **THEN** the channel status becomes `error` with the reported reason
-- **AND** the admin sees the failure in the console
-
-### Requirement: Telegram polling mode
-
-The system SHALL support a configurable polling mode for Telegram that retrieves messages without requiring a public URL, so the channel can be demonstrated without a tunnel.
-
-#### Scenario: Polling mode receives messages
-
-- **WHEN** Telegram is configured in polling mode
-- **THEN** inbound messages are retrieved and answered without any webhook registration
+- **WHEN** an operator sets Telegram to webhook mode and supplies a public base URL
+- **THEN** the webhook is registered with Telegram and inbound messages arrive over it
 
 #### Scenario: Only one mode active
 
-- **WHEN** polling mode is enabled
-- **THEN** no Telegram webhook is registered
+- **WHEN** polling mode is active
+- **THEN** no webhook is registered
 - **AND** messages are not processed twice
+
+### Requirement: Teams Bot Framework integration
+
+The system SHALL expose a Bot Framework messaging endpoint for Microsoft Teams, SHALL rely on the Bot Framework SDK to authenticate inbound activities, and SHALL be operable against the Bot Framework Emulator without a Microsoft 365 tenant.
+
+#### Scenario: Activity received and answered
+
+- **WHEN** a Bot Framework activity carrying a question arrives at the messaging endpoint
+- **THEN** the question is processed and the answer is returned to the same conversation
+
+#### Scenario: Local operation without a tenant
+
+- **WHEN** the Bot Framework Emulator is pointed at the messaging endpoint
+- **THEN** questions can be asked and answered without any Azure or Microsoft 365 tenant
+
+#### Scenario: Unauthenticated activity rejected
+
+- **WHEN** an activity fails Bot Framework authentication
+- **THEN** it is rejected
+- **AND** no query is processed
+
+### Requirement: Credential configuration
+
+The system SHALL read each channel's credentials from environment configuration, SHALL display only the last four characters of a configured credential, and SHALL name the variable to set when a credential is missing.
+
+#### Scenario: Credential displayed masked
+
+- **WHEN** the console displays a channel's configuration details
+- **THEN** only the last four characters of the credential are shown
+
+#### Scenario: Missing credential reported actionably
+
+- **WHEN** a channel has no credential configured
+- **THEN** the console reports the channel as Disconnected
+- **AND** names the environment variable that must be set
+
+#### Scenario: Channel enabled state configurable
+
+- **WHEN** an operator disables a channel in configuration
+- **THEN** inbound messages on that channel are not processed
 
 ### Requirement: Channel-appropriate outbound formatting
 
-The system SHALL format each answer for its destination channel, respecting that channel's message length limit, markup syntax, and list rendering, and SHALL escape characters that are reserved in that channel's markup.
+The system SHALL format each answer for its destination channel, respecting that channel's message length limit and markup syntax, and SHALL escape characters reserved in that channel's markup.
 
 #### Scenario: Telegram limit respected
 
 - **WHEN** an answer is delivered to Telegram
 - **THEN** the message is within Telegram's maximum message length
-- **AND** any reserved markup characters are escaped
+- **AND** reserved markup characters are escaped
 
 #### Scenario: Teams formatting applied
 
 - **WHEN** an answer is delivered to Teams
-- **THEN** the message uses formatting that Teams renders correctly, including bullet lists for enumerated content
+- **THEN** the message uses formatting Teams renders correctly, including bullet lists for enumerated content
 
 #### Scenario: Citations rendered per channel
 
 - **WHEN** an answer carries citations
-- **THEN** the citations are rendered in a form appropriate to the destination channel
+- **THEN** they are rendered in a form appropriate to the destination channel
 
 ### Requirement: Delivery acknowledgement during processing
 
-The system SHALL send the destination channel's typing or activity indicator before beginning model calls, so users see immediate acknowledgement while the answer is being produced.
+The system SHALL send the destination channel's typing or activity indicator before beginning model calls, so users see immediate acknowledgement while the answer is produced.
 
 #### Scenario: Indicator sent before model calls
 
@@ -176,44 +148,57 @@ The system SHALL send the destination channel's typing or activity indicator bef
 #### Scenario: Indicator failure does not block the answer
 
 - **WHEN** sending the typing indicator fails
-- **THEN** query processing continues
-- **AND** the answer is still delivered
+- **THEN** query processing continues and the answer is still delivered
 
 ### Requirement: Connection status monitoring
 
-The system SHALL maintain a per-channel status of `unconfigured`, `ok`, or `error`, along with the time of the last successful exchange and the most recent error message, and SHALL expose them through the admin API.
+The system SHALL maintain a per-channel status of Connected or Disconnected, along with the time of the last successful exchange and the most recent error, and SHALL expose them through the admin API.
 
-#### Scenario: Status becomes ok after a successful exchange
+#### Scenario: Status becomes Connected after a successful exchange
 
 - **WHEN** a channel successfully receives and answers a message
-- **THEN** its status is `ok` and its last-success timestamp is updated
+- **THEN** its status is Connected and its last-success time is updated
 
-#### Scenario: Status becomes error on failure
+#### Scenario: Status becomes Disconnected on failure
 
-- **WHEN** a channel fails to deliver a message
-- **THEN** its status becomes `error`
-- **AND** the failure reason is stored and displayed to the admin
+- **WHEN** a channel fails to receive or deliver a message
+- **THEN** its status becomes Disconnected
+- **AND** the failure reason is retained for display
 
 #### Scenario: Status visible without sending a message
 
-- **WHEN** an admin opens the integrations screen
+- **WHEN** an admin opens the integration screen
 - **THEN** each channel's current status, last success time, and last error are shown
+
+### Requirement: Channel error logging
+
+The system SHALL record integration errors — authentication failures, delivery failures, and platform API errors — with the channel, timestamp, and reason, and SHALL make the most recent errors visible to the admin.
+
+#### Scenario: Delivery failure recorded
+
+- **WHEN** an outbound message fails to send
+- **THEN** the error is recorded with the channel, timestamp, and reason
+
+#### Scenario: Recent errors visible
+
+- **WHEN** an admin views a channel with recorded errors
+- **THEN** the most recent errors are shown
 
 ### Requirement: End-to-end integration test
 
-The system SHALL provide an admin-triggered test per channel that exercises credential validity, the full query pipeline, and outbound delivery, and SHALL report the outcome together with the measured round-trip latency.
+The system SHALL provide an admin-triggered test per channel that sends a sample query through the full pipeline and delivers it to that channel, and SHALL report the outcome, the failing stage on failure, and the measured round-trip latency.
 
 #### Scenario: Test passes
 
 - **WHEN** an admin runs the test for a configured channel
-- **THEN** a test question is processed through classification, retrieval, generation, and delivery
-- **AND** the result reports success with the measured latency in milliseconds
+- **THEN** a sample question is processed through classification, retrieval, generation, and delivery
+- **AND** the result reports success with the measured latency
 
 #### Scenario: Test fails on invalid credentials
 
-- **WHEN** an admin runs the test for a channel whose credentials are rejected by the platform
+- **WHEN** the platform rejects the channel's credentials
 - **THEN** the result reports failure naming the credential problem
-- **AND** the channel status becomes `error`
+- **AND** the channel status becomes Disconnected
 
 #### Scenario: Test identifies the failing stage
 
@@ -222,16 +207,16 @@ The system SHALL provide an admin-triggered test per channel that exercises cred
 
 ### Requirement: Inbound error isolation
 
-The system SHALL catch any failure during inbound message processing, SHALL return a success acknowledgement to the platform so it does not retry indefinitely, and SHALL deliver a user-facing error message rather than leaving the user without a reply.
+The system SHALL catch any failure during inbound message processing, SHALL acknowledge the platform so it does not retry indefinitely, and SHALL deliver a user-facing error message rather than leaving the user without a reply.
 
 #### Scenario: Pipeline failure produces a user-facing message
 
 - **WHEN** query processing raises an unexpected error
-- **THEN** the user receives a short message stating that the question could not be answered
+- **THEN** the user receives a short message stating the question could not be answered
 - **AND** the error is recorded
 
 #### Scenario: Platform receives acknowledgement
 
 - **WHEN** processing fails
-- **THEN** the webhook still returns a success acknowledgement to the platform
-- **AND** the platform does not enter a retry loop
+- **THEN** the platform still receives a success acknowledgement
+- **AND** does not enter a retry loop

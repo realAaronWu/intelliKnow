@@ -1,353 +1,456 @@
 ## Context
 
-Greenfield project, empty repository, one developer. See `proposal.md` — Why for motivation.
-
-Fixed constraints going in:
+Greenfield project, empty repository, one developer. See `proposal.md` — Why for the three goals that define scope.
 
 | Constraint | Source |
 | --- | --- |
+| **7 calendar days, solo** | Project brief §1 Constraints |
 | Lightweight stack only — no managed cloud services, no heavy frameworks | Project brief |
 | Two chat frontends, ≥2 document formats, ≥3 intent spaces | Project brief |
 | Query round-trip ≤ 3s | Project brief |
-| Classification confidence threshold configurable, default ≥ 0.70 | Project brief |
+| Confidence threshold configurable, default ≥ 0.70 | Project brief |
+| Admin UI follows the brief's visual guidance (§2) | Project brief §2 |
 | Python + FastAPI + Streamlit + SQLite + FAISS | Chosen (Option A) |
-| Pluggable AI provider layer (Anthropic / OpenAI / local) | Chosen |
+| Pluggable AI provider layer | Chosen |
 | Telegram + Microsoft Teams | Chosen |
-| Local Docker Compose + cloudflared tunnel | Chosen |
+| All tunables in one configuration file | Chosen |
 
-Two constraints are in tension and shape most of what follows. The ≤3s budget has to absorb *two* sequential model calls (classify, then generate), and the "no over-engineering" instruction argues against the provider abstraction that was nonetheless explicitly requested. The resolutions are a two-model configuration split (§ Decision 8) and a deliberately narrow two-method provider interface (§ Decision 1).
+**Running the system is not a goal.** Two commands (`uvicorn`, `streamlit run`) plus `config.yaml` and `.env` is the supported path. A Dockerfile and compose file are a convenience that may be added at the end; nothing in the design depends on them.
+
+**No public tunnel is required.** Telegram runs in long-polling mode by default, which needs no inbound URL at all. Teams is developed and demoed against the Bot Framework Emulator on localhost. A tunnel is needed only to put Teams in front of a real Microsoft 365 tenant, and that is an optional deployment step, not part of the architecture.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- One synchronous request path from chat message to cited answer, with every stage individually observable in the query log.
-- Intent routing that is *visible* — an admin can look at any logged query and see which space it went to, how confident the classifier was, and whether the fallback fired.
+- A RAG pipeline whose stages are separately testable and separately tunable.
+- Intent routing that is visible — any logged query shows which space it went to and how confident the classifier was.
+- One file an operator edits to change any model, threshold, or retrieval parameter.
 - Swapping AI backends is a configuration change, not a code change.
-- The whole system comes up with `docker compose up` plus a `.env` file.
 
 **Non-Goals:**
 
-- Multi-tenancy, RBAC, or per-user document permissions. One admin, one knowledge base, any chat user may query.
-- Conversational memory. Each query is answered independently; no follow-up context.
-- Streaming responses. Chat adapters send one complete message.
-- Incremental/partial re-indexing. Re-parsing a document rebuilds all of its chunks.
-- Automatic document sync from Drive/SharePoint. Upload is manual.
-- Horizontal scale. Single process, single FAISS index set, in-process locking.
+- Multi-tenancy, RBAC, per-user document permissions, rate limiting, audit logging.
+- Conversational memory. Each query is answered independently.
+- Streaming responses.
+- Automatic document sync from Drive/SharePoint.
+- Horizontal scale. Single process, in-process locking.
+- Analytics beyond the query history table (see § Decision 12).
 
 ## Architecture
 
 ```
-   Telegram user                      Teams user
-        │                                  │
-        │ Bot API                          │ Bot Framework
-        ▼                                  ▼
-  ┌──────────────────── cloudflared tunnel ────────────────────┐
-  │                  public HTTPS ingress                      │
-  └────────────────────────────┬───────────────────────────────┘
-                               ▼
-  ╔════════════════════ FastAPI service (:8000) ═══════════════════════╗
-  ║                                                                    ║
-  ║  ┌───────────────────┐          ┌──────────────────────────────┐  ║
-  ║  │ Channel Adapters  │          │       Admin REST API         │  ║
-  ║  │  • TelegramAdapter│          │  /intents /documents         │  ║
-  ║  │  • TeamsAdapter   │          │  /integrations /analytics    │  ║
-  ║  └─────────┬─────────┘          └───────┬──────────────────────┘  ║
-  ║            │ normalized InboundMessage  │                          ║
-  ║            ▼                            │                          ║
-  ║  ┌───────────────────┐                  │                          ║
-  ║  │   Orchestrator    │◄─────────────────┘                          ║
-  ║  │ classify → route  │                                             ║
-  ║  └────┬─────────┬────┘                                             ║
-  ║       │         │                                                  ║
-  ║       ▼         ▼                                                  ║
-  ║  ┌─────────┐  ┌──────────────┐    ┌───────────────────────────┐   ║
-  ║  │Retrieval│  │Intent Service│    │    Ingestion Pipeline     │   ║
-  ║  │ + Answer│  └──────────────┘    │ parse→chunk→embed→index   │   ║
-  ║  └────┬────┘                      └─────────────┬─────────────┘   ║
-  ║       │                                         │                 ║
-  ║       └──────────┬──────────────────────────────┘                 ║
-  ║                  ▼                                                ║
-  ║        ┌──────────────────────┐   ┌───────────────────────────┐  ║
-  ║        │   Provider Layer     │   │      Analytics Logger     │  ║
-  ║        │ LLMProvider          │   └─────────────┬─────────────┘  ║
-  ║        │ EmbeddingProvider    │                 │                ║
-  ║        └──────────┬───────────┘                 │                ║
-  ╚═══════════════════╪═════════════════════════════╪════════════════╝
-                      │                             │
-              ┌───────┴────────┐           ┌────────┴──────────┐
-              ▼                ▼           ▼                   ▼
-      Anthropic / OpenAI   local ST    SQLite (metadata,   FAISS indexes
-        (HTTP)             (in-proc)   intents, logs)      (one per space)
-                                              ▲
-                                              │ HTTP (localhost)
-                                   ╔══════════╧═══════════╗
-                                   ║ Streamlit console    ║
-                                   ║ (:8501) — 5 screens  ║
-                                   ╚══════════════════════╝
+  Telegram user                                Teams user
+       │ long-poll (no inbound URL)                 │ Bot Framework
+       ▼                                            ▼
+╔═══════════════════ FastAPI service (:8000) ═══════════════════════════╗
+║                                                                       ║
+║  ┌──────────────────────┐                 ┌────────────────────────┐ ║
+║  │   Channel Adapters   │                 │     Admin REST API     │ ║
+║  │  TelegramAdapter     │                 │ /config /intents       │ ║
+║  │  TeamsAdapter        │                 │ /documents /history    │ ║
+║  └──────────┬───────────┘                 │ /test-query ───────┐   │ ║
+║             │ InboundMessage              └────────────────────┼───┘ ║
+║             │                                                  │     ║
+║             ▼                                                  │     ║
+║  ┌────────────────────────┐                                    │     ║
+║  │   Query Orchestrator   │◄───────────────────────────────────┘     ║
+║  │  classify → threshold  │   (the ONLY admin→orchestrator path;     ║
+║  │  → space list          │    powers "Try a query" + channel test)  ║
+║  └───────────┬────────────┘                                          ║
+║              │ spaces[]                                              ║
+║              ▼                                                       ║
+║  ╭────────────────────── RAG Engine ──────────────────────────────╮  ║
+║  │                                                                │  ║
+║  │  READ PATH                          WRITE PATH                 │  ║
+║  │  ┌──────────────────┐               ┌────────────────────┐    │  ║
+║  │  │ HybridRetriever  │               │  DocumentLoader    │    │  ║
+║  │  │  ├ VectorSearch  │◄──┐        ┌─►│  (pdf/docx/xlsx)   │    │  ║
+║  │  │  ├ KeywordSearch │◄─┐│        │  └─────────┬──────────┘    │  ║
+║  │  │  └ RRF Fusion    │  ││        │            ▼               │  ║
+║  │  └────────┬─────────┘  ││        │  ┌────────────────────┐    │  ║
+║  │           ▼            ││        │  │ StructuralChunker  │    │  ║
+║  │  ┌──────────────────┐  ││        │  └─────────┬──────────┘    │  ║
+║  │  │ RelevanceGate    │  ││        │            ▼               │  ║
+║  │  └────────┬─────────┘  ││        │  ┌────────────────────┐    │  ║
+║  │           ▼            ││        └──┤     Embedder       │    │  ║
+║  │  ┌──────────────────┐  ││           └─────────┬──────────┘    │  ║
+║  │  │ ContextBuilder   │  ││                     ▼               │  ║
+║  │  └────────┬─────────┘  ││        ┌────────────────────────┐   │  ║
+║  │           ▼            ││        │      IndexWriter       │   │  ║
+║  │  ┌──────────────────┐  ││        └───┬────────────────┬───┘   │  ║
+║  │  │ AnswerGenerator  │  ││            │                │       │  ║
+║  │  └────────┬─────────┘  ││            ▼                ▼       │  ║
+║  │           ▼            │└──── FAISS (per space)   SQLite FTS5 │  ║
+║  │  ┌──────────────────┐  └───────────────────────────────┘      │  ║
+║  │  │ CitationVerifier │                                          │  ║
+║  │  └──────────────────┘                                          │  ║
+║  ╰────────────────────────────────────────────────────────────────╯  ║
+║                        │                    │                        ║
+║              ┌─────────┴────────┐   ┌───────┴────────┐               ║
+║              │  Provider Layer  │   │  ConfigService │               ║
+║              │ LLM / Embedding  │   │  config.yaml   │               ║
+║              └─────────┬────────┘   └────────────────┘               ║
+╚════════════════════════╪═════════════════════════════════════════════╝
+                         ▼                              ▲
+             Anthropic / OpenAI / local                 │ HTTP
+                                             ╔══════════╧═══════════╗
+                                             ║  Streamlit console   ║
+                                             ║  (:8501) — 5 screens ║
+                                             ╚══════════════════════╝
 ```
 
-Two processes, one Docker network. Streamlit never touches SQLite or FAISS directly — it is a pure HTTP client of the admin API, so every rule lives in exactly one place.
+### Why the Admin API touches the Orchestrator
+
+You were right to question this — in the first draft the arrow was unjustified. There is exactly one legitimate path, and it is now named: **`POST /admin/test-query`**. It runs a question through the full orchestrator + RAG pipeline and returns the intent, confidence, answer, sources, and latency *without* delivering to any chat channel. Two features need it:
+
+- The **"Try a query"** box on the Dashboard, so an admin can verify the knowledge base after uploading without opening Telegram.
+- The **per-channel connection test**, which must prove the whole path works, not just that a bot token is valid.
+
+No other admin endpoint calls the orchestrator. Document, intent, config, and history endpoints talk to their own services only.
 
 ### Component duties
 
 | Component | Owns | Must not |
 | --- | --- | --- |
-| **Channel Adapters** | Protocol specifics: signature/JWT verification, payload → `InboundMessage`, `OutboundAnswer` → channel-native formatting, delivery, typing indicators, per-channel status. | Know anything about intents, retrieval, or prompts. |
-| **Orchestrator** | The query lifecycle: classify → threshold check → route → call retrieval → hand back an answer → emit the log record. The only component that reads the confidence threshold. | Perform vector search or build answer prompts itself. |
-| **Intent Service** | Intent space CRUD, protected-default enforcement, threshold setting, and the per-space FAISS index lifecycle (create on add, delete on remove, move vectors on reassignment). | Classify anything. |
-| **Ingestion Pipeline** | Format detection, text + table extraction, chunking, embedding, index writes, document status, and error capture. | Answer queries. |
-| **Retrieval + Answer** | Query embedding, per-space vector search, relevance floor, prompt assembly, citation construction, no-match determination. | Decide *which* space to search — it receives that. |
-| **Provider Layer** | The only place that speaks to an AI backend. Backend selection, retries, timeouts, and error normalization. | Contain KMS domain logic or prompt text. |
-| **Analytics Logger** | Writing `query_log` + `chunk_hit` rows and computing aggregates. | Block the response path. |
-| **Admin REST API** | AuthN for the console, request validation, and orchestrating the services above. | Duplicate business rules the services own. |
-| **Streamlit Console** | Rendering and admin interaction only. | Hold business rules or reach past the API. |
+| **Channel Adapters** | Protocol specifics: polling/webhook, payload → `InboundMessage`, `OutboundAnswer` → channel formatting, delivery, typing indicators, per-channel status. | Know about intents, retrieval, or prompts. |
+| **Query Orchestrator** | Classify → threshold check → produce the space list → invoke the RAG read path → emit the log record. Only reader of the confidence threshold. | Perform retrieval or build answer prompts. |
+| **DocumentLoader** | Format detection and extraction into an ordered block list (heading / paragraph / table) with source references. | Chunk or embed. |
+| **StructuralChunker** | Packing blocks into overlapping chunks under the structural rules in § RAG write path. | Know about embeddings or storage. |
+| **Embedder** | Batching text → vectors via the provider layer; normalization. | Decide what gets embedded. |
+| **IndexWriter** | Keeping the FAISS index and the FTS5 table consistent with the `chunk` table; add, remove, move-between-spaces. | Search. |
+| **HybridRetriever** | Vector search, keyword search, and RRF fusion within the given spaces. | Decide *which* spaces — it receives that. |
+| **RelevanceGate** | The answer/no-answer decision from the best dense score. | Generate anything. |
+| **ContextBuilder** | Selecting, deduping, ordering, tagging, and budgeting the chunks that reach the prompt. | Call the LLM. |
+| **AnswerGenerator** | Prompt assembly and the generation call. | Decide what context to use. |
+| **CitationVerifier** | Mapping citation markers back to real retrieved chunks and dropping unverifiable ones. | Alter the answer body beyond citations. |
+| **Provider Layer** | The only place that speaks to an AI backend. Selection, retries, timeouts, error normalization. | Contain domain logic or prompt text. |
+| **ConfigService** | Loading, validating, exposing, and rewriting `config.yaml`; reload on change. | Hold secrets. |
+| **Admin REST API** | AuthN for the console, validation, delegating to services. | Duplicate rules the services own. |
+| **Streamlit Console** | Rendering and admin interaction. | Hold business rules or reach past the API. |
 
-## Decisions
+## The RAG engine
 
-### 1. Provider abstraction is exactly two interfaces with two methods
+This is the core of the system, so it is specified stage by stage rather than as one retrieval step.
 
-```python
-class LLMProvider(Protocol):
-    def complete(self, *, system: str, user: str,
-                 schema: dict | None = None,
-                 max_tokens: int = 1024) -> LLMResult: ...
+### Storage: what lives where, and why
 
-class EmbeddingProvider(Protocol):
-    def embed(self, texts: list[str]) -> list[list[float]]: ...
-    @property
-    def dimension(self) -> int: ...
-```
+| Store | Holds | Why this one |
+| --- | --- | --- |
+| **SQLite** (`document`, `chunk`, `query_log`) | Document metadata, chunk text, source refs, query history | Already required; single file; zero setup |
+| **SQLite FTS5** (`chunk_fts`) | Full-text keyword index over chunk text, BM25 built in | Ships inside Python's `sqlite3` — a keyword index for zero new dependencies |
+| **FAISS** (`data/faiss/{space}.index`) | Dense vectors, one index per intent space | Named in the brief; no server; exact search at this scale |
 
-`schema` requests structured JSON output and is the only branch inside implementations — Anthropic uses `output_config.format`, OpenAI uses response formats, the local backend uses a constrained-decode-then-validate path. Everything else (prompt text, retries at the domain level, citation logic) lives outside.
+**Vector store decision.** Considered: FAISS, Chroma, sqlite-vec, and a hosted store (Qdrant/pgvector).
 
-Implementations shipped: `AnthropicLLM`, `OpenAILLM`, `LocalLLM` (Ollama-compatible HTTP); `SentenceTransformerEmbedding` (default), `OpenAIEmbedding`, `LocalEmbedding`. Anthropic has no embeddings endpoint, so `AnthropicLLM` pairs with local embeddings by default.
+- *Hosted stores* are excluded by the brief's "no cloud services, lightweight only".
+- *Chroma* bundles its own embedding and persistence opinions and a large dependency tree for functionality we need a thin slice of.
+- *sqlite-vec* is genuinely attractive — one file for everything, and metadata filtering becomes a plain SQL `WHERE`. It is the strongest alternative and is recorded here as the fallback if FAISS packaging causes trouble.
+- **FAISS wins** because the brief names it, it needs no server, and at this scale it is *exact*: `IndexFlatIP` is an exhaustive scan, so recall is 100% with no ANN parameters to tune. A 5,000-chunk knowledge base at 384 dimensions is 7.7 MB of float32 — brute force over that is well under a millisecond. **We deliberately do not use an approximate index.** IVF/HNSW solve a scale problem this system does not have, and would add recall loss and tuning burden for no gain.
 
-*Why:* the brief warns against over-engineering, and a pluggable layer was explicitly requested. A two-method interface is the smallest thing that satisfies the request. *Alternative rejected:* LangChain's provider abstractions — they drag in a large dependency tree and their own prompt/chain concepts for a surface we can express in ~40 lines.
+Vectors are L2-normalized before insertion, so inner product equals cosine similarity and scores are directly comparable.
 
-*Trade-off, stated plainly:* the local backend will produce measurably worse classification and answers than the API backends. It exists so the demo runs without keys, not as a quality-equivalent option.
+**One index per intent space.** Routing becomes index selection, so hard filtering costs nothing and needs no filter predicate. Reassigning a document moves its vectors between two files; deleting a space deletes one file. The alternative — one global index with a FAISS `IDSelector` — is the textbook answer, but selector support on `IndexFlat` varies across `faiss-cpu` releases and it turns reassignment into ID bookkeeping. Cost of the chosen design: a General fallback query searches N indexes instead of one, which is a few milliseconds and is safe because every space shares one embedding model (§ Decision 6 enforces this).
 
-### 2. One FAISS index per intent space
-
-Each intent space owns `data/faiss/{space_slug}.index` (`IndexFlatIP` over L2-normalized vectors, wrapped in `IndexIDMap2` keyed by `chunk.id`).
-
-Consequences, all of which are why this was chosen:
-
-- Hard filtering is free — routing *is* index selection, with no filter predicate at all.
-- General fallback fans out across every index and merges by score.
-- Reassigning a document's intent moves its vectors between two index files.
-- Deleting a space deletes one file.
-
-*Alternative rejected:* a single global index with a FAISS `IDSelector` predicate. It is the textbook answer, but selector support on `IndexFlat` varies across `faiss-cpu` releases, and it makes reassignment and deletion into fiddly ID-bookkeeping. With a handful of spaces and a few thousand chunks, the fan-out cost of the per-space design is single-digit milliseconds.
-
-*Trade-off:* General queries do N searches instead of one, and scores are compared across independently-built indexes. Because all indexes use the same embedding model and inner product over normalized vectors, cross-index scores are directly comparable — this holds only while every space shares one embedding model, which § Decision 9 enforces.
-
-### 3. Hard filter with General as the fallback space
+### RAG write path (indexing)
 
 ```
-classify(question) → (space, confidence)
-if confidence >= threshold and space != General:  search only that space
-else:                                             search all spaces (General behavior)
+upload → DocumentLoader → StructuralChunker → Embedder → IndexWriter
+                                                    ├→ FAISS (space index)
+                                                    └→ SQLite chunk + chunk_fts
 ```
 
-General is a real, undeletable intent space that means "search everything". A document can be assigned to General, in which case it is reachable from every fallback query but from no filtered query.
+**1. DocumentLoader** produces an ordered list of typed blocks, each with a source reference:
 
-*Why:* it matches the brief's "route to the relevant KB domain" wording literally, it is trivially explainable to a reviewer, and every routing decision is a single logged row. *Alternative rejected:* soft re-ranking over a global search — more forgiving of misclassification, but it makes routing cosmetic and undemonstrable.
+| Format | Library | Blocks produced | Source ref |
+| --- | --- | --- | --- |
+| PDF | `pypdf` text + `pdfplumber` tables | paragraph, table | `p. 4` |
+| DOCX | `python-docx` | heading, paragraph, table | `¶ 12` |
+| XLSX | `openpyxl` | table (one per sheet region) | `Sheet1!A1:F20` |
 
-*Risk accepted:* a confidently-wrong classification searches the wrong space and returns a no-match where a global search would have answered. Mitigated by the relevance floor in § Decision 6 and by making misroutes visible in Analytics.
+Tables are rendered to markdown so that row/column structure survives into the chunk text and is therefore embeddable and keyword-searchable. When deterministic table extraction comes out ragged — inconsistent column counts, or a majority of empty cells, which is exactly what merged-cell HR salary grids produce — that region's raw text is passed to the LLM with a schema requesting a clean table. This is the brief's first named AI usage scenario, and it is what makes numeric and tabular content searchable at all. If the model fails, the raw text is used and ingestion still completes.
 
-### 4. One intent space per document, admin-overridable
+**2. StructuralChunker** packs blocks into chunks under four rules:
 
-At upload the LLM is shown the space names and descriptions plus the document's first ~2000 characters and returns a suggested space; the admin can accept or override it in the KB screen. Reassignment moves the document's vectors between indexes and rewrites `chunk.intent_space_id` — no re-parse, no re-embed.
+- Target 800 characters with 100 characters of overlap. (~200 tokens; small enough that a chunk is one idea, large enough to carry a full policy clause.)
+- **Never split a table row.** A table under 1.5× target stays whole even if oversized.
+- **Prepend the heading path.** A chunk under "Leave Policy › Annual Leave" is stored with that path as a prefix, so the embedding carries the context the raw sentence lacks and the citation can show where it came from.
+- Overlap is applied only within a block run, never across a heading boundary — bleeding the end of Legal into the start of Finance is worse than a short chunk.
 
-*Why:* one field on one row, one filter, one clean attribution path for analytics. *Alternative rejected:* per-chunk intent — more accurate for genuinely mixed documents (an employee handbook covering both HR and Finance), but it costs an LLM call per chunk at ingest and gives the admin no practical way to correct mistakes by hand.
+**3. Embedder** — `sentence-transformers/all-MiniLM-L6-v2`, 384 dimensions, batch size 64, normalized. Chosen over `all-mpnet-base-v2` (768-dim): MiniLM is ~80 MB vs ~420 MB, roughly 5× faster on CPU, and the quality gap does not show at this corpus size. It is a one-line config change if retrieval quality proves short.
 
-*Known limitation:* a mixed document must pick one space. The admin's workaround is to split the source file before upload. This is documented in the README rather than solved in code.
+**4. IndexWriter** writes each chunk to three places in one transaction-ish sequence: the `chunk` row, the `chunk_fts` FTS5 row, and the space's FAISS index (`IndexIDMap2` keyed by `chunk.id`, persisted with `faiss.write_index` after each document completes).
 
-### 5. LLM structured-output classification
+### RAG read path (query)
 
-One `complete()` call with a schema returning `{intent_slug, confidence, reasoning}`. The system prompt lists every space with its admin-authored description; the description is therefore a real tuning surface, not decoration, and the Intent Configuration screen says so.
+```
+question ──┬─► Embedder ──► VectorSearch (top 20 per space)  ─┐
+           │                                                   ├─► RRF ─► top 5
+           └─► KeywordSearch — FTS5 BM25 (top 20, intent-filtered) ─┘
+                                                                     │
+                            RelevanceGate ◄────────────────────────  ┘
+                                 │ pass
+                                 ▼
+                          ContextBuilder ─► AnswerGenerator ─► CitationVerifier
+```
 
-*Why:* it handles novel phrasing, the `reasoning` field makes Analytics genuinely diagnostic, and it needs no training data or seeded centroids. *Alternative rejected:* embedding similarity to per-space centroids — free, fast, and better calibrated numerically, but weak on short or oddly-phrased queries and it needs enough documents per space to form a meaningful centroid, which a fresh install does not have.
+**1. Dual retrieval.** Dense vector search over the routed space indexes, and BM25 keyword search over `chunk_fts` filtered to the same spaces by SQL. Both return their top 20.
 
-*Trade-off, stated plainly:* LLM self-reported confidence is not a calibrated probability. The 0.70 threshold is a tunable heuristic. The spec therefore requires the threshold to be adjustable at runtime and requires Analytics to show the confidence distribution, so an admin can tune against observed behavior rather than trusting the number.
+**Why hybrid, and not pure vector.** This is the single most important RAG decision here. Embeddings are good at paraphrase and bad at rare exact tokens — and enterprise knowledge is full of exact tokens: "Band L4", "Form 16", "Section 4.2", "Policy HR-2019-03", a specific salary figure. A user asking "what does Band L4 pay" against a pure-vector system gets chunks that are semantically about compensation but not the row they asked for. BM25 matches that token exactly. Conversely BM25 fails on "how much time off do I get" → "annual leave entitlement", which embeddings handle. Running both and fusing covers both failure modes, and it directly serves the brief's HR-salary-grid scenario.
 
-### 6. Relevance floor separate from the confidence threshold
+**2. Reciprocal Rank Fusion.** `score(chunk) = Σ_lists 1 / (k + rank)`, with `k = 60`.
 
-Two independent numbers, deliberately not conflated:
+RRF is used instead of a weighted score blend because cosine similarity and BM25 live on incomparable scales — cosine is bounded roughly 0–1, BM25 is unbounded and corpus-dependent — so any weighted sum needs normalization constants that must be re-tuned whenever the corpus changes. RRF only reads *rank*, so it needs no normalization and no tuning, and it is about five lines of code. Chunks found by both retrievers naturally rise to the top, which is the behavior we want.
 
-- **Confidence threshold** (default 0.70) — classifier certainty. Gates *routing*.
-- **Relevance floor** (default 0.35 cosine) — best chunk similarity. Gates *answering*.
+**3. RelevanceGate.** Compares the best **dense cosine score** — not the fused score — against `relevance_floor` (default 0.35). The fused score is rank-derived and unitless, so it cannot express "nothing here is actually relevant"; the raw cosine can. Below the floor the query returns no-match and **no generation call is made**. This is what stops a confident misroute from producing a fluent, wrong, fully-cited answer.
 
-If the top chunk falls below the floor, the system returns "no match" instead of generating from weak context. This is what prevents a confident misroute from producing a fluent, wrong, cited answer.
+**4. ContextBuilder** takes the top 5 fused chunks and:
+- drops near-duplicates (chunks from the same document with heavy overlap),
+- re-sorts them by document and ordinal so the model reads them in the order they were written rather than in score order,
+- caps total context at 6,000 characters,
+- tags each as `[S1] Employee Handbook — p. 4 — Leave Policy › Annual Leave`.
 
-### 7. Answer generation is grounded and citation-bearing
+**5. AnswerGenerator** builds a prompt with the grounding rules, the channel's formatting profile (§ Decision 8), the tagged context, and the question. It instructs the model to answer only from the supplied context, to cite with the `[S#]` markers, and to say so plainly when the context does not contain the answer.
 
-Prompt: the question, the top-K chunks (K=5) each tagged with its document title and page/sheet reference, and an instruction to answer *only* from those chunks and to cite the tags used. Citations are then verified against the actually-retrieved chunk set — a citation naming a document that was not retrieved is dropped before the answer is sent.
+**6. CitationVerifier** parses `[S#]` markers out of the answer, maps them back to the chunks that were actually supplied, drops any marker that does not resolve, and attaches the resulting document names and source references. A confident answer citing a document that was never retrieved is the main failure mode of a small RAG system, and this check costs no extra model call.
 
-*Why the verification step:* an uncited-but-plausible answer is the main failure mode of a small RAG system, and post-hoc verification is cheap insurance that costs no extra model call.
+**No cross-encoder re-ranker in the MVP.** A re-ranker over the fused top 20 would measurably improve precision and is the obvious first upgrade. It is excluded because it adds a second local model and 200–400 ms to a budget that already carries two sequential LLM calls. Recorded here so the decision is deliberate rather than an omission.
 
-### 8. Two separately-configured models, both defaulting to `claude-opus-5`
+## Configuration
 
-`LLM_MODEL_CLASSIFY` and `LLM_MODEL_GENERATE` are independent settings. Both default to `claude-opus-5`.
+**One file, `config.yaml`, is the single source of truth for every tunable.** Secrets live in `.env` and nowhere else. There is no settings table in the database.
 
-*Why separate:* the ≤3s budget covers two sequential model calls. Measured against that budget, classification is the call to make cheap — it produces ~30 tokens and needs far less capability than answer synthesis. `.env.example` documents `claude-haiku-4-5` as the recommended latency optimization for `LLM_MODEL_CLASSIFY`, and § Latency budget below shows both configurations. The default stays on the stronger model so out-of-the-box accuracy is the best it can be; the operator makes the speed trade knowingly.
+```yaml
+llm:
+  provider: anthropic              # anthropic | openai | local
+  model_classify: claude-opus-5
+  model_generate: claude-opus-5
+  timeout_seconds: 20
+  max_retries: 2
 
-### 9. Embedding model is immutable once documents exist
+embedding:
+  provider: local                  # local | openai
+  model: all-MiniLM-L6-v2
+  dimension: 384
+  batch_size: 64
 
-Vectors from different embedding models are not comparable, and § Decision 2's cross-index score comparison depends on a single shared model. Changing `EMBEDDING_MODEL` while documents are indexed corrupts retrieval silently — the worst kind of failure, because nothing errors and answers just get subtly worse.
+rag:
+  chunk_chars: 800
+  chunk_overlap_chars: 100
+  vector_top_n: 20
+  keyword_top_n: 20
+  rrf_k: 60
+  final_top_k: 5
+  max_context_chars: 6000
+  relevance_floor: 0.35
 
-The service therefore stores the embedding model name and dimension in `app_setting` on first ingest and **refuses to start** if the configured model no longer matches, with an error naming the mismatch and pointing at the re-index command. Recovery is an explicit `reindex-all` admin action that re-embeds every document.
+orchestrator:
+  confidence_threshold: 0.70
+  fallback_space: general
 
-### 10. Channel-aware generation plus deterministic enforcement
+intent_spaces:
+  - slug: hr
+    name: HR
+    description: "Employee policies, leave, benefits, payroll, onboarding."
+    keywords: [leave, vacation, salary, band, benefits, onboarding, appraisal]
+  - slug: legal
+    name: Legal
+    description: "Contracts, compliance, data protection, terms."
+    keywords: [contract, NDA, GDPR, compliance, liability, clause]
+  - slug: finance
+    name: Finance
+    description: "Expenses, reimbursement, budgets, invoicing, salary bands."
+    keywords: [expense, reimbursement, invoice, budget, procurement, tax]
+  - slug: operations
+    name: Operations
+    description: "Internal processes, tooling, facilities, IT requests."
+    keywords: [access, laptop, VPN, ticket, facilities, process]
+  - slug: general
+    name: General
+    description: "Fallback — searches every space."
+    keywords: []
 
-The generation prompt receives a channel profile (`max_chars`, markdown flavor, whether bullets render) so the model *writes to fit* the destination. Each adapter then applies a deterministic formatter — escaping, bullet translation, and hard truncation at a word boundary with a "…(truncated)" marker.
+channels:
+  telegram: {enabled: true,  mode: polling, max_message_chars: 4096}
+  teams:    {enabled: false,                max_message_chars: 28000}
 
-*Why both:* the AI-authored fit is what makes responses read naturally on each platform; the deterministic pass is what makes "it will never exceed Telegram's 4096-character limit" a guarantee rather than a hope. Relying on the model alone would make a hard protocol limit probabilistic.
+ingestion:
+  max_upload_mb: 25
+  allowed_extensions: [".pdf", ".docx", ".xlsx"]
 
-### 11. Credentials encrypted at rest with Fernet
+storage:
+  sqlite_path: ./data/intelliknow.db
+  faiss_dir: ./data/faiss
+  upload_dir: ./data/uploads
 
-Bot tokens are encrypted with `cryptography.fernet` using `CREDENTIAL_ENCRYPTION_KEY` from the environment, stored as ciphertext in `integration.credentials_encrypted`, and returned from the API masked (last 4 characters only). The key itself is never persisted. A missing or invalid key fails startup rather than silently falling back to plaintext.
+public_base_url: null              # only for Telegram webhook mode or real-tenant Teams
+```
 
-### 12. Telegram runs in webhook mode with a polling fallback
+`.env` holds only: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TEAMS_APP_ID`, `TEAMS_APP_PASSWORD`, `ADMIN_PASSWORD`.
 
-Webhook is the default and shares the tunnel with Teams. `TELEGRAM_MODE=polling` starts a background long-poll worker instead, which lets Telegram be demonstrated with no tunnel at all — useful when the tunnel is down or unavailable. Teams has no such fallback; Bot Framework requires a reachable HTTPS endpoint.
+**Intent spaces are configuration, not database rows.** They are declarations — a slug, a name, and a description the classifier reads. Putting them in `config.yaml` means every knob an operator touches is in one file, and it removes a table plus its foreign keys. Documents reference a space by slug. The console's Intent Configuration screen edits this list and writes the file back; deleting a space that still has documents is rejected with the count, and the admin reassigns first.
 
-### 13. Analytics logging is synchronous but off the critical path
+The console edits `config.yaml` through the API; `ConfigService` validates, writes atomically, and reloads in place. Changing a threshold takes effect on the next query with no restart. Changing `embedding.model` while documents exist is refused (§ Decision 6).
 
-The log row is written *after* the answer is handed to the adapter for delivery. A logging failure is caught, logged to stderr, and never propagated to the user — an analytics problem must not cost the user their answer.
+## Admin UI layout
+
+The brief's §2 visual guidance is a requirement, not a suggestion, so it is fixed here rather than left to implementation taste.
+
+**Five screens**, reachable from a persistent nav: Dashboard, Frontend Integration, Knowledge Base Management, Intent Space Configuration, Analytics.
+
+**Visual scheme.** Neutral white/light-grey base. Every section is a card: 12 px radius, 16 px padding, clear heading. Per-module accent colours — Frontend Integration blue, Knowledge Base green, Intent Space purple. Primary actions ("Upload Document", "Create Intent Space", "Test") are visually prominent. Streamlit gets this via one injected CSS block plus `st.container(border=True)`; the accent is applied per page.
+
+**Where each element lives** — note the classification log sits under Intent Space Configuration, per the brief, not under Analytics:
+
+| Screen | Elements |
+| --- | --- |
+| Dashboard | KB size, per-space counts, channel status, recent query volume, provider/model summary, "Try a query" box |
+| Frontend Integration | One card per tool: Connected/Disconnected indicator, credential last-4, test button, setup guidance |
+| Knowledge Base Management | Document table (Name, Upload Date, Format, Size, Status, Actions View/Update/Delete); drag-and-drop upload zone with supported formats and a processing progress indicator; search bar; filters by format, date, intent space |
+| Intent Space Configuration | Card per space (name, description, associated document count, classification accuracy rate); **query classification log** (recent queries, detected space, confidence, status); editor form (name, description, **keywords**); threshold controls |
+| Analytics | Period selector, intent space distribution, most accessed documents, query log with detail, CSV export |
+
+**Document status vocabulary.** Internally `pending | parsing | indexed | failed`; the UI renders these as **Pending / Pending / Processed / Error** to match the brief's wording.
+
+**Classification accuracy rate**, shown per intent-space card, is the share of queries classified into that space whose confidence met the threshold. This is a real, cheap measurement — but it is *not* human-verified correctness, so the UI states its derivation next to the figure. The brief also asks for "admin-guided accuracy improvement"; the mechanism is the per-space **keywords** field, which feeds the classifier prompt and can be edited and re-tested in seconds via the Dashboard's "Try a query" box.
 
 ## Data model
 
-SQLite via SQLAlchemy Core. Timestamps UTC ISO-8601.
+Four tables. SQLite via SQLAlchemy Core, WAL mode, timestamps UTC ISO-8601.
 
 ```
-intent_space(id, slug UQ, name, description, is_protected, created_at, updated_at)
-document(id, filename, mime_type, size_bytes, sha256, intent_space_id → intent_space,
-         status[pending|parsing|indexed|failed], error_message, chunk_count,
-         uploaded_at, indexed_at)
-chunk(id, document_id → document, intent_space_id → intent_space, ordinal,
-      text, char_count, source_ref, created_at)
-integration(id, channel[telegram|teams] UQ, display_name, enabled,
-            credentials_encrypted, status[unconfigured|ok|error],
-            last_ok_at, last_error, updated_at)
-query_log(id, channel, external_user_id, question, intent_space_id → intent_space,
-          confidence, fallback_used, no_match, answer, citations_json,
-          latency_ms, error, created_at)
-chunk_hit(id, query_log_id → query_log, chunk_id, document_id, rank, score)
-app_setting(key PK, value)   -- confidence_threshold, relevance_floor,
-                             -- embedding_model, embedding_dimension
+document(id, filename, ext, size_bytes, sha256, intent_slug, status,
+         error_message, chunk_count, uploaded_at, indexed_at)
+
+chunk(id, document_id → document, intent_slug, ordinal, text,
+      heading_path, source_ref, char_count)
+
+chunk_fts(rowid → chunk.id, text)            -- FTS5 virtual table, BM25
+
+query_log(id, created_at, channel, user_ref, question, intent_slug,
+          confidence, fallback_used, status, answer, citations_json,
+          retrieved_doc_ids_json, latency_ms, error)
 ```
 
-`chunk_hit` is what makes "most accessed documents" a real measurement of retrieval rather than a proxy derived from intent counts. `chunk.source_ref` carries `p. 4` for PDFs, `¶ 12` for DOCX, `Sheet1!A1:F20` for XLSX, and is what appears in citations.
+Alongside the FAISS directory sits `data/index_meta.json`, holding the embedding model name and dimension recorded at first ingest. It is a file rather than a table because it belongs to the index, not to the relational data — deleting `data/` resets both together.
 
-`document.sha256` deduplicates re-uploads of an identical file. `ON DELETE CASCADE` from `document` to `chunk` and from `query_log` to `chunk_hit`; `chunk_hit.chunk_id` is intentionally *not* a foreign key so that deleting a document does not erase the history of it having been used.
+`status` is `success | no_match | failed` and is what the log's Status column renders. `retrieved_doc_ids_json` carries which documents answered the query — a JSON list rather than a join table, which is enough to rank most-accessed documents at MVP volumes and keeps the history readable as a single row per query. `document.sha256` deduplicates re-uploads. `ON DELETE CASCADE` from `document` to `chunk`; `query_log` holds no foreign key to `document`, so deleting a document does not erase the history of it having been used.
 
 ## Request flows
 
 ### Query (the ≤3s path)
 
 ```
-1. Telegram/Teams → POST webhook
-2. Adapter          verify signature/JWT → InboundMessage{channel, user_id, text}
-3. Adapter          send typing indicator (fire-and-forget)
-4. Orchestrator     LLMProvider.complete(schema=IntentClassification)
-                    → {slug, confidence, reasoning}
-5. Orchestrator     confidence >= threshold and slug != general
-                       ? spaces = [slug]        (fallback_used = false)
-                       : spaces = all           (fallback_used = true)
-6. Retrieval        EmbeddingProvider.embed([question])
-7. Retrieval        search each index in `spaces`, merge, take top 5
-8. Retrieval        best score < relevance_floor → NO_MATCH, skip to 10
-9. Retrieval        LLMProvider.complete(prompt with chunks + channel profile)
-                    → answer; verify citations against retrieved chunks
-10. Adapter         format for channel, deliver
-11. Logger          write query_log + chunk_hit rows
+1. Telegram poll / Teams activity → InboundMessage{channel, user_ref, text}
+2. Adapter        send typing indicator (fire-and-forget)
+3. Orchestrator   classify(question) ‖ embed(question)          ← concurrent
+4. Orchestrator   confidence >= threshold and slug != general
+                     ? spaces = [slug]   (fallback_used = false)
+                     : spaces = all      (fallback_used = true)
+5. Retriever      vector top-20 over spaces ‖ FTS5 BM25 top-20 over spaces
+6. Retriever      RRF fuse → top 5
+7. Gate           best dense cosine < relevance_floor → no_match, skip to 10
+8. Context        dedupe, reorder, tag, budget
+9. Generator      answer; CitationVerifier drops unresolvable markers
+10. Adapter       format for channel, deliver
+11. Log           write query_log row
 ```
 
-Steps 4 and 6 are independent and run concurrently — the query embedding does not depend on the classification result, only the *index selection* does. This overlaps one model call with the embedding call for free.
+Steps 3 and 5 each run two operations concurrently. The classification result is needed only to *choose indexes*, not to embed, so the query embedding overlaps the classification LLM call for free.
 
 ### Ingestion
 
 ```
 1. Console → POST /documents (multipart)
-2. API          validate extension + size; sha256; reject exact duplicate
-3. API          insert document(status=pending); return 202 immediately
-4. Worker       status=parsing
-5. Parser       PDF  → pypdf text + pdfplumber tables → markdown tables
-                DOCX → python-docx paragraphs + tables
-                XLSX → openpyxl sheets → markdown tables
-6. Parser       ragged/failed table extraction → LLMProvider.complete()
-                to restructure that region (see § Table extraction)
-7. Chunker      ~800 chars, 100-char overlap, never split a table mid-row
-8. Classifier   suggest intent space from name/description + first 2000 chars
-9. Embedder     EmbeddingProvider.embed(chunk texts), batched
-10. Indexer     write vectors to that space's index; persist chunks
-11. Worker      status=indexed, chunk_count, indexed_at
-    on failure  status=failed, error_message — document row is kept so the
-                admin sees the failure and can retry
+2. API      validate extension + size, sha256, reject exact duplicate
+3. API      insert document(status=pending), return 202
+4. Worker   status=parsing → DocumentLoader → blocks
+5. Worker   ragged table regions → LLM restructure (fallback: raw text)
+6. Worker   StructuralChunker → chunks with heading_path + source_ref
+7. Worker   suggest intent space from names/descriptions + first 2000 chars
+8. Worker   Embedder (batched) → IndexWriter → FAISS + chunk + chunk_fts
+9. Worker   status=indexed, chunk_count, indexed_at
+   on error status=failed, error_message; document row kept for retry
 ```
 
-Ingestion is a FastAPI `BackgroundTask`, not a queue — a single-process MVP does not need a broker, and the KB screen polls document status.
-
-### Table extraction
-
-This is the brief's first named AI usage scenario, so the fallback is a designed behavior rather than an incidental one. `pdfplumber` handles ruled tables well and merged/borderless cells badly — HR salary grids are exactly the badly-handled case. When extraction yields a ragged result (inconsistent column counts across rows, or >30% empty cells), that region's raw text is passed to `LLMProvider.complete()` with a schema requesting a clean markdown table. The result is embedded as chunk text, which is what makes numeric and tabular content semantically searchable at all.
+A FastAPI `BackgroundTask`, not a queue — a single-process MVP needs no broker. The KB screen polls status.
 
 ## Latency budget
 
-Target ≤ 3s end-to-end. Steps 4 and 6 overlap per § Request flows.
+Target ≤ 3s. Concurrency per § Request flows.
 
 | Stage | Default (`claude-opus-5` both) | With `claude-haiku-4-5` classify |
 | --- | --- | --- |
-| Webhook + verify | ~30 ms | ~30 ms |
-| Classify ‖ embed (local ST) | ~900 ms | ~350 ms |
-| Vector search + merge | ~20 ms | ~20 ms |
+| Inbound handling | ~30 ms | ~30 ms |
+| Classify ‖ embed | ~900 ms | ~350 ms |
+| Vector ‖ BM25 search + RRF | ~30 ms | ~30 ms |
+| Context build | ~5 ms | ~5 ms |
 | Answer generation | ~1400 ms | ~1400 ms |
 | Format + deliver | ~250 ms | ~250 ms |
 | **Total** | **~2.6 s** | **~2.05 s** |
 
-The default configuration meets the budget with roughly 400 ms of headroom, which is thin. Two mitigations are specified rather than assumed: the typing indicator goes out before any model call so the user sees immediate acknowledgement, and both model settings are independently tunable. The end-to-end test in the Integrations screen reports measured latency so an operator can verify the budget on their own hardware and network instead of trusting this table.
+The default meets the budget with ~400 ms of headroom, which is thin. Two mitigations are specified rather than assumed: the typing indicator goes out before any model call, and `model_classify` is independently configurable — classification emits ~30 tokens and needs far less capability than answer synthesis, so it is the call to make cheap. The channel test reports measured latency so this table can be verified on real hardware instead of trusted.
 
 ## Security
 
-- Admin console behind a single password (`ADMIN_PASSWORD`), compared with `secrets.compare_digest`.
-- Admin API requires a shared bearer token (`ADMIN_API_TOKEN`); the console holds it server-side.
-- Telegram webhooks verified via `X-Telegram-Bot-Api-Secret-Token`; Teams via Bot Framework JWT validation against the Azure AD JWKS.
-- Bot credentials Fernet-encrypted at rest, masked in every API response.
-- Upload validation: extension allowlist, MIME sniff, 25 MB cap, filename sanitized before it touches the filesystem.
-- Document content is untrusted input. Retrieved chunks are wrapped in delimiters in the generation prompt with an explicit instruction to treat them as data, not instructions — a poisoned document must not be able to redirect the model.
+Deliberately minimal — the brief specifies no security requirements, and this is a single-admin demo system.
 
-Explicitly out of scope: rate limiting, per-user authorization, and audit logging beyond the query log.
+- The Streamlit console requires one password, `ADMIN_PASSWORD` from `.env`.
+- Bot tokens and API keys live in `.env`. They are not stored in the database and not editable from the console; the console displays them masked and read-only, and tells the admin which variable to set.
+- Uploads are checked for extension and size. This is crash prevention, not defense.
+- Teams inbound requests are authenticated by `botbuilder-core` because the Bot Framework protocol requires it — this comes from the SDK, not from us.
+
+Explicitly not done: credential encryption at rest, admin API tokens, rate limiting, prompt-injection hardening, audit logging.
+
+**Flagged for your decision:** the brief's integration requirement says *"Admin credential configuration (secure storage)"*. `.env` is the low bar you asked for. Moving tokens into console-managed encrypted storage is roughly half a day if you want to satisfy that line literally.
+
+## Decisions
+
+1. **Two-method provider interface.** `LLMProvider.complete(system, user, schema?, max_tokens)` and `EmbeddingProvider.embed(texts) / .dimension`. `schema` is the only branch inside implementations. Rejected LangChain — a large dependency tree and its own chain concepts for a surface expressible in ~40 lines.
+2. **Hybrid retrieval with RRF.** See § RAG read path. Rejected pure vector (misses exact tokens) and weighted score blending (needs corpus-specific normalization constants).
+3. **Exact FAISS index, one per intent space.** See § Storage. Rejected ANN (solves a problem we don't have) and a global index with selectors (version-fragile, awkward reassignment).
+4. **Hard filter with General fallback.** Above threshold → search that space only; below threshold or classified General → search all. Rejected soft re-ranking over a global search: more forgiving of misclassification, but it makes routing cosmetic and undemonstrable, and goal 3 is explicitly about routing.
+5. **One intent space per document, admin-overridable.** The LLM suggests at upload from space descriptions plus the first 2000 characters; reassignment moves vectors without re-parsing. Rejected per-chunk intent — more accurate for genuinely mixed documents, but it costs an LLM call per chunk and gives the admin no practical way to correct it. Known limitation: a mixed handbook must pick one space; the workaround is splitting the file, documented in the README.
+6. **Embedding model pinned once documents exist.** Vectors from different models are not comparable, and cross-index score comparison depends on one shared model. The model name and dimension are recorded on first ingest; a mismatch fails startup with an error naming both models. Recovery is an explicit re-index.
+7. **LLM structured-output classification** returning `{intent_slug, confidence, reasoning}`, prompted with each space's config description. Rejected embedding-centroid classification — better calibrated numerically, but weak on short queries and it needs enough documents per space to form a centroid, which a fresh install lacks. Trade-off stated plainly: LLM self-reported confidence is not a calibrated probability, so 0.70 is a tunable heuristic — which is why it is in `config.yaml` and why the history view shows every confidence score.
+8. **Channel-aware generation plus deterministic enforcement.** The prompt carries the channel's length limit and markup flavor so the model writes to fit; the adapter then escapes and hard-truncates at a word boundary. Both, because prompt-only makes a hard protocol limit probabilistic.
+9. **Telegram long-polling by default.** No inbound URL, no tunnel, no webhook registration to go stale. Webhook mode is available in config for anyone who wants it. Teams has no equivalent — Bot Framework needs a reachable endpoint, which the Emulator provides locally.
+10. **`config.yaml` is the single source of truth**, including intent spaces. No settings table. Console edits write the file back and reload in place.
+11. **Logging is off the critical path.** The log row is written after the answer is handed to the adapter, and a logging failure is swallowed — an analytics problem must not cost a user their answer.
+12. **Analytics is scoped to what the brief names, and nothing more.** The centre of gravity is the query classification log — time, channel, question, detected space, confidence, status — which lives on the Intent Space Configuration screen per §2. The Analytics screen adds only the three things the brief names explicitly: intent space distribution ("common intent spaces"), most accessed documents, and CSV export ("exportable data"), all computed from `query_log` with no extra tables. Cut from the earlier draft, and staying cut: the admin accuracy-review workflow, latency percentiles, unused-document tracking, and no-match question analysis. Per-space "classification accuracy rate" is the confident-classification share defined in § Admin UI layout — one `GROUP BY`, not a review queue.
+
+13. **Keywords are the accuracy-improvement mechanism.** The brief asks for "admin-guided accuracy improvement" and specifies a keywords field in the intent-space editor. Keywords go into the classification prompt alongside name and description. This is why classification is prompt-based rather than embedding-based: a keyword edit changes behaviour on the very next query with no re-indexing, which makes the tuning loop (edit → "Try a query" → observe confidence) a few seconds long.
 
 ## Risks / Trade-offs
 
 | Risk | Mitigation |
 | --- | --- |
-| Teams needs an Azure Bot registration the developer may not be able to create — hard blocker on half the frontend requirement | Verify Azure access **first** (task 1.2, before any Teams code). Adapter is written against the Bot Framework protocol so the Bot Framework Emulator can drive it locally without a tenant. If access proves impossible, this is a scope decision for the user, not a silent substitution. |
-| LLM confidence is uncalibrated; 0.70 may be meaningless in practice | Threshold editable at runtime; Analytics plots the confidence distribution and per-space fallback rate so it can be tuned against real data. |
-| Hard filtering turns a misclassification into a no-match | Relevance floor catches weak retrieval; General fallback catches low confidence; misroutes are visible in Analytics with the classifier's `reasoning`. |
-| Two sequential model calls threaten the 3s budget | Classify ‖ embed overlap; separately tunable classify model; typing indicator for perceived latency; test function reports measured latency. |
-| Cloudflared quick tunnels get a new URL on every restart, silently breaking both webhooks | Startup re-registers the Telegram webhook automatically; the Teams messaging endpoint must be updated by hand in Azure, and the README calls this out as the single most likely demo failure. A named tunnel is documented as the stable alternative. |
-| `faiss-cpu` wheels are architecture-sensitive (Apple Silicon) | Pin a known-good version; Docker image builds `linux/arm64` and `linux/amd64`; a smoke test asserts the index round-trips at container start. |
-| Streamlit's rerun-on-interaction model makes file upload and polling awkward | Console is a thin API client with no local state; uploads return immediately and status is polled, so a rerun mid-ingest costs nothing. |
-| Changing the embedding model silently corrupts retrieval | Model + dimension recorded on first ingest; mismatch fails startup loudly; explicit `reindex-all` is the only supported path. |
-| SQLite write contention between ingest and query | WAL mode; ingest batches writes; single-process deployment means no cross-process contention. |
+| LLM confidence is uncalibrated; 0.70 may be meaningless in practice | Threshold in `config.yaml`, editable from the console; the history table shows every confidence score so it can be tuned against real traffic. |
+| Hard filtering turns a misclassification into a no-match | The relevance gate catches weak retrieval; the General fallback catches low confidence; the history table makes misroutes visible. |
+| Two sequential LLM calls threaten the 3s budget | Classify ‖ embed overlap; independently configurable classify model; typing indicator for perceived latency; channel test reports measured latency. |
+| Hybrid retrieval doubles the moving parts in the read path | Each retriever is independently testable, and RRF is parameter-free. If BM25 proves useless on the sample corpus, `keyword_top_n: 0` disables it without a code change. |
+| No re-ranker means precision is capped | Accepted for the latency budget; recorded as the first upgrade if quality falls short. |
+| `faiss-cpu` wheels are architecture-sensitive (Apple Silicon) | Pin a known-good version; a smoke test asserts an index round-trips at startup; sqlite-vec is the recorded fallback. |
+| Teams against a real tenant needs Azure Bot registration the developer may not have | Develop and demo against the Bot Framework Emulator, which needs no tenant. Azure is an optional deployment step, verified early (task 1.2) so it never blocks the build. |
+| Streamlit reruns on every interaction, making upload and polling awkward | Console is a thin API client with no local state; uploads return immediately and status is polled, so a rerun mid-ingest costs nothing. |
+| Console writes to `config.yaml` could corrupt it | Validate against the schema before writing; write atomically via temp file + rename; keep the previous version as `config.yaml.bak`. |
+| Changing the embedding model silently corrupts retrieval | Model and dimension recorded on first ingest; mismatch fails startup; explicit re-index is the only supported path. |
 
 ## Migration Plan
 
-No migration — greenfield. Deployment is:
+Greenfield. To run:
 
-1. `cp .env.example .env`, fill in provider key, admin password/token, and generate a Fernet key.
-2. `docker compose up --build` → API on `:8000`, console on `:8501`.
-3. `cloudflared tunnel --url http://localhost:8000` → public HTTPS URL.
-4. Paste the tunnel URL into the Integrations screen; it registers the Telegram webhook and displays the Teams messaging endpoint to paste into Azure.
-5. Upload `sample_docs/`, verify each reaches `indexed`.
-6. Run the end-to-end test per channel; confirm both report OK with measured latency.
+1. `uv sync`
+2. `cp .env.example .env` and set the provider API key, `TELEGRAM_BOT_TOKEN`, and `ADMIN_PASSWORD`
+3. `uv run uvicorn app.main:app --port 8000`
+4. `uv run streamlit run admin/Home.py` (port 8501)
+5. Upload `sample_docs/`, wait for each to reach `indexed`
+6. Ask the Telegram bot a question; verify a cited answer and a logged row
 
-Rollback is `docker compose down`; deleting `data/` resets all state.
+Teams: point the Bot Framework Emulator at `http://localhost:8000/api/messages`. A real tenant additionally needs an Azure Bot registration and a public HTTPS URL.
+
+Rollback: stop both processes. Deleting `data/` resets all state.
 
 ## Open Questions
 
-- Which specific embedding model to default to (`all-MiniLM-L6-v2`, 384-dim, ~80 MB vs `all-mpnet-base-v2`, 768-dim, ~420 MB). Both satisfy every requirement; it is a container-size/quality trade to settle by measuring on the sample documents. Deferrable — § Decision 9 already fixes the *mechanism* for recording and changing it, so the choice does not affect specs, architecture, or task breakdown.
-- Whether the Analytics CSV export should stream or buffer. Buffering is fine at MVP data volumes; this only matters past ~100k logged queries.
+None blocking. The embedding-model question from the previous draft is resolved in § RAG write path (`all-MiniLM-L6-v2`, with the swap documented).

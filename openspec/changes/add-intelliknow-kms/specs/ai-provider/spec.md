@@ -1,6 +1,6 @@
 ## Purpose
 
-Isolates every call to an AI backend behind two narrow interfaces so that text generation, intent classification, and embedding generation can each be pointed at Anthropic, OpenAI, or a local model through configuration alone, without changing any calling code.
+Isolates every call to an AI backend behind two narrow interfaces so that answer generation, intent classification, table restructuring, and embedding generation can each be pointed at Anthropic, OpenAI, or a local model through configuration alone, without changing any calling code.
 
 ## ADDED Requirements
 
@@ -11,7 +11,7 @@ The system SHALL expose an `LLMProvider` interface with a single `complete` oper
 #### Scenario: Free-form generation
 
 - **WHEN** `complete` is called without a schema
-- **THEN** the provider returns the generated text, the model identifier that produced it, and input/output token counts
+- **THEN** the provider returns the generated text, the model identifier that produced it, and input and output token counts
 
 #### Scenario: Structured generation
 
@@ -23,7 +23,7 @@ The system SHALL expose an `LLMProvider` interface with a single `complete` oper
 
 - **WHEN** a provider returns content that does not validate against the requested schema
 - **THEN** the provider retries the call once
-- **AND** if the retry also fails validation the provider raises a `ProviderError` naming the schema that was violated
+- **AND** if the retry also fails validation a `ProviderError` is raised naming the schema that was violated
 
 ### Requirement: Embedding interface
 
@@ -40,52 +40,57 @@ The system SHALL expose an `EmbeddingProvider` interface with an `embed` operati
 - **WHEN** `embed` returns vectors
 - **THEN** every vector has a length equal to the provider's `dimension` property
 
-### Requirement: Backend selection by configuration
+#### Scenario: Vectors normalized for cosine comparison
 
-The system SHALL select provider implementations from environment variables — `LLM_PROVIDER` (`anthropic`, `openai`, or `local`) and `EMBEDDING_PROVIDER` (`local`, `openai`) — and SHALL support distinct models for classification and generation via `LLM_MODEL_CLASSIFY` and `LLM_MODEL_GENERATE`.
+- **WHEN** embeddings are produced for indexing or querying
+- **THEN** they are unit-normalized so that inner product equals cosine similarity
 
-#### Scenario: Provider chosen at startup
+### Requirement: Backend selection from configuration
 
-- **WHEN** the service starts with `LLM_PROVIDER=anthropic`
-- **THEN** all generation and classification calls are routed to the Anthropic implementation
+The system SHALL select provider implementations from the configuration file, supporting Anthropic, OpenAI, and a local backend for generation, and a local or OpenAI backend for embeddings, with separately configured models for classification and generation.
+
+#### Scenario: Provider chosen from configuration
+
+- **WHEN** the configured LLM provider is Anthropic
+- **THEN** all generation and classification calls route to the Anthropic implementation
 - **AND** no other backend is contacted
 
 #### Scenario: Separate classification and generation models
 
-- **WHEN** `LLM_MODEL_CLASSIFY` and `LLM_MODEL_GENERATE` are set to different models
-- **THEN** classification calls use the classify model
-- **AND** answer generation calls use the generate model
+- **WHEN** the classification model and generation model are configured differently
+- **THEN** classification calls use the classification model
+- **AND** answer generation calls use the generation model
 
 #### Scenario: Unknown provider name
 
-- **WHEN** `LLM_PROVIDER` is set to a value that is not a supported implementation
+- **WHEN** the configured provider name matches no implementation
 - **THEN** the service refuses to start
 - **AND** the error names the invalid value and lists the supported values
 
 ### Requirement: Startup credential validation
 
-The system SHALL validate that the credentials required by the selected providers are present at startup and SHALL fail fast with an actionable message when they are not.
+The system SHALL verify at startup that the credentials required by the selected providers are present, and SHALL fail with an actionable message when they are not.
 
 #### Scenario: Missing API key for a remote provider
 
-- **WHEN** the service starts with a remote `LLM_PROVIDER` and no corresponding API key is set
-- **THEN** the service refuses to start
+- **WHEN** the service starts with a remote provider selected and no corresponding API key set
+- **THEN** startup fails
 - **AND** the error names the missing environment variable
 
 #### Scenario: Local providers need no key
 
-- **WHEN** both `LLM_PROVIDER` and `EMBEDDING_PROVIDER` are set to local implementations
+- **WHEN** both the generation and embedding providers are local implementations
 - **THEN** the service starts with no API key configured
 
 ### Requirement: Timeout, retry, and error normalization
 
-The system SHALL apply a configurable per-call timeout, SHALL retry transient failures with exponential backoff up to a configured maximum, and SHALL translate every backend-specific failure into a common `ProviderError` carrying a category of `timeout`, `rate_limit`, `auth`, or `backend`.
+The system SHALL apply the configured per-call timeout, SHALL retry transient failures with exponential backoff up to the configured maximum, and SHALL translate every backend-specific failure into a common `ProviderError` carrying a category of `timeout`, `rate_limit`, `auth`, or `backend`.
 
 #### Scenario: Transient failure is retried
 
 - **WHEN** a provider call fails with a rate-limit or server error
 - **THEN** the call is retried with exponential backoff
-- **AND** a subsequent success is returned to the caller as a normal result
+- **AND** a subsequent success is returned as a normal result
 
 #### Scenario: Retries exhausted
 
@@ -96,15 +101,14 @@ The system SHALL apply a configurable per-call timeout, SHALL retry transient fa
 #### Scenario: Call exceeds the timeout
 
 - **WHEN** a provider call does not return within the configured timeout
-- **THEN** the call is aborted
-- **AND** a `ProviderError` with category `timeout` is raised
+- **THEN** the call is aborted and a `ProviderError` with category `timeout` is raised
 
-### Requirement: Provider health reporting
+### Requirement: Provider status reporting
 
-The system SHALL expose the active provider names, the configured classification and generation models, the embedding model, and the embedding dimension through the admin API for display in the console.
+The system SHALL expose the active provider names, the configured classification and generation models, the embedding model, and the embedding dimension through the admin API, without disclosing any credential value.
 
-#### Scenario: Console reads provider configuration
+#### Scenario: Console reads provider status
 
-- **WHEN** the admin console requests provider status
-- **THEN** the response names the active LLM provider, both configured models, the embedding provider, and the embedding dimension
+- **WHEN** the console requests provider status
+- **THEN** the active providers, both models, the embedding model, and the embedding dimension are returned
 - **AND** no API key or secret value appears in the response
