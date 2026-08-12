@@ -19,8 +19,24 @@ from app.providers.local_llm import LocalLLM
 from app.providers.openai_embedding import OpenAIEmbedding
 from app.providers.openai_llm import OpenAILLM
 
-_SUPPORTED_LLM_PROVIDERS = ("anthropic", "openai", "local")
-_SUPPORTED_EMBEDDING_PROVIDERS = ("local", "openai")
+# The single source of truth for "which provider needs which credential".
+# `app/providers/status.py` reports secret presence from these same tables,
+# so the console can never call a key satisfied that the factory would then
+# reject. `None` means the backend needs no API key — a locally hosted model
+# server is reached over the local network, not an authenticated API.
+LLM_API_KEY_ENV_VARS: Mapping[str, str | None] = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "local": None,
+}
+
+EMBEDDING_API_KEY_ENV_VARS: Mapping[str, str | None] = {
+    "local": None,
+    "openai": "OPENAI_API_KEY",
+}
+
+_SUPPORTED_LLM_PROVIDERS = tuple(LLM_API_KEY_ENV_VARS)
+_SUPPORTED_EMBEDDING_PROVIDERS = tuple(EMBEDDING_API_KEY_ENV_VARS)
 
 
 def _require_key(env: Mapping[str, str], var_name: str) -> str:
@@ -47,7 +63,7 @@ def build_llm_provider(
     provider_name = cfg.llm.provider
 
     if provider_name == "anthropic":
-        api_key = _require_key(env, "ANTHROPIC_API_KEY")
+        api_key = _require_key(env, LLM_API_KEY_ENV_VARS["anthropic"])
         return AnthropicLLM(
             model=model,
             api_key=api_key,
@@ -56,7 +72,7 @@ def build_llm_provider(
             effort=cfg.llm.effort,
         )
     if provider_name == "openai":
-        api_key = _require_key(env, "OPENAI_API_KEY")
+        api_key = _require_key(env, LLM_API_KEY_ENV_VARS["openai"])
         return OpenAILLM(
             model=model,
             api_key=api_key,
@@ -93,7 +109,7 @@ def build_embedding_provider(
             dimension=cfg.embedding.dimension,
         )
     if provider_name == "openai":
-        api_key = _require_key(env, "OPENAI_API_KEY")
+        api_key = _require_key(env, EMBEDDING_API_KEY_ENV_VARS["openai"])
         return OpenAIEmbedding(
             model_name=cfg.embedding.model,
             api_key=api_key,
