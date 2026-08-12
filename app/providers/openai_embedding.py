@@ -7,6 +7,11 @@ module docstring for the full rationale): the raw SDK call is wrapped in
 `app.providers.retry.with_retries`, and the default SDK client is built with
 `max_retries=0` so the SDK's own retry never runs underneath the app-level
 policy.
+
+`timeout_seconds` and `max_retries` are required rather than defaulted:
+they are tunables, and `spec: configuration` puts every tunable in
+`config.yaml`. They used to be hard-coded here as 20 / 2, out of an
+operator's reach.
 """
 
 from __future__ import annotations
@@ -29,10 +34,10 @@ class OpenAIEmbedding:
         model_name: str,
         api_key: str,
         batch_size: int,
+        timeout_seconds: int,
+        max_retries: int,
         dimension: int | None = None,
         client: Any | None = None,
-        timeout_seconds: int = 20,
-        max_retries: int = 2,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._model_name = model_name

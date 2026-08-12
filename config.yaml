@@ -4,12 +4,15 @@ llm:
   model_generate: claude-opus-5
   timeout_seconds: 20
   max_retries: 2
+  effort: low                      # low | medium | high | xhigh | max
 
 embedding:
   provider: local                  # local | openai
   model: all-MiniLM-L6-v2
   dimension: 384
   batch_size: 64
+  timeout_seconds: 20              # remote (openai) backend only
+  max_retries: 2                   # remote (openai) backend only
 
 rag:
   chunk_chars: 800

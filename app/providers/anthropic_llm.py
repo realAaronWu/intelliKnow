@@ -30,20 +30,18 @@ from typing import Any, Callable
 
 import anthropic
 
-from app.providers.base import DEFAULT_MAX_TOKENS, LLMResult, ProviderError
+from app.providers.base import (
+    DEFAULT_MAX_TOKENS,
+    EffortLevel,
+    LLMResult,
+    ProviderError,
+)
 from app.providers.retry import with_retries
 from app.providers.schema_validation import (
     SchemaViolation,
     describe_schema,
     parse_and_validate,
 )
-
-# Claude Opus 5 supports a low-effort mode that trims latency at some cost to
-# depth. Every other knob is left at its default — in particular `thinking`
-# is never set to `disabled`: on this model that risks the assistant
-# emitting tool calls as plain text and leaking raw thinking tags into the
-# visible response.
-_LOW_EFFORT_MODEL_MARKER = "opus-5"
 
 # A malformed structured-output response is retried once (initial attempt +
 # one retry) before giving up — see module docstring.
@@ -59,11 +57,13 @@ class AnthropicLLM:
         api_key: str,
         timeout_seconds: int,
         max_retries: int,
+        effort: EffortLevel,
         client: Any | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._model = model
         self._max_retries = max_retries
+        self._effort = effort
         self._sleep = sleep
         self._client = client if client is not None else anthropic.Anthropic(
             api_key=api_key,
@@ -81,9 +81,10 @@ class AnthropicLLM:
         schema: dict | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> LLMResult:
-        output_config: dict[str, Any] = {}
-        if _LOW_EFFORT_MODEL_MARKER in self._model:
-            output_config["effort"] = "low"
+        # `thinking` is deliberately never sent: setting it to `disabled` on
+        # this model risks the assistant emitting tool calls as plain text
+        # and leaking raw thinking tags into the visible response.
+        output_config: dict[str, Any] = {"effort": self._effort}
         if schema is not None:
             output_config["format"] = {"type": "json_schema", "schema": schema}
 

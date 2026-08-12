@@ -53,6 +53,7 @@ def build_llm_provider(
             api_key=api_key,
             timeout_seconds=cfg.llm.timeout_seconds,
             max_retries=cfg.llm.max_retries,
+            effort=cfg.llm.effort,
         )
     if provider_name == "openai":
         api_key = _require_key(env, "OPENAI_API_KEY")
@@ -97,6 +98,8 @@ def build_embedding_provider(
             model_name=cfg.embedding.model,
             api_key=api_key,
             batch_size=cfg.embedding.batch_size,
+            timeout_seconds=cfg.embedding.timeout_seconds,
+            max_retries=cfg.embedding.max_retries,
             dimension=cfg.embedding.dimension,
         )
 

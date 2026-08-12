@@ -89,6 +89,7 @@ def _make_llm(
     model: str = "claude-opus-5",
     max_retries: int = 2,
     sleep: Callable[[float], None] | None = None,
+    effort: str = "low",
 ) -> tuple[AnthropicLLM, _StubAnthropicClient]:
     client = _StubAnthropicClient()
     llm = AnthropicLLM(
@@ -96,6 +97,7 @@ def _make_llm(
         api_key="unused",
         timeout_seconds=20,
         max_retries=max_retries,
+        effort=effort,
         client=client,
         sleep=sleep if sleep is not None else (lambda seconds: None),
     )
@@ -361,6 +363,7 @@ def test_default_client_disables_sdk_level_retries():
         api_key="sk-test",
         timeout_seconds=20,
         max_retries=5,
+        effort="low",
     )
 
     assert llm._client.max_retries == 0
@@ -466,8 +469,8 @@ def test_refusal_reported_as_a_refusal_not_as_a_missing_text_block():
     assert "no text content block" not in message
 
 
-def test_low_effort_requested_and_thinking_never_disabled():
-    llm, client = _make_llm(model="claude-opus-5")
+def test_configured_effort_is_requested_and_thinking_never_disabled():
+    llm, client = _make_llm(model="claude-opus-5", effort="low")
     client.messages.queue_response(
         _StubMessage(
             content=[_StubTextBlock("hi")],
@@ -481,4 +484,27 @@ def test_low_effort_requested_and_thinking_never_disabled():
 
     sent_kwargs = client.messages.calls[0]
     assert sent_kwargs["output_config"]["effort"] == "low"
+    # `thinking` is never set to `disabled`: on this model that risks the
+    # assistant emitting tool calls as plain text and leaking raw thinking
+    # tags into the visible response.
     assert "thinking" not in sent_kwargs
+
+
+def test_effort_is_taken_from_config_not_inferred_from_the_model_name():
+    """The old heuristic keyed off the substring "opus-5", so a differently
+    named model silently lost its effort setting and the value could not be
+    tuned from config.yaml at all.
+    """
+    llm, client = _make_llm(model="claude-sonnet-4", effort="xhigh")
+    client.messages.queue_response(
+        _StubMessage(
+            content=[_StubTextBlock("hi")],
+            model="claude-sonnet-4",
+            input_tokens=1,
+            output_tokens=1,
+        )
+    )
+
+    llm.complete(system="s", user="u")
+
+    assert client.messages.calls[0]["output_config"]["effort"] == "xhigh"

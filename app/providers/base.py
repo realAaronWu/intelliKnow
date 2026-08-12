@@ -14,6 +14,11 @@ from typing import Literal, Protocol
 
 ErrorCategory = Literal["timeout", "rate_limit", "auth", "backend"]
 
+# Reasoning effort requested of a thinking-capable model. Declared here
+# rather than in `app/config.py` so the provider layer and the configuration
+# schema share one definition; `LLMConfig.effort` imports it.
+EffortLevel = Literal["low", "medium", "high", "xhigh", "max"]
+
 
 @dataclass(frozen=True)
 class LLMResult:

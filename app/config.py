@@ -17,6 +17,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.providers.base import EffortLevel
+
 _SLUG_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 
@@ -32,6 +34,10 @@ class LLMConfig(_StrictModel):
     model_generate: str = "claude-opus-5"
     timeout_seconds: int = Field(default=20, gt=0)
     max_retries: int = Field(default=2, ge=0)
+    # Reasoning effort requested of a thinking-capable model. A tunable, so
+    # it belongs here — it was previously inferred in provider code from the
+    # substring "opus-5" in the model name.
+    effort: EffortLevel = "low"
 
 
 class EmbeddingConfig(_StrictModel):
@@ -39,6 +45,11 @@ class EmbeddingConfig(_StrictModel):
     model: str = "all-MiniLM-L6-v2"
     dimension: int = Field(default=384, gt=0)
     batch_size: int = Field(default=64, gt=0)
+    # Only the remote (OpenAI) embedding backend uses these; the local
+    # backend makes no network call. Previously hard-coded in
+    # `app/providers/openai_embedding.py`.
+    timeout_seconds: int = Field(default=20, gt=0)
+    max_retries: int = Field(default=2, ge=0)
 
 
 class RAGConfig(_StrictModel):

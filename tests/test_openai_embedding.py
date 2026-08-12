@@ -64,6 +64,8 @@ def test_constructs_with_injected_client_no_network():
         model_name="text-embedding-3-small",
         api_key="unused",
         batch_size=64,
+        timeout_seconds=20,
+        max_retries=2,
         dimension=1536,
         client=client,
     )
@@ -78,6 +80,8 @@ def test_embed_returns_unit_normalized_vectors_in_order():
         model_name="text-embedding-3-small",
         api_key="unused",
         batch_size=64,
+        timeout_seconds=20,
+        max_retries=2,
         dimension=2,
         client=client,
     )
@@ -101,6 +105,8 @@ def test_embed_splits_one_call_into_batch_size_chunks():
         model_name="text-embedding-3-small",
         api_key="unused",
         batch_size=2,
+        timeout_seconds=20,
+        max_retries=2,
         dimension=1,
         client=client,
     )
@@ -130,6 +136,8 @@ def test_embed_requests_the_configured_dimension_from_the_api():
         model_name="text-embedding-3-small",
         api_key="unused",
         batch_size=64,
+        timeout_seconds=20,
+        max_retries=2,
         dimension=2,
         client=client,
     )
@@ -149,6 +157,8 @@ def test_vector_of_the_wrong_length_raises_backend_error():
         model_name="text-embedding-3-small",
         api_key="unused",
         batch_size=64,
+        timeout_seconds=20,
+        max_retries=2,
         dimension=2,
         client=client,
     )
@@ -174,6 +184,7 @@ def test_auth_exception_mapped_to_auth_category_and_not_retried():
         model_name="text-embedding-3-small",
         api_key="unused",
         batch_size=64,
+        timeout_seconds=20,
         dimension=2,
         client=client,
         max_retries=2,
@@ -196,6 +207,7 @@ def test_backend_exception_mapped_to_backend_category_and_not_retried():
         model_name="text-embedding-3-small",
         api_key="unused",
         batch_size=64,
+        timeout_seconds=20,
         dimension=2,
         client=client,
         max_retries=2,
@@ -221,6 +233,7 @@ def test_rate_limit_exception_mapped_to_rate_limit_category():
         model_name="text-embedding-3-small",
         api_key="unused",
         batch_size=64,
+        timeout_seconds=20,
         dimension=2,
         client=client,
         max_retries=0,
@@ -255,6 +268,7 @@ def test_transient_failure_retried_by_app_level_policy_not_the_sdk():
         model_name="text-embedding-3-small",
         api_key="unused",
         batch_size=64,
+        timeout_seconds=20,
         dimension=2,
         client=client,
         max_retries=2,
@@ -273,6 +287,8 @@ def test_default_client_constructed_from_api_key_without_network_call():
         model_name="text-embedding-3-small",
         api_key="sk-test",
         batch_size=64,
+        timeout_seconds=20,
+        max_retries=2,
         dimension=1536,
     )
 
@@ -287,6 +303,7 @@ def test_default_client_disables_sdk_level_retries():
         model_name="text-embedding-3-small",
         api_key="sk-test",
         batch_size=64,
+        timeout_seconds=20,
         dimension=1536,
         max_retries=5,
     )

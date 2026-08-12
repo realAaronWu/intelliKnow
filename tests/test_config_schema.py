@@ -37,12 +37,15 @@ def _valid_config_dict() -> dict:
             "model_generate": "claude-opus-5",
             "timeout_seconds": 20,
             "max_retries": 2,
+            "effort": "low",
         },
         "embedding": {
             "provider": "local",
             "model": "all-MiniLM-L6-v2",
             "dimension": 384,
             "batch_size": 64,
+            "timeout_seconds": 20,
+            "max_retries": 2,
         },
         "rag": {
             "chunk_chars": 800,
@@ -230,6 +233,58 @@ def test_1_13_missing_config_file_writes_defaults(tmp_path):
     assert cfg.orchestrator.confidence_threshold == 0.70
     slugs = {space.slug for space in cfg.intent_spaces}
     assert {"hr", "legal", "finance", "operations", "general"} <= slugs
+
+
+# --- Tunables that must live in config.yaml, not in code ---------------------
+
+
+def test_llm_effort_defaults_to_low_and_is_read_from_config():
+    """`spec: configuration` § "Single configuration file": the reasoning
+    effort used to be inferred in code from the substring "opus-5" in the
+    model name, which is a tunable living outside config.yaml.
+    """
+    cfg = load_config(SHIPPED_CONFIG)
+    assert cfg.llm.effort == "low"
+
+
+def test_llm_effort_rejects_an_unsupported_level():
+    data = _valid_config_dict()
+    data["llm"]["effort"] = "turbo"
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(data)
+
+
+def test_llm_effort_accepts_every_supported_level():
+    for level in ("low", "medium", "high", "xhigh", "max"):
+        data = _valid_config_dict()
+        data["llm"]["effort"] = level
+        assert AppConfig.model_validate(data).llm.effort == level
+
+
+def test_embedding_timeout_and_retries_are_configurable():
+    """These were hard-coded as 20s / 2 retries in
+    `app/providers/openai_embedding.py`, out of reach of config.yaml.
+    """
+    cfg = load_config(SHIPPED_CONFIG)
+    assert cfg.embedding.timeout_seconds == 20
+    assert cfg.embedding.max_retries == 2
+
+
+def test_embedding_timeout_must_be_positive():
+    data = _valid_config_dict()
+    data["embedding"]["timeout_seconds"] = 0
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(data)
+
+
+def test_embedding_max_retries_may_be_zero_but_not_negative():
+    data = _valid_config_dict()
+    data["embedding"]["max_retries"] = 0
+    assert AppConfig.model_validate(data).embedding.max_retries == 0
+
+    data["embedding"]["max_retries"] = -1
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(data)
 
 
 # --- 1.14 .env.example contents ----------------------------------------------

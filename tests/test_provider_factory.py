@@ -18,6 +18,7 @@ from app.config import AppConfig
 from app.providers.anthropic_llm import AnthropicLLM
 from app.providers.factory import build_embedding_provider, build_llm_provider
 from app.providers.local_embedding import SentenceTransformerEmbedding
+from app.providers.openai_embedding import OpenAIEmbedding
 from app.providers.openai_llm import OpenAILLM
 
 
@@ -73,6 +74,54 @@ def test_openai_provider_builds_openai_llm():
     provider = build_llm_provider(cfg, env={"OPENAI_API_KEY": "test-key"})
 
     assert isinstance(provider, OpenAILLM)
+
+
+def test_llm_effort_comes_from_config_not_from_the_model_name():
+    """The effort level used to be inferred from the substring "opus-5" in
+    the model name, so it could not be tuned from config.yaml and silently
+    changed meaning when the model was swapped.
+    """
+    cfg = AppConfig()
+    cfg.llm.effort = "high"
+    cfg.llm.model_generate = "claude-sonnet-4"
+
+    provider = build_llm_provider(cfg, env={"ANTHROPIC_API_KEY": "test-key"})
+
+    assert provider._effort == "high"
+
+
+def test_embedding_timeout_and_retries_come_from_config():
+    cfg = AppConfig()
+    cfg.embedding.provider = "openai"
+    cfg.embedding.timeout_seconds = 45
+    cfg.embedding.max_retries = 7
+
+    provider = build_embedding_provider(cfg, env={"OPENAI_API_KEY": "test-key"})
+
+    assert isinstance(provider, OpenAIEmbedding)
+    assert provider._max_retries == 7
+    assert provider._client.timeout == 45.0
+
+
+def test_embedding_missing_api_key_raises_runtime_error_naming_the_env_var():
+    cfg = AppConfig()
+    cfg.embedding.provider = "openai"
+
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+        build_embedding_provider(cfg, env={})
+
+
+def test_unknown_embedding_provider_name_lists_supported_values():
+    cfg = AppConfig()
+    cfg.embedding.provider = "cohere"  # bypasses the Literal check via direct assignment
+
+    with pytest.raises(RuntimeError) as excinfo:
+        build_embedding_provider(cfg, env={"OPENAI_API_KEY": "x"})
+
+    message = str(excinfo.value)
+    assert "cohere" in message
+    assert "local" in message
+    assert "openai" in message
 
 
 def test_local_embedding_with_empty_env_constructs_without_a_key():
