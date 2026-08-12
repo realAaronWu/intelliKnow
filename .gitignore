@@ -1,0 +1,27 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Runtime state (SQLite database, FAISS indexes, uploaded documents)
+data/
+uploads/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Model caches
+.cache/
+models/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
