@@ -1,9 +1,9 @@
 """Runtime configuration service.
 
 Owns `config.yaml` at runtime: reads it, applies validated partial patches,
-and rewrites it atomically. Validation always happens before any write, so a
-rejected patch leaves both the file on disk and the in-memory config
-byte-identical to before.
+and rewrites it atomically. Validation — schema first, then any registered
+guards — always happens before any write, so a rejected patch leaves both
+the file on disk and the in-memory config byte-identical to before.
 
 See `app/config.py` for the validated schema (`AppConfig`, `load_config`)
 this service builds on.
@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Sequence
 
 import yaml
 
@@ -37,15 +37,38 @@ def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-class ConfigService:
-    """Reads, patches, and atomically rewrites `config.yaml` at runtime."""
+#: A guard inspects `(current_config, proposed_config)` and raises to reject
+#: the update. Returning `None` accepts it.
+Guard = Callable[[AppConfig, AppConfig], None]
 
-    def __init__(self, path: Path, config: AppConfig) -> None:
+
+class ConfigService:
+    """Reads, patches, and atomically rewrites `config.yaml` at runtime.
+
+    `guards` are cross-cutting rules that the schema cannot express because
+    they depend on state outside the config file. Each runs after schema
+    validation and before anything is written, so a rejection leaves both
+    disk and memory untouched.
+
+    The motivating case is `spec: configuration` § "Immutable embedding
+    settings once documents exist": the embedding model and dimension may
+    not change while indexed documents exist. That check needs
+    `index_meta.json`, which plan 03 creates, so only the seam lives here —
+    without it plan 03 would have to retrofit this class.
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        config: AppConfig,
+        guards: Sequence[Guard] = (),
+    ) -> None:
         self._path = Path(path)
         self._current = config
+        self._guards: tuple[Guard, ...] = tuple(guards)
 
     @classmethod
-    def load(cls, path: Path) -> "ConfigService":
+    def load(cls, path: Path, guards: Sequence[Guard] = ()) -> "ConfigService":
         """Load and validate the config file at `path`.
 
         Delegates to `app.config.load_config`, so a missing file is
@@ -53,7 +76,7 @@ class ConfigService:
         """
         path = Path(path)
         config = load_config(path)
-        return cls(path, config)
+        return cls(path, config, guards)
 
     @property
     def current(self) -> AppConfig:
@@ -71,7 +94,9 @@ class ConfigService:
         Validation happens before any write: an invalid merged result raises
         `ValueError` (pydantic's `ValidationError` is a `ValueError`
         subclass) and leaves the file on disk, its `.bak` sibling, and
-        `current` all untouched.
+        `current` all untouched. Registered guards run next, before any
+        write too, so a vetoed update has the same no-side-effect
+        guarantee.
 
         On a valid patch: the previous file contents are copied to a `.bak`
         sibling, then the new contents are written to a temp file in the
@@ -85,6 +110,11 @@ class ConfigService:
 
         # Validate before touching anything on disk.
         new_config = AppConfig.model_validate(merged)
+
+        # Then the guards, still before any write, so a veto leaves the file,
+        # its `.bak` sibling, and `current` exactly as they were.
+        for guard in self._guards:
+            guard(self._current, new_config)
 
         new_content = yaml.safe_dump(
             new_config.model_dump(mode="json"),

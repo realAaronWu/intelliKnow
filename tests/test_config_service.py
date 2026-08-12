@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from app.config import AppConfig
 from app.config_service import ConfigService
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -143,3 +144,94 @@ def test_2_8_failed_update_does_not_overwrite_existing_backup(config_path):
         service.update({"orchestrator": {"confidence_threshold": 9.9}})
 
     assert backup_path.read_bytes() == backup_bytes_after_first_update
+
+
+# --- Update guards -----------------------------------------------------------
+#
+# `spec: configuration` § "Immutable embedding settings once documents exist"
+# needs to reject an embedding-model change while indexed documents exist.
+# The check itself needs `index_meta.json`, which plan 03 creates, so only
+# the seam lives here — otherwise plan 03 would have to retrofit
+# `ConfigService`.
+
+
+def test_guard_can_veto_an_update(config_path):
+    original_bytes = config_path.read_bytes()
+
+    def refuse_embedding_change(old: AppConfig, new: AppConfig) -> None:
+        if old.embedding.model != new.embedding.model:
+            raise ValueError("embedding.model is immutable while documents exist")
+
+    service = ConfigService.load(config_path, guards=[refuse_embedding_change])
+
+    with pytest.raises(ValueError, match="immutable"):
+        service.update({"embedding": {"model": "some-other-model"}})
+
+    assert service.current.embedding.model == "all-MiniLM-L6-v2"
+    assert config_path.read_bytes() == original_bytes
+
+
+def test_vetoed_update_writes_neither_config_nor_backup(config_path):
+    def always_refuse(old: AppConfig, new: AppConfig) -> None:
+        raise ValueError("nope")
+
+    service = ConfigService.load(config_path, guards=[always_refuse])
+    backup_path = config_path.with_suffix(config_path.suffix + ".bak")
+
+    with pytest.raises(ValueError):
+        service.update({"orchestrator": {"confidence_threshold": 0.85}})
+
+    assert not backup_path.exists()
+    assert list(config_path.parent.glob("*.tmp")) == []
+
+
+def test_guard_receives_the_current_and_proposed_configs(config_path):
+    seen: list[tuple[float, float]] = []
+
+    def record(old: AppConfig, new: AppConfig) -> None:
+        seen.append(
+            (old.orchestrator.confidence_threshold, new.orchestrator.confidence_threshold)
+        )
+
+    service = ConfigService.load(config_path, guards=[record])
+    service.update({"orchestrator": {"confidence_threshold": 0.85}})
+
+    assert seen == [(0.70, 0.85)]
+
+
+def test_a_passing_guard_lets_the_update_through(config_path):
+    def allow(old: AppConfig, new: AppConfig) -> None:
+        return None
+
+    service = ConfigService.load(config_path, guards=[allow])
+
+    updated = service.update({"orchestrator": {"confidence_threshold": 0.85}})
+
+    assert updated.orchestrator.confidence_threshold == 0.85
+    assert ConfigService.load(config_path).current.orchestrator.confidence_threshold == 0.85
+
+
+def test_guards_run_in_order_and_stop_at_the_first_veto(config_path):
+    calls: list[str] = []
+
+    def first(old: AppConfig, new: AppConfig) -> None:
+        calls.append("first")
+        raise ValueError("first says no")
+
+    def second(old: AppConfig, new: AppConfig) -> None:
+        calls.append("second")
+
+    service = ConfigService.load(config_path, guards=[first, second])
+
+    with pytest.raises(ValueError, match="first says no"):
+        service.update({"orchestrator": {"confidence_threshold": 0.85}})
+
+    assert calls == ["first"]
+
+
+def test_no_guards_is_the_default(config_path):
+    service = ConfigService.load(config_path)
+
+    updated = service.update({"orchestrator": {"confidence_threshold": 0.85}})
+
+    assert updated.orchestrator.confidence_threshold == 0.85
