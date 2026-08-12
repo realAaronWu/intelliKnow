@@ -78,7 +78,7 @@ Sections match the task numbers in `plans/2026-08-08-01-foundation.md`. Each row
 |---|---|---|
 | 6.1 | Free-form completion | `text`, `model`, and both token counts come from the response |
 | 6.2 | Schema request | `parsed` is the decoded object; the request carries the schema in its structured-output field |
-| 6.3 | Unparseable schema response | `ProviderError` with category `backend` |
+| 6.3 | Unparseable schema response | retried **once**; if the retry also fails to validate, `ProviderError` with category `backend` (per spec: ai-provider) |
 | 6.4 | Auth exception from SDK | mapped to category `auth` |
 | 6.5 | Rate-limit exception | mapped to `rate_limit` |
 | 6.6 | Timeout exception | mapped to `timeout` |
