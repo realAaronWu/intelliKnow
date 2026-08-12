@@ -40,8 +40,10 @@ class _StubEmbeddingsResource:
     def queue_error(self, error: Exception) -> None:
         self._queue.append(("error", error))
 
-    def create(self, *, model: str, input: list[str]):
-        self.calls.append({"model": model, "input": list(input)})
+    def create(self, **kwargs):
+        recorded = dict(kwargs)
+        recorded["input"] = list(kwargs["input"])
+        self.calls.append(recorded)
         assert self._queue, (
             "_StubEmbeddingsResource.create() called but nothing was queued."
         )
@@ -89,26 +91,74 @@ def test_embed_returns_unit_normalized_vectors_in_order():
     assert client.embeddings.calls[0]["input"] == ["alpha", "beta"]
 
 
-def test_embed_batches_at_configured_size():
+def test_embed_splits_one_call_into_batch_size_chunks():
+    """A single `embed()` of N > batch_size texts must issue
+    ceil(N / batch_size) API calls, each carrying at most batch_size inputs,
+    with the results reassembled in the original order.
+    """
     client = _StubOpenAIClient()
     provider = OpenAIEmbedding(
         model_name="text-embedding-3-small",
         api_key="unused",
-        batch_size=3,
+        batch_size=2,
         dimension=1,
         client=client,
     )
-    # Each batch call gets its own queued response sized to that batch.
-    client.embeddings.queue_response(_StubEmbeddingResponse([[1.0], [1.0], [1.0]]))
-    vectors_first = provider.embed(["a", "b", "c"])
-    client.embeddings.queue_response(_StubEmbeddingResponse([[1.0], [1.0]]))
-    vectors_second = provider.embed(["d", "e"])
+    # One queued response per expected batch, each sized to that batch.
+    client.embeddings.queue_response(_StubEmbeddingResponse([[1.0], [2.0]]))
+    client.embeddings.queue_response(_StubEmbeddingResponse([[3.0], [4.0]]))
+    client.embeddings.queue_response(_StubEmbeddingResponse([[5.0]]))
 
-    assert len(vectors_first) == 3
-    assert len(vectors_second) == 2
-    assert len(client.embeddings.calls) == 2
-    assert len(client.embeddings.calls[0]["input"]) == 3
-    assert len(client.embeddings.calls[1]["input"]) == 2
+    vectors = provider.embed(["a", "b", "c", "d", "e"])
+
+    assert len(vectors) == 5
+    assert len(client.embeddings.calls) == 3
+    assert [call["input"] for call in client.embeddings.calls] == [
+        ["a", "b"],
+        ["c", "d"],
+        ["e"],
+    ]
+
+
+def test_embed_requests_the_configured_dimension_from_the_api():
+    """Without `dimensions=`, the API returns the model's native size and the
+    configured `dimension` is a claim nobody checked.
+    """
+    client = _StubOpenAIClient()
+    client.embeddings.queue_response(_StubEmbeddingResponse([[3.0, 4.0]]))
+    provider = OpenAIEmbedding(
+        model_name="text-embedding-3-small",
+        api_key="unused",
+        batch_size=64,
+        dimension=2,
+        client=client,
+    )
+
+    provider.embed(["alpha"])
+
+    assert client.embeddings.calls[0]["dimensions"] == 2
+
+
+def test_vector_of_the_wrong_length_raises_backend_error():
+    """spec: ai-provider § "Reported dimension matches produced vectors" —
+    see the equivalent test in tests/test_local_embedding.py.
+    """
+    client = _StubOpenAIClient()
+    client.embeddings.queue_response(_StubEmbeddingResponse([[1.0, 2.0, 3.0]]))
+    provider = OpenAIEmbedding(
+        model_name="text-embedding-3-small",
+        api_key="unused",
+        batch_size=64,
+        dimension=2,
+        client=client,
+    )
+
+    with pytest.raises(ProviderError) as excinfo:
+        provider.embed(["alpha"])
+
+    assert excinfo.value.category == "backend"
+    message = str(excinfo.value)
+    assert "2" in message and "3" in message
 
 
 def _fake_response(status_code: int) -> httpx.Response:

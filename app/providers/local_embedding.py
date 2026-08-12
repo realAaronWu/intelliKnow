@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.providers.base import normalize
+from app.providers.base import ProviderError, check_dimensions, normalize
 
 
 class SentenceTransformerEmbedding:
@@ -44,8 +44,21 @@ class SentenceTransformerEmbedding:
         results: list[list[float]] = []
         for start in range(0, len(texts), self._batch_size):
             batch = texts[start : start + self._batch_size]
-            raw_vectors = client.encode(batch)
-            vectors = [[float(component) for component in vector] for vector in raw_vectors]
+            # `sentence_transformers` / `torch` raise their own exception
+            # types (OOM, model-load, tokenizer failures). Every other
+            # provider normalizes its backend failures, and the ai-provider
+            # spec requires it, so this one must too.
+            try:
+                raw_vectors = client.encode(batch)
+                vectors = [[float(component) for component in vector] for vector in raw_vectors]
+            except ProviderError:
+                raise
+            except Exception as exc:
+                raise ProviderError.backend(
+                    f"sentence-transformers embedding failed: {exc}"
+                ) from exc
+
+            check_dimensions(vectors, self.dimension, "SentenceTransformerEmbedding")
             results.extend(normalize(vectors))
         return results
 

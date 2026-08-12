@@ -86,6 +86,27 @@ class EmbeddingProvider(Protocol):
     def dimension(self) -> int: ...
 
 
+def check_dimensions(
+    vectors: list[list[float]], expected: int, provider_label: str
+) -> None:
+    """Raise `ProviderError.backend` if any vector is not `expected` long.
+
+    `spec: ai-provider` § "Reported dimension matches produced vectors": a
+    provider reports `dimension` from configuration, so nothing otherwise
+    catches a backend that returns some other length — switching
+    `embedding.provider` to `openai` while `dimension` stays 384 would yield
+    1536-length vectors and silently corrupt the FAISS index.
+    """
+    for vector in vectors:
+        if len(vector) != expected:
+            raise ProviderError.backend(
+                f"{provider_label} returned a vector of length {len(vector)} "
+                f"but embedding.dimension is configured as {expected}; "
+                "fix embedding.dimension in config.yaml to match the model, "
+                "then re-index"
+            )
+
+
 def normalize(vectors: list[list[float]]) -> list[list[float]]:
     """Return unit-length copies of `vectors`, index-aligned with the input.
 

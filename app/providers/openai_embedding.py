@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 import openai
 
-from app.providers.base import ProviderError, normalize
+from app.providers.base import ProviderError, check_dimensions, normalize
 from app.providers.openai_llm import map_exception
 from app.providers.retry import with_retries
 
@@ -62,12 +62,18 @@ class OpenAIEmbedding:
             batch = texts[start : start + self._batch_size]
 
             def _call(batch: list[str] = batch) -> Any:
+                kwargs: dict[str, Any] = {"model": self._model_name, "input": batch}
+                # Ask the API for the configured size rather than accepting
+                # whatever the model natively returns.
+                if self._dimension is not None:
+                    kwargs["dimensions"] = self._dimension
                 try:
-                    return self._client.embeddings.create(model=self._model_name, input=batch)
+                    return self._client.embeddings.create(**kwargs)
                 except Exception as exc:
                     raise map_exception(exc) from exc
 
             response = with_retries(_call, max_retries=self._max_retries, sleep=self._sleep)
             vectors = [list(item.embedding) for item in response.data]
+            check_dimensions(vectors, self.dimension, "OpenAIEmbedding")
             results.extend(normalize(vectors))
         return results
