@@ -4,16 +4,34 @@ The concrete `anthropic.Anthropic` client is only ever constructed when the
 caller does not inject one (`client=None`) — every automated test injects a
 stub, so no test in this repository reaches the network. Constructing the
 real client is exercised only by the manual §8 smoke check.
+
+Two independent retry loops are in play here, and they must not be
+conflated:
+
+- **Transient-failure retry** (`app.providers.retry.with_retries`): the
+  Messages API call itself is wrapped in the app-level retry policy, which
+  retries only `timeout` / `rate_limit` `ProviderError`s with the
+  0.5/1.0/2.0s backoff, via the injected `sleep`. The SDK client is built
+  with `max_retries=0` so the SDK's own retry logic — real wall-clock
+  sleep, no fixed backoff schedule, and retrying on 5xx (which we map to
+  `backend`, a category that must fail on first occurrence) — never runs
+  underneath it.
+- **Schema-validation retry**: per `design.md`'s `ai-provider` spec, a
+  response that fails to parse against the requested schema is not a
+  `ProviderError` at all — it's retried once, and only if the retry *also*
+  fails to parse does a `ProviderError` with category `backend` get raised.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
+import time
+from typing import Any, Callable
 
 import anthropic
 
 from app.providers.base import LLMResult, ProviderError
+from app.providers.retry import with_retries
 
 # Claude Opus 5 supports a low-effort mode that trims latency at some cost to
 # depth. Every other knob is left at its default — in particular `thinking`
@@ -21,6 +39,10 @@ from app.providers.base import LLMResult, ProviderError
 # emitting tool calls as plain text and leaking raw thinking tags into the
 # visible response.
 _LOW_EFFORT_MODEL_MARKER = "opus-5"
+
+# A malformed structured-output response is retried once (initial attempt +
+# one retry) before giving up — see module docstring.
+_MAX_SCHEMA_ATTEMPTS = 2
 
 
 class AnthropicLLM:
@@ -33,12 +55,17 @@ class AnthropicLLM:
         timeout_seconds: int,
         max_retries: int,
         client: Any | None = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._model = model
+        self._max_retries = max_retries
+        self._sleep = sleep
         self._client = client if client is not None else anthropic.Anthropic(
             api_key=api_key,
             timeout=float(timeout_seconds),
-            max_retries=max_retries,
+            # The app-level `with_retries` policy is the only retry layer —
+            # the SDK must not retry underneath it.
+            max_retries=0,
         )
 
     def complete(
@@ -64,20 +91,33 @@ class AnthropicLLM:
         if output_config:
             kwargs["output_config"] = output_config
 
-        try:
-            response = self._client.messages.create(**kwargs)
-        except Exception as exc:
-            raise _map_exception(exc) from exc
+        def _call() -> Any:
+            try:
+                return self._client.messages.create(**kwargs)
+            except Exception as exc:
+                raise _map_exception(exc) from exc
 
-        text = _extract_text(response)
+        schema_attempts = _MAX_SCHEMA_ATTEMPTS if schema is not None else 1
+        response: Any = None
+        text = ""
         parsed: dict | None = None
-        if schema is not None:
+
+        for attempt in range(1, schema_attempts + 1):
+            response = with_retries(_call, max_retries=self._max_retries, sleep=self._sleep)
+            text = _extract_text(response)
+
+            if schema is None:
+                break
+
             try:
                 parsed = json.loads(text)
-            except (json.JSONDecodeError, TypeError) as exc:
-                raise ProviderError.backend(
-                    f"structured response did not parse as JSON: {text!r}"
-                ) from exc
+                break
+            except (json.JSONDecodeError, TypeError):
+                if attempt == schema_attempts:
+                    raise ProviderError.backend(
+                        f"structured response did not parse as JSON after retry: {text!r}"
+                    )
+                continue
 
         return LLMResult(
             text=text,

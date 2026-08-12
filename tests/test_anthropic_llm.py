@@ -1,16 +1,23 @@
 """Tests for `AnthropicLLM` — test-plan §6, rows 6.1-6.8.
 
-Every test injects a stub `client` so nothing here ever reaches the network.
-The stub mimics the small slice of the real `anthropic` SDK's shape that
-`AnthropicLLM` actually touches: `client.messages.create(**kwargs)` returning
-an object with `.content` (a list of blocks with `.type`/`.text`), `.model`,
-and `.usage.input_tokens` / `.usage.output_tokens` — or raising one of the
-real `anthropic` SDK exception classes.
+Every test injects a stub `client` (and a no-op `sleep`) so nothing here
+ever reaches the network or blocks on real wall-clock time. The stub mimics
+the small slice of the real `anthropic` SDK's shape that `AnthropicLLM`
+actually touches: `client.messages.create(**kwargs)` returning an object
+with `.content` (a list of blocks with `.type`/`.text`), `.model`, and
+`.usage.input_tokens` / `.usage.output_tokens` — or raising one of the real
+`anthropic` SDK exception classes.
+
+The response/error queue is a strict FIFO (like `tests/doubles.py`'s
+`FakeLLMProvider`): every call to `create()` must have something queued for
+it, so a test that under- or over-queues fails loudly instead of silently
+replaying the last response.
 """
 
 from __future__ import annotations
 
-import json
+from collections import deque
+from typing import Callable
 
 import anthropic
 import httpx
@@ -41,26 +48,28 @@ class _StubMessage:
 
 
 class _StubMessagesResource:
-    """Records every call's kwargs; returns/raises whatever is queued."""
+    """Records every call's kwargs; returns/raises whatever is queued, in order."""
 
     def __init__(self) -> None:
         self.calls: list[dict] = []
-        self._response = None
-        self._error: Exception | None = None
+        self._queue: deque[tuple[str, object]] = deque()
 
     def queue_response(self, response) -> None:
-        self._response = response
-        self._error = None
+        self._queue.append(("response", response))
 
     def queue_error(self, error: Exception) -> None:
-        self._error = error
-        self._response = None
+        self._queue.append(("error", error))
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        if self._error is not None:
-            raise self._error
-        return self._response
+        assert self._queue, (
+            "_StubMessagesResource.create() called but nothing was queued — "
+            "queue a response or error for every expected call."
+        )
+        kind, item = self._queue.popleft()
+        if kind == "error":
+            raise item
+        return item
 
 
 class _StubAnthropicClient:
@@ -68,14 +77,19 @@ class _StubAnthropicClient:
         self.messages = _StubMessagesResource()
 
 
-def _make_llm(model: str = "claude-opus-5") -> tuple[AnthropicLLM, _StubAnthropicClient]:
+def _make_llm(
+    model: str = "claude-opus-5",
+    max_retries: int = 2,
+    sleep: Callable[[float], None] | None = None,
+) -> tuple[AnthropicLLM, _StubAnthropicClient]:
     client = _StubAnthropicClient()
     llm = AnthropicLLM(
         model=model,
         api_key="unused",
         timeout_seconds=20,
-        max_retries=2,
+        max_retries=max_retries,
         client=client,
+        sleep=sleep if sleep is not None else (lambda seconds: None),
     )
     return llm, client
 
@@ -123,7 +137,28 @@ def test_schema_request_returns_parsed_object_and_carries_schema_in_output_confi
     assert sent_kwargs["output_config"]["format"] == {"type": "json_schema", "schema": schema}
 
 
-def test_unparseable_schema_response_raises_backend_error():
+def test_unparseable_schema_response_raises_backend_error_after_one_retry():
+    llm, client = _make_llm()
+    malformed = _StubMessage(
+        content=[_StubTextBlock("not json at all")],
+        model="claude-opus-5",
+        input_tokens=5,
+        output_tokens=4,
+    )
+    # Per spec.md § "Structured generation returns malformed output": the
+    # provider retries once before giving up, so two malformed responses
+    # must be queued — one per attempt.
+    client.messages.queue_response(malformed)
+    client.messages.queue_response(malformed)
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u", schema={"type": "object"})
+
+    assert excinfo.value.category == "backend"
+    assert len(client.messages.calls) == 2
+
+
+def test_schema_retry_recovers_after_malformed_first_response():
     llm, client = _make_llm()
     client.messages.queue_response(
         _StubMessage(
@@ -133,11 +168,19 @@ def test_unparseable_schema_response_raises_backend_error():
             output_tokens=4,
         )
     )
+    client.messages.queue_response(
+        _StubMessage(
+            content=[_StubTextBlock('{"answer": "42"}')],
+            model="claude-opus-5",
+            input_tokens=5,
+            output_tokens=4,
+        )
+    )
 
-    with pytest.raises(ProviderError) as excinfo:
-        llm.complete(system="s", user="u", schema={"type": "object"})
+    result = llm.complete(system="s", user="u", schema={"type": "object"})
 
-    assert excinfo.value.category == "backend"
+    assert result.parsed == {"answer": "42"}
+    assert len(client.messages.calls) == 2
 
 
 def test_auth_exception_mapped_to_auth_category():
@@ -153,7 +196,11 @@ def test_auth_exception_mapped_to_auth_category():
 
 
 def test_rate_limit_exception_mapped_to_rate_limit_category():
-    llm, client = _make_llm()
+    # rate_limit is retryable at the app level (Critical 1 fix), so with
+    # max_retries=0 the single queued error is exhausted on the first
+    # attempt — isolating the category-mapping assertion from retry count,
+    # which is covered separately below.
+    llm, client = _make_llm(max_retries=0)
     client.messages.queue_error(
         anthropic.RateLimitError("slow down", response=_fake_response(429), body=None)
     )
@@ -162,10 +209,11 @@ def test_rate_limit_exception_mapped_to_rate_limit_category():
         llm.complete(system="s", user="u")
 
     assert excinfo.value.category == "rate_limit"
+    assert len(client.messages.calls) == 1
 
 
 def test_timeout_exception_mapped_to_timeout_category():
-    llm, client = _make_llm()
+    llm, client = _make_llm(max_retries=0)
     client.messages.queue_error(
         anthropic.APITimeoutError(httpx.Request("POST", "https://api.anthropic.com/"))
     )
@@ -174,6 +222,54 @@ def test_timeout_exception_mapped_to_timeout_category():
         llm.complete(system="s", user="u")
 
     assert excinfo.value.category == "timeout"
+    assert len(client.messages.calls) == 1
+
+
+def test_transient_failure_retried_by_app_level_policy_not_the_sdk():
+    """Critical 1: retry must go through `with_retries`, not SDK auto-retry.
+
+    Proven two ways: (1) the exact 0.5/1.0 backoff schedule from
+    `with_retries` shows up on the injected `sleep`, which the SDK's own
+    retry would never call since it sleeps for real; (2) the call only
+    succeeds on the third attempt, which the SDK client alone couldn't
+    produce since it's a plain stub with no retry logic of its own.
+    """
+    sleeps: list[float] = []
+    llm, client = _make_llm(max_retries=2, sleep=sleeps.append)
+    client.messages.queue_error(
+        anthropic.RateLimitError("slow down", response=_fake_response(429), body=None)
+    )
+    client.messages.queue_error(
+        anthropic.RateLimitError("slow down", response=_fake_response(429), body=None)
+    )
+    client.messages.queue_response(
+        _StubMessage(
+            content=[_StubTextBlock("recovered")],
+            model="claude-opus-5",
+            input_tokens=1,
+            output_tokens=1,
+        )
+    )
+
+    result = llm.complete(system="s", user="u")
+
+    assert result.text == "recovered"
+    assert len(client.messages.calls) == 3
+    assert sleeps == [0.5, 1.0]
+
+
+def test_default_client_disables_sdk_level_retries():
+    """Critical 1: the SDK client must be built with max_retries=0 so the
+    app-level `with_retries` policy is the only thing that ever retries.
+    """
+    llm = AnthropicLLM(
+        model="claude-opus-5",
+        api_key="sk-test",
+        timeout_seconds=20,
+        max_retries=5,
+    )
+
+    assert llm._client.max_retries == 0
 
 
 def test_other_api_exception_mapped_to_backend_category():

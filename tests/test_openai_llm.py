@@ -1,0 +1,237 @@
+"""Tests for `OpenAILLM` and the shared `chat_complete` helper it and
+`LocalLLM` both use.
+
+Fix-round coverage: Critical 1 (transient-failure retry goes through the
+app-level `with_retries` policy, not the SDK's own retry — SDK client is
+built with `max_retries=0`) and Critical 2 (a malformed structured-output
+response is retried once before raising `backend`). Every test injects a
+stub `client` and a no-op/recording `sleep`, so nothing here touches the
+network or blocks on real time.
+"""
+
+from __future__ import annotations
+
+from collections import deque
+from typing import Callable
+
+import httpx
+import openai
+import pytest
+
+from app.providers.base import ProviderError
+from app.providers.openai_llm import OpenAILLM
+
+
+class _StubMessage:
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+
+class _StubChoice:
+    def __init__(self, content: str) -> None:
+        self.message = _StubMessage(content)
+
+
+class _StubUsage:
+    def __init__(self, prompt_tokens: int, completion_tokens: int) -> None:
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+
+
+class _StubChatCompletion:
+    def __init__(self, text: str, model: str, prompt_tokens: int, completion_tokens: int) -> None:
+        self.choices = [_StubChoice(text)]
+        self.model = model
+        self.usage = _StubUsage(prompt_tokens, completion_tokens)
+
+
+class _StubCompletionsResource:
+    """Records every call's kwargs; returns/raises whatever is queued, in order."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self._queue: deque[tuple[str, object]] = deque()
+
+    def queue_response(self, response) -> None:
+        self._queue.append(("response", response))
+
+    def queue_error(self, error: Exception) -> None:
+        self._queue.append(("error", error))
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        assert self._queue, (
+            "_StubCompletionsResource.create() called but nothing was queued."
+        )
+        kind, item = self._queue.popleft()
+        if kind == "error":
+            raise item
+        return item
+
+
+class _StubChat:
+    def __init__(self) -> None:
+        self.completions = _StubCompletionsResource()
+
+
+class _StubOpenAIClient:
+    def __init__(self) -> None:
+        self.chat = _StubChat()
+
+
+def _make_llm(
+    max_retries: int = 2,
+    sleep: Callable[[float], None] | None = None,
+) -> tuple[OpenAILLM, _StubOpenAIClient]:
+    client = _StubOpenAIClient()
+    llm = OpenAILLM(
+        model="gpt-5",
+        api_key="unused",
+        timeout_seconds=20,
+        max_retries=max_retries,
+        client=client,
+        sleep=sleep if sleep is not None else (lambda seconds: None),
+    )
+    return llm, client
+
+
+def _fake_response(status_code: int) -> httpx.Response:
+    return httpx.Response(status_code, request=httpx.Request("POST", "https://api.openai.com/"))
+
+
+def test_free_form_completion_returns_text_model_and_token_counts():
+    llm, client = _make_llm()
+    client.chat.completions.queue_response(
+        _StubChatCompletion("hello there", "gpt-5", prompt_tokens=12, completion_tokens=3)
+    )
+
+    result = llm.complete(system="be nice", user="hi")
+
+    assert result.text == "hello there"
+    assert result.parsed is None
+    assert result.model == "gpt-5"
+    assert result.input_tokens == 12
+    assert result.output_tokens == 3
+
+
+def test_schema_request_returns_parsed_object_and_carries_schema_in_response_format():
+    llm, client = _make_llm()
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    client.chat.completions.queue_response(
+        _StubChatCompletion('{"answer": "42"}', "gpt-5", prompt_tokens=5, completion_tokens=4)
+    )
+
+    result = llm.complete(system="s", user="u", schema=schema)
+
+    assert result.parsed == {"answer": "42"}
+    sent_kwargs = client.chat.completions.calls[0]
+    assert sent_kwargs["response_format"]["json_schema"]["schema"] == schema
+
+
+def test_unparseable_schema_response_raises_backend_error_after_one_retry():
+    llm, client = _make_llm()
+    malformed = _StubChatCompletion("not json", "gpt-5", prompt_tokens=5, completion_tokens=4)
+    client.chat.completions.queue_response(malformed)
+    client.chat.completions.queue_response(malformed)
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u", schema={"type": "object"})
+
+    assert excinfo.value.category == "backend"
+    assert len(client.chat.completions.calls) == 2
+
+
+def test_schema_retry_recovers_after_malformed_first_response():
+    llm, client = _make_llm()
+    client.chat.completions.queue_response(
+        _StubChatCompletion("not json", "gpt-5", prompt_tokens=5, completion_tokens=4)
+    )
+    client.chat.completions.queue_response(
+        _StubChatCompletion('{"answer": "42"}', "gpt-5", prompt_tokens=5, completion_tokens=4)
+    )
+
+    result = llm.complete(system="s", user="u", schema={"type": "object"})
+
+    assert result.parsed == {"answer": "42"}
+    assert len(client.chat.completions.calls) == 2
+
+
+def test_auth_exception_mapped_to_auth_category():
+    llm, client = _make_llm()
+    client.chat.completions.queue_error(
+        openai.AuthenticationError("bad key", response=_fake_response(401), body=None)
+    )
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u")
+
+    assert excinfo.value.category == "auth"
+    assert len(client.chat.completions.calls) == 1
+
+
+def test_rate_limit_exception_mapped_to_rate_limit_category():
+    llm, client = _make_llm(max_retries=0)
+    client.chat.completions.queue_error(
+        openai.RateLimitError("slow down", response=_fake_response(429), body=None)
+    )
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u")
+
+    assert excinfo.value.category == "rate_limit"
+
+
+def test_timeout_exception_mapped_to_timeout_category():
+    llm, client = _make_llm(max_retries=0)
+    client.chat.completions.queue_error(
+        openai.APITimeoutError(httpx.Request("POST", "https://api.openai.com/"))
+    )
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u")
+
+    assert excinfo.value.category == "timeout"
+
+
+def test_other_api_exception_mapped_to_backend_category():
+    llm, client = _make_llm()
+    client.chat.completions.queue_error(
+        openai.InternalServerError("oops", response=_fake_response(500), body=None)
+    )
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u")
+
+    assert excinfo.value.category == "backend"
+    assert len(client.chat.completions.calls) == 1
+
+
+def test_transient_failure_retried_by_app_level_policy_not_the_sdk():
+    sleeps: list[float] = []
+    llm, client = _make_llm(max_retries=2, sleep=sleeps.append)
+    client.chat.completions.queue_error(
+        openai.RateLimitError("slow down", response=_fake_response(429), body=None)
+    )
+    client.chat.completions.queue_error(
+        openai.RateLimitError("slow down", response=_fake_response(429), body=None)
+    )
+    client.chat.completions.queue_response(
+        _StubChatCompletion("recovered", "gpt-5", prompt_tokens=1, completion_tokens=1)
+    )
+
+    result = llm.complete(system="s", user="u")
+
+    assert result.text == "recovered"
+    assert len(client.chat.completions.calls) == 3
+    assert sleeps == [0.5, 1.0]
+
+
+def test_default_client_disables_sdk_level_retries():
+    llm = OpenAILLM(
+        model="gpt-5",
+        api_key="sk-test",
+        timeout_seconds=20,
+        max_retries=5,
+    )
+
+    assert llm._client.max_retries == 0

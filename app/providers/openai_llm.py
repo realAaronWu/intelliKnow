@@ -4,16 +4,30 @@
 against an OpenAI-API-compatible local server, so the request/response
 handling here (`chat_complete`, `map_exception`) is shared rather than
 duplicated.
+
+Two independent retry loops are in play, and they must not be conflated —
+see `app/providers/anthropic_llm.py`'s module docstring for the full
+rationale, which applies identically here:
+
+- **Transient-failure retry** goes through `app.providers.retry.with_retries`
+  around the raw `chat.completions.create` call; the SDK client is built
+  with `max_retries=0` so the SDK's own retry never runs underneath it.
+- **Schema-validation retry**: a response that fails to parse as JSON is
+  retried once before raising `ProviderError.backend`.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
+import time
+from typing import Any, Callable
 
 import openai
 
 from app.providers.base import LLMResult, ProviderError
+from app.providers.retry import with_retries
+
+_MAX_SCHEMA_ATTEMPTS = 2
 
 
 class OpenAILLM:
@@ -26,12 +40,16 @@ class OpenAILLM:
         timeout_seconds: int,
         max_retries: int,
         client: Any | None = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._model = model
+        self._max_retries = max_retries
+        self._sleep = sleep
         self._client = client if client is not None else openai.OpenAI(
             api_key=api_key,
             timeout=float(timeout_seconds),
-            max_retries=max_retries,
+            # The app-level `with_retries` policy is the only retry layer.
+            max_retries=0,
         )
 
     def complete(
@@ -49,6 +67,8 @@ class OpenAILLM:
             user=user,
             schema=schema,
             max_tokens=max_tokens,
+            max_retries=self._max_retries,
+            sleep=self._sleep,
         )
 
 
@@ -60,6 +80,8 @@ def chat_complete(
     user: str,
     schema: dict | None,
     max_tokens: int,
+    max_retries: int,
+    sleep: Callable[[float], None],
 ) -> LLMResult:
     """Shared request/response handling for any OpenAI-compatible client."""
     kwargs: dict[str, Any] = {
@@ -76,20 +98,33 @@ def chat_complete(
             "json_schema": {"name": "response", "schema": schema, "strict": True},
         }
 
-    try:
-        response = client.chat.completions.create(**kwargs)
-    except Exception as exc:
-        raise map_exception(exc) from exc
+    def _call() -> Any:
+        try:
+            return client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            raise map_exception(exc) from exc
 
-    text = response.choices[0].message.content
+    schema_attempts = _MAX_SCHEMA_ATTEMPTS if schema is not None else 1
+    response: Any = None
+    text = ""
     parsed: dict | None = None
-    if schema is not None:
+
+    for attempt in range(1, schema_attempts + 1):
+        response = with_retries(_call, max_retries=max_retries, sleep=sleep)
+        text = response.choices[0].message.content
+
+        if schema is None:
+            break
+
         try:
             parsed = json.loads(text)
-        except (json.JSONDecodeError, TypeError) as exc:
-            raise ProviderError.backend(
-                f"structured response did not parse as JSON: {text!r}"
-            ) from exc
+            break
+        except (json.JSONDecodeError, TypeError):
+            if attempt == schema_attempts:
+                raise ProviderError.backend(
+                    f"structured response did not parse as JSON after retry: {text!r}"
+                )
+            continue
 
     return LLMResult(
         text=text,
