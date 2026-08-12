@@ -331,18 +331,29 @@ Both ship with starting values that are guesses. Calibrating them against the go
 **One file, `config.yaml`, is the single source of truth for every tunable.** Secrets live in `.env` and nowhere else. There is no settings table in the database.
 
 ```yaml
+# Local (Ollama) is the development default: it costs nothing to run and
+# exercises the same OpenAI-compatible HTTP path the remote backends use.
+# For the Anthropic demo path, change:
+#   llm.provider: anthropic
+#   llm.model_generate: claude-opus-5
+#   llm.model_classify: claude-haiku-4-5
+# and export ANTHROPIC_API_KEY (see .env.example).
 llm:
-  provider: anthropic              # anthropic | openai | local
-  model_classify: claude-opus-5
-  model_generate: claude-opus-5
+  provider: local                  # anthropic | openai | local
+  model_classify: llama3.1
+  model_generate: llama3.1
   timeout_seconds: 20
   max_retries: 2
+  effort: low                      # low | medium | high | xhigh | max
+  base_url: http://localhost:11434/v1  # local backend only (Ollama's OpenAI-compatible endpoint)
 
 embedding:
   provider: local                  # local | openai
   model: all-MiniLM-L6-v2
   dimension: 384
   batch_size: 64
+  timeout_seconds: 20              # remote (openai) backend only
+  max_retries: 2                   # remote (openai) backend only
 
 rag:
   chunk_chars: 800
@@ -399,6 +410,8 @@ storage:
 
 public_base_url: null              # only for Telegram webhook mode or real-tenant Teams
 ```
+
+`llm.provider: local` is the development default because it costs nothing to run and it exercises the same OpenAI-compatible HTTP request/response path (`app/providers/openai_llm.py`'s `chat_complete`) that the paid backends use — so code paths exercised in day-to-day development are the same ones the demo runs on, not a separate untested branch. `llm.provider: anthropic` (with `model_generate: claude-opus-5` / `model_classify: claude-haiku-4-5`, per the comment above) is the demo configuration, switched on deliberately for the polished, low-latency path described in § Latency budget below.
 
 `.env` holds only: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TEAMS_APP_ID`, `TEAMS_APP_PASSWORD`, `ADMIN_PASSWORD`.
 
