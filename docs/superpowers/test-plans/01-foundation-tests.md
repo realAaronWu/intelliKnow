@@ -8,7 +8,7 @@ Sections match the task numbers in `plans/2026-08-08-01-foundation.md`. Each row
 
 | # | Test | Expected |
 |---|---|---|
-| 1.1 | Load shipped `config.yaml` | `llm.model_classify` and `llm.model_generate` both `claude-opus-5`; `embedding.model` `all-MiniLM-L6-v2`; `embedding.dimension` 384; `orchestrator.confidence_threshold` 0.70; `rag.relevance_floor` 0.35 |
+| 1.1 | Load shipped `config.yaml` | `llm.model_classify` and `llm.model_generate` both `claude-opus-5`; `embedding.model` `all-MiniLM-L6-v2`; `embedding.dimension` 384; `orchestrator.confidence_threshold` 0.70; `rag.relevance_floor` 0.45 |
 | 1.2 | Default intent spaces | slugs include `hr`, `legal`, `finance`, `operations`, `general` |
 | 1.3 | Each space is complete | non-empty `description`; `keywords` is a list |
 | 1.4 | Threshold above 1.0 | validation error |
