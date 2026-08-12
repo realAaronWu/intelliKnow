@@ -39,11 +39,15 @@ class TestFakeLLMProviderQueue:
     def test_calls_are_recorded_with_exact_params(self):
         fake = FakeLLMProvider()
         fake.expect_text("ignored")
+        schema = {"type": "object", "properties": {"intent": {"type": "string"}}}
 
-        fake.complete(system="sys-prompt", user="user-prompt", max_tokens=256)
+        fake.complete(
+            system="sys-prompt", user="user-prompt", schema=schema, max_tokens=256
+        )
 
         assert fake.calls[0]["system"] == "sys-prompt"
         assert fake.calls[0]["user"] == "user-prompt"
+        assert fake.calls[0]["schema"] == schema
         assert fake.calls[0]["max_tokens"] == 256
 
     def test_fail_next_raises_once_then_recovers(self):
@@ -97,7 +101,11 @@ class TestFakeEmbeddingProvider:
 
     def test_set_vector_pins_exact_value_unnormalized(self):
         fake = FakeEmbeddingProvider(dimension=4)
-        pinned = [0.5, 0.5, 0.5, 0.5]  # not unit length -- must round-trip verbatim
+        # Genuinely not unit length: the previous [0.5, 0.5, 0.5, 0.5] has
+        # norm exactly 1.0, so it round-tripped identically whether or not
+        # `set_vector` bypassed normalization — the test proved nothing.
+        pinned = [0.5, 0.5, 0.5, 2.0]
+        assert math.sqrt(sum(c * c for c in pinned)) != pytest.approx(1.0)
         fake.set_vector("pinned text", pinned)
 
         [vec] = fake.embed(["pinned text"])
