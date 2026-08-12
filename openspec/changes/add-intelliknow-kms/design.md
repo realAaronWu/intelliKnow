@@ -100,14 +100,61 @@ Greenfield project, empty repository, one developer. See `proposal.md` — Why f
                                              ╚══════════════════════╝
 ```
 
-### Why the Admin API touches the Orchestrator
+### The admin path into the orchestrator
 
-You were right to question this — in the first draft the arrow was unjustified. There is exactly one legitimate path, and it is now named: **`POST /admin/test-query`**. It runs a question through the full orchestrator + RAG pipeline and returns the intent, confidence, answer, sources, and latency *without* delivering to any chat channel. Two features need it:
+Exactly one endpoint crosses from the admin API into the orchestrator: **`POST /admin/test-query`**. It runs a question through the full pipeline and returns intent, confidence, answer, sources, and latency *without* delivering to any chat channel. Two features require it:
 
-- The **"Try a query"** box on the Dashboard, so an admin can verify the knowledge base after uploading without opening Telegram.
-- The **per-channel connection test**, which must prove the whole path works, not just that a bot token is valid.
+- The **"Try a query"** box on the Dashboard — verify the knowledge base after uploading without opening Telegram, and close the keyword-tuning loop in seconds.
+- The **per-channel connection test** — proves the whole path works, not just that a credential is valid.
 
-No other admin endpoint calls the orchestrator. Document, intent, config, and history endpoints talk to their own services only.
+Every other admin endpoint talks only to its own service. Documents, intents, config, and analytics never reach the orchestrator.
+
+### Console → backend interaction
+
+The console is a pure HTTP client. Each screen maps to a fixed set of endpoints, and each endpoint to one owning component:
+
+```
+┌─ Dashboard ─────────────┐   GET  /stats ──────────────► DocumentStore + QueryLog
+│ counts, statuses,       │   GET  /integrations ───────► ChannelStatus
+│ provider summary,       │   GET  /config ────────────► ConfigService
+│ "Try a query"           │   POST /admin/test-query ──► ORCHESTRATOR ──► RAG Engine
+└─────────────────────────┘
+
+┌─ Frontend Integration ──┐   GET  /integrations ───────► ChannelStatus + CredentialStore
+│ cards, status, last-4,  │   PUT  /integrations/{ch} ──► CredentialStore (encrypt)
+│ test button             │   DEL  /integrations/{ch} ──► CredentialStore
+└─────────────────────────┘   POST /integrations/{ch}/test ─► ChannelAdapter
+                                                              └► ORCHESTRATOR ──► RAG Engine
+
+┌─ Knowledge Base ────────┐   POST /documents ─────────► IngestionWorker (background)
+│ table, upload zone,     │                                └► Loader → Chunker → Embedder
+│ search, filters,        │                                   → IndexWriter → FAISS + FTS5
+│ view/update/delete      │   GET  /documents?q=&format=&space=&from=&to= ─► DocumentStore
+└─────────────────────────┘   GET  /documents/{id} ─────► DocumentStore + chunks
+                              PATCH /documents/{id} ────► IndexWriter.reassign (moves vectors)
+                              POST /documents/{id}/reparse ─► IngestionWorker
+                              DEL  /documents/{id} ─────► IndexWriter.remove
+                              POST /documents/reindex ──► IngestionWorker (all)
+
+┌─ Intent Configuration ──┐   GET  /intents ───────────► ConfigService + QueryLog (counts,
+│ space cards, editor,    │                               accuracy rate)
+│ classification log,     │   POST/PATCH/DEL /intents ─► ConfigService ──► config.yaml
+│ thresholds              │                               └► VectorStore (create/delete index)
+└─────────────────────────┘   PATCH /config ───────────► ConfigService ──► config.yaml
+                              GET  /analytics/log ─────► QueryLog
+
+┌─ Analytics ─────────────┐   GET /analytics/distribution ─► QueryLog
+│ period selector,        │   GET /analytics/documents ───► QueryLog + DocumentStore
+│ distribution, top docs, │   GET /analytics/log ─────────► QueryLog
+│ log, export             │   GET /analytics/export.csv ──► QueryLog
+└─────────────────────────┘
+```
+
+Three properties this makes visible:
+
+- **Only two screens reach the orchestrator**, and both go through the same endpoint. Everything else is CRUD over a single owning service.
+- **Intent edits have a side effect beyond config**: creating or deleting a space also creates or deletes its FAISS index, and reassigning a document moves vectors. Those are the only console actions that mutate the vector store.
+- **Upload returns before work starts.** `POST /documents` returns 202 and the rest is background; the table polls status. No console action blocks on the RAG pipeline except the test-query.
 
 ### Component duties
 
@@ -214,7 +261,36 @@ RRF is used instead of a weighted score blend because cosine similarity and BM25
 
 **6. CitationVerifier** parses `[S#]` markers out of the answer, maps them back to the chunks that were actually supplied, drops any marker that does not resolve, and attaches the resulting document names and source references. A confident answer citing a document that was never retrieved is the main failure mode of a small RAG system, and this check costs no extra model call.
 
-**No cross-encoder re-ranker in the MVP.** A re-ranker over the fused top 20 would measurably improve precision and is the obvious first upgrade. It is excluded because it adds a second local model and 200–400 ms to a budget that already carries two sequential LLM calls. Recorded here so the decision is deliberate rather than an omission.
+### Reranking, and what the critical path is actually spending on
+
+**Open decision — needs a call before plan 04 is executed.**
+
+The critical path carries two sequential model calls. What each buys is very different:
+
+| Call | Cost | Output | What it determines |
+| --- | ---: | --- | --- |
+| Classification | ~900 ms | ~30 tokens | *Which index to search* |
+| Answer generation | ~1400 ms | the answer | What the user reads |
+| *(candidate)* Cross-encoder rerank | ~150–250 ms | 20 scores | *Which 5 chunks the answer is written from* |
+
+Classification is the expensive call per unit of value. It spends ~900 ms — dominated by time-to-first-token, not generation — to emit thirty tokens that pick a directory of vectors. Reranking would spend a fraction of that on the step that decides the factual content of the answer. Excluding a 200 ms reranker while paying 900 ms to route is not a coherent latency position.
+
+Two further points argue for a reranker specifically here:
+
+- **Corpus size is now in the range where it pays.** 32 documents, several hundred pages, ~5,000 chunks, with cross-space confusables deliberately included (IRS payroll tables under Finance, GitLab compensation under HR). Bi-encoder cosine makes exactly the ranking mistakes in that band that a cross-encoder corrects. At three documents it would have been pointless; at this size it is not.
+- **It would improve the relevance gate, which is the safety-critical component.** The gate currently reads bi-encoder cosine, chosen because it is the only absolute-scale signal available. A cross-encoder relevance score is a materially better-calibrated answer to "is this chunk actually relevant to this question" — which is precisely what the gate is asking. Adding a reranker would let the gate read the better signal.
+
+**Options:**
+
+| | Change | Classify | Rerank | Total | Trade |
+| --- | --- | ---: | ---: | ---: | --- |
+| **A** | Cheap routing + reranker: replace LLM classification with embedding-centroid + keyword scoring, escalating to the LLM only when the top-2 margin is narrow | ~5 ms | ~200 ms | **~1.9 s** | Fastest and best-ranked, but redesigns the orchestrator and loses the classifier's `reasoning` string that the classification log shows. Cold start solved by seeding centroids from each space's description + keywords rather than its documents. |
+| **B** | Keep LLM classification on a faster model, add reranker | ~350 ms | ~200 ms | **~2.3 s** | One new component, one config change. Keeps `reasoning`, keeps keywords feeding the prompt as the brief describes. |
+| **C** | Status quo, no reranker | ~900 ms | — | ~2.6 s | Simplest; leaves ranking precision on the table and the gate on the weaker signal. |
+
+**Recommendation: B.** It buys the ranking and gate improvements for less total latency than the status quo, adds one component rather than restructuring the orchestrator, and preserves the classifier reasoning that makes the classification log diagnostic. A is the better end state and is recorded as the upgrade path; it is not the right thing to attempt inside a 7-day build alongside everything else.
+
+If B is adopted: the reranker is `cross-encoder/ms-marco-MiniLM-L-6-v2` (22M params, ~90 MB), scoring the fused top-20 in one batch, feeding the top-5 to the context builder, and supplying the gate's relevance score in place of dense cosine.
 
 ## Configuration
 
@@ -442,7 +518,7 @@ Explicitly not done: admin API tokens, rate limiting, prompt-injection hardening
 | Hard filtering turns a misclassification into a no-match | The relevance gate catches weak retrieval; the General fallback catches low confidence; the history table makes misroutes visible. |
 | Two sequential LLM calls threaten the 3s budget | Classify ‖ embed overlap; independently configurable classify model; typing indicator for perceived latency; channel test reports measured latency. |
 | Hybrid retrieval doubles the moving parts in the read path | Each retriever is independently testable, and RRF is parameter-free. If BM25 proves useless on the sample corpus, `keyword_top_n: 0` disables it without a code change. |
-| No re-ranker means precision is capped | Accepted for the latency budget; recorded as the first upgrade if quality falls short. |
+| Without a reranker, ranking precision is capped and the gate reads the weaker signal | Open decision in § Reranking — recommendation is to add one, which costs less total latency than the status quo. |
 | `faiss-cpu` wheels are architecture-sensitive (Apple Silicon) | Pin a known-good version; a smoke test asserts an index round-trips at startup; sqlite-vec is the recorded fallback. |
 | Teams against a real tenant needs Azure Bot registration the developer may not have | Develop and demo against the Bot Framework Emulator, which needs no tenant. Azure is an optional deployment step, verified early (task 1.2) so it never blocks the build. |
 | Streamlit reruns on every interaction, making upload and polling awkward | Console is a thin API client with no local state; uploads return immediately and status is polled, so a rerun mid-ingest costs nothing. |
@@ -466,4 +542,6 @@ Rollback: stop both processes. Deleting `data/` resets all state.
 
 ## Open Questions
 
-None blocking. The embedding-model question from the previous draft is resolved in § RAG write path (`all-MiniLM-L6-v2`, with the swap documented).
+**Blocking plan 04: reranking (§ Reranking).** Options A / B / C with a recommendation of B. This changes `spec: knowledge-retrieval` — a new reranking requirement, and the relevance gate reading the cross-encoder score instead of dense cosine — so it must be settled before plan 04 is executed. Plans 01–03 are unaffected either way.
+
+Not blocking: the embedding-model choice is resolved in § RAG write path (`all-MiniLM-L6-v2`, with the swap documented).
