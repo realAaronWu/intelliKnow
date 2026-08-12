@@ -2,26 +2,32 @@
 
 Source of truth for *what* to build: `openspec/changes/add-intelliknow-kms/` (proposal, design, 9 capability specs, traceability, test-plan). These plans are *how* to build it.
 
+## Document set
+
+| Kind | Location | Audience |
+|---|---|---|
+| Execution plans | `plans/` | Implementer subagents |
+| Test plans | `test-plans/` | Implementer (writes the failing test) **and** the clean tester |
+| Tester protocol | `TESTER-PROTOCOL.md` | The clean tester agent |
+
+**No implementation or test code appears in these plans, by project decision.** Plans state behaviour and contracts; test plans state expectations. The implementer writes both test and code. This keeps the plan reviewable and stops the implementer from transcribing pre-written code instead of reasoning about the requirement.
+
 ## Why six plans, not one
 
-The spec covers 92 requirements across 9 capabilities. A single plan carrying full TDD code for all of it would run to thousands of lines, could not be reviewed meaningfully, and would force a reviewer to accept or reject everything at once. Each plan below produces working, independently testable software and ends at a state you could stop at.
+The spec covers 92 requirements across 9 capabilities. A single plan would be unreviewable and would force accept-or-reject on everything at once. Each plan below produces working, independently testable software and ends at a state you could stop at.
 
 | # | Plan | Produces | Depends on |
 |---|---|---|---|
 | 01 | [Foundation](2026-08-08-01-foundation.md) | Config service, provider layer, test doubles, DB schema | — |
-| 02 | [Test corpus](2026-08-08-02-test-corpus.md) | Synthetic fixtures + real-world corpus fetcher + golden question set | 01 (partial) |
-| 03 | RAG write path | Loaders, chunker, embedder, dual-index writer, ingestion worker | 01, 02 |
-| 04 | RAG read path + orchestrator | Hybrid retrieval, fusion, gate, context, generation, citations, classification, routing | 01, 02, 03 |
-| 05 | Channels | Credential storage, Telegram, Teams, formatting, status, logging | 01, 04 |
-| 06 | Admin console | Five screens, styling, all admin API surfaces | 01–05 |
+| 02 | [Test corpus](2026-08-08-02-test-corpus.md) | Synthetic fixtures, real-world corpus fetcher, golden question set | 01 (partial) |
+| 03 | [RAG write path](2026-08-08-03-rag-write-path.md) | Loaders, chunker, vector store, dual-index writer, ingestion | 01, 02 |
+| 04 | [RAG read path](2026-08-08-04-rag-read-path.md) | Hybrid retrieval, fusion, gate, context, generation, citations, classification, routing | 01–03 |
+| 05 | [Channels](2026-08-08-05-channels.md) | Credential storage, Telegram, Teams, status, logging | 01, 04 |
+| 06 | [Admin console](2026-08-08-06-admin-console.md) | Five screens, remaining admin API | 01–05 |
 
-Plans 03–06 are written after 01 and 02 land, so their interfaces are written against code that exists rather than code that is imagined. This is deliberate: the most common failure mode in a long plan is Task 12 referencing a signature Task 3 didn't actually produce.
+## Execution order
 
-## Execution order and parallelism
-
-01 → 02 can overlap (02 only needs the config schema from 01). 03 → 04 → 05 are sequential. 06 needs the API surfaces from 03–05.
-
-Against the 7-day budget in `openspec/changes/add-intelliknow-kms/tasks.md`:
+01 → 02 can overlap (02 only needs plan 01's config schema and provider factory). 03 → 04 → 05 are sequential. 06 needs the API surfaces from 03–05.
 
 | Day | Plan |
 |---|---|
@@ -33,19 +39,37 @@ Against the 7-day budget in `openspec/changes/add-intelliknow-kms/tasks.md`:
 | 6 | 06 Admin console |
 | 7 | L3 model-quality run, L4 demo script, README, AI usage reflection |
 
-## How to execute these
+## The loop, per increment
 
-Each plan carries the standard header directing the executor to `superpowers:subagent-driven-development` (preferred) or `superpowers:executing-plans`.
+```
+for each task in plan:
+    implementer subagent  →  failing test → watch fail → minimal code
+                          →  watch pass → commit
+    task review (spec compliance + code quality)
+        ↓
+[ all tasks done, implementer's tests green ]
+        ↓
+whole-branch code review
+        ↓
+CLEAN TESTER (fresh agent, has not seen the plan or the source)
+    reads spec + test plan → writes its own tests → runs → reports
+        ↓
+implementer fixes implementation-defect verdicts → re-run
+        ↓
+green + report accepted → increment done
+```
 
-Non-negotiable across all plans:
+The clean tester is a gate, not a substitute for TDD. The implementer still writes their own failing test first for every task; the tester is an independent second reading of the spec. When they disagree, one of them misread it — and that disagreement is the signal the protocol exists to produce. See `TESTER-PROTOCOL.md`.
 
-- **`superpowers:test-driven-development` — the Iron Law.** No production code without a failing test first. If you wrote code before the test, delete it and start over. Every task below is structured red → verify red → green → verify green → commit.
-- **`superpowers:using-git-worktrees`** for an isolated workspace before execution starts.
-- **`superpowers:verification-before-completion`** before any task is marked done. Run the command, read the output, then claim.
-- **`superpowers:systematic-debugging`** on any failure — before proposing a fix.
-- **`superpowers:requesting-code-review`** after each task and across the whole branch at the end.
+## Non-negotiables across all plans
 
-## Test layers these plans build toward
+- **`superpowers:test-driven-development` — the Iron Law.** No production code without a failing test first. Wrote code before the test? Delete it and start over.
+- **`superpowers:using-git-worktrees`** — isolated workspace before execution begins.
+- **`superpowers:verification-before-completion`** — run the command, read the output, then claim. Never assert a result you have not seen.
+- **`superpowers:systematic-debugging`** on any failure, before proposing a fix.
+- **`superpowers:requesting-code-review`** after each task and across the whole branch at increment end.
+
+## Test layers
 
 Defined in `openspec/changes/add-intelliknow-kms/test-plan.md`:
 
@@ -54,4 +78,4 @@ Defined in `openspec/changes/add-intelliknow-kms/test-plan.md`:
 - **L3** model-quality, real LLM, statistical gates, on demand
 - **L4** end-to-end demo script, manual, before delivery
 
-Plans 01–06 build L1 and L2 as they go — that is what TDD produces. L3 and L4 are exercised on day 7 against the corpus that plan 02 assembles.
+Plans 01–06 build L1 and L2 as their TDD output. L3 and L4 run on day 7 against the corpus plan 02 assembles.
