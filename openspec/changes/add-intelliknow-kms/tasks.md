@@ -6,14 +6,14 @@ Ordered as a 7-day solo plan per the brief's timeline constraint. Each day ends 
 - [ ] 1.2 Create the Telegram bot via BotFather and capture the token; confirm the Bot Framework Emulator runs locally (Azure Bot registration is optional and only needed for a real Teams tenant)
 - [ ] 1.3 Define the typed configuration schema and write `config.yaml` with all documented defaults, including the five intent spaces with descriptions and keywords
 - [ ] 1.4 Implement `ConfigService`: load, validate, expose, atomic write with backup, in-place reload; reject unknown fields and out-of-range values at startup
-- [ ] 1.5 Write `.env.example` for secrets only (provider keys, `TELEGRAM_BOT_TOKEN`, `TEAMS_APP_ID`, `TEAMS_APP_PASSWORD`, `ADMIN_PASSWORD`)
+- [ ] 1.5 Write `.env.example` for secrets only: provider keys, `CREDENTIAL_ENCRYPTION_KEY` (with the command to generate one), `ADMIN_PASSWORD`, and the optional first-run chat credentials `TELEGRAM_BOT_TOKEN` / `TEAMS_APP_ID` / `TEAMS_APP_PASSWORD`
 - [ ] 1.6 Define `LLMProvider` / `EmbeddingProvider` protocols, `LLMResult`, and `ProviderError` with its four categories
 - [ ] 1.7 Implement `AnthropicLLM` with structured output, plus `OpenAILLM` and `LocalLLM` against the same interface
 - [ ] 1.8 Implement `SentenceTransformerEmbedding` (default, normalized), `OpenAIEmbedding`, and `LocalEmbedding`
 - [ ] 1.9 Implement the provider factory: selection from config, separate classify/generate models, unknown-name rejection, startup credential validation
 - [ ] 1.10 Implement shared timeout, exponential-backoff retry, schema-validation retry, and error normalization
 - [ ] 1.11 Unit-test the provider layer against fakes: order preservation, dimension match, schema retry, each error category
-- [ ] 1.12 Create the SQLite schema (`document`, `chunk`, `chunk_fts`, `query_log`), enable WAL, and verify the FTS5 virtual table builds
+- [ ] 1.12 Create the SQLite schema (`document`, `chunk`, `chunk_fts`, `query_log`, `integration`), enable WAL, and verify the FTS5 virtual table builds
 
 ## 2. Day 2 — Document loading and chunking
 
@@ -59,16 +59,17 @@ Ordered as a 7-day solo plan per the brief's timeline constraint. Each day ends 
 
 ## 5. Day 5 — Chat channels
 
-- [ ] 5.1 Define `InboundMessage` / `OutboundAnswer` and the channel adapter interface
-- [ ] 5.2 Implement the Telegram adapter in long-polling mode: receive, send, typing indicator, MarkdownV2 escaping, 4096-character enforcement
-- [ ] 5.3 Implement Telegram webhook mode as the configurable alternative, mutually exclusive with polling
-- [ ] 5.4 Implement the Teams adapter on `botbuilder-core` mounted on a FastAPI route, with typing activity and Teams-compatible formatting
-- [ ] 5.5 Implement the deterministic per-channel formatter: escaping, list translation, word-boundary truncation with marker
-- [ ] 5.6 Implement non-text message handling and inbound error isolation with platform acknowledgement
-- [ ] 5.7 Implement per-channel Connected/Disconnected status with last success time, and channel error logging
-- [ ] 5.8 Implement the per-channel end-to-end test reporting outcome, failing stage, and measured latency
-- [ ] 5.9 Implement query logging after delivery with failure suppression, recording status, confidence, fallback flag, citations, retrieved document ids, and latency
-- [ ] 5.10 Verify both channels end to end — Telegram against a real bot, Teams against the Bot Framework Emulator
+- [ ] 5.1 Implement encrypted credential storage: `integration` table, Fernet encryption from `CREDENTIAL_ENCRYPTION_KEY`, masked API reads, fail-fast on a missing or invalid key, undecryptable-credential handling, and first-run fallback to environment variables
+- [ ] 5.2 Define `InboundMessage` / `OutboundAnswer` and the channel adapter interface
+- [ ] 5.3 Implement the Telegram adapter in long-polling mode: receive, send, typing indicator, MarkdownV2 escaping, 4096-character enforcement
+- [ ] 5.4 Implement Telegram webhook mode as the configurable alternative, mutually exclusive with polling
+- [ ] 5.5 Implement the Teams adapter on `botbuilder-core` mounted on a FastAPI route, with typing activity and Teams-compatible formatting
+- [ ] 5.6 Implement the deterministic per-channel formatter: escaping, list translation, word-boundary truncation with marker
+- [ ] 5.7 Implement non-text message handling and inbound error isolation with platform acknowledgement
+- [ ] 5.8 Implement per-channel Connected/Disconnected status with last success time, and channel error logging
+- [ ] 5.9 Implement the per-channel end-to-end test reporting outcome, failing stage, and measured latency
+- [ ] 5.10 Implement query logging after delivery with failure suppression, recording status, confidence, fallback flag, citations, retrieved document ids, and latency
+- [ ] 5.11 Verify both channels end to end — Telegram against a real bot, Teams against the Bot Framework Emulator
 
 ## 6. Day 6 — Admin console
 

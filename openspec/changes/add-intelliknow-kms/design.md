@@ -316,7 +316,7 @@ The brief's §2 visual guidance is a requirement, not a suggestion, so it is fix
 
 ## Data model
 
-Four tables. SQLite via SQLAlchemy Core, WAL mode, timestamps UTC ISO-8601.
+Five tables. SQLite via SQLAlchemy Core, WAL mode, timestamps UTC ISO-8601.
 
 ```
 document(id, filename, ext, size_bytes, sha256, intent_slug, status,
@@ -330,7 +330,12 @@ chunk_fts(rowid → chunk.id, text)            -- FTS5 virtual table, BM25
 query_log(id, created_at, channel, user_ref, question, intent_slug,
           confidence, fallback_used, status, answer, citations_json,
           retrieved_doc_ids_json, latency_ms, error)
+
+integration(channel PK, display_name, enabled, credentials_encrypted,
+            status, last_ok_at, last_error, updated_at)
 ```
+
+`integration.credentials_encrypted` holds a Fernet-encrypted JSON blob so one column covers both Telegram's single token and Teams' id/password pair. It is the only encrypted column in the database, and the only reason the schema is not four tables.
 
 Alongside the FAISS directory sits `data/index_meta.json`, holding the embedding model name and dimension recorded at first ingest. It is a file rather than a table because it belongs to the index, not to the relational data — deleting `data/` resets both together.
 
@@ -393,16 +398,24 @@ The default meets the budget with ~400 ms of headroom, which is thin. Two mitiga
 
 ## Security
 
-Deliberately minimal — the brief specifies no security requirements, and this is a single-admin demo system.
+Minimal by intent — this is a single-admin demo system — with one exception where the brief is explicit.
 
-- The Streamlit console requires one password, `ADMIN_PASSWORD` from `.env`.
-- Bot tokens and API keys live in `.env`. They are not stored in the database and not editable from the console; the console displays them masked and read-only, and tells the admin which variable to set.
-- Uploads are checked for extension and size. This is crash prevention, not defense.
-- Teams inbound requests are authenticated by `botbuilder-core` because the Bot Framework protocol requires it — this comes from the SDK, not from us.
+**Credential storage is the exception.** The brief names *"Admin credential configuration (secure storage)"* as a core capability, so chat credentials are admin-managed and encrypted at rest:
 
-Explicitly not done: credential encryption at rest, admin API tokens, rate limiting, prompt-injection hardening, audit logging.
+- Bot tokens live in the `integration` table, encrypted with `cryptography.fernet` using `CREDENTIAL_ENCRYPTION_KEY` from the environment. The key is never persisted.
+- The API returns only the last four characters. The plaintext never reaches the console.
+- A missing or invalid key **fails startup** rather than silently falling back to plaintext — a fallback would defeat the requirement while appearing to work.
+- A credential that cannot be decrypted (key rotated or lost) marks the channel Disconnected with "re-enter credential" rather than crashing the service.
+- On first run, if no credential is stored but the matching environment variable is set, that value is used and the console says so. This keeps setup one step without making `.env` the storage mechanism.
 
-**Flagged for your decision:** the brief's integration requirement says *"Admin credential configuration (secure storage)"*. `.env` is the low bar you asked for. Moving tokens into console-managed encrypted storage is roughly half a day if you want to satisfy that line literally.
+Everything else stays at the low bar:
+
+- The console requires one password, `ADMIN_PASSWORD` from `.env`.
+- AI provider API keys stay in `.env` — they are operator infrastructure, not admin-configurable integration credentials, so the brief's clause does not apply to them.
+- Uploads are checked for extension and size. Crash prevention, not defense.
+- Teams inbound activities are authenticated by `botbuilder-core` because the Bot Framework protocol requires it — that comes from the SDK, not from us.
+
+Explicitly not done: admin API tokens, rate limiting, prompt-injection hardening, audit logging, per-user authorization.
 
 ## Decisions
 

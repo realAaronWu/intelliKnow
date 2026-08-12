@@ -21,13 +21,19 @@ The system SHALL read all non-secret configuration from one `config.yaml` file, 
 
 ### Requirement: Secrets separated from configuration
 
-The system SHALL read secrets — AI provider API keys, chat platform tokens, and the admin password — only from environment variables or a `.env` file, and SHALL NOT read or write them in `config.yaml`.
+The system SHALL read secrets — AI provider API keys, the credential encryption key, and the admin password — only from environment variables or a `.env` file, SHALL keep admin-managed chat credentials in encrypted storage, and SHALL NOT read or write any secret in `config.yaml`.
 
-#### Scenario: Secrets come from the environment
+#### Scenario: Operator secrets come from the environment
 
-- **WHEN** the service needs an API key or bot token
+- **WHEN** the service needs an AI provider API key, the credential encryption key, or the admin password
 - **THEN** it reads the value from the environment
 - **AND** the value does not appear in `config.yaml`
+
+#### Scenario: Chat credentials are not configuration
+
+- **WHEN** an admin saves a chat platform credential
+- **THEN** it is written to encrypted storage
+- **AND** it does not appear in `config.yaml`
 
 #### Scenario: Config file is safe to commit
 

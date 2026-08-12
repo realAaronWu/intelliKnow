@@ -59,7 +59,7 @@ Every clause of the source document is listed below with where it is covered. `s
 | Source clause | Covered by |
 | --- | --- |
 | **Multi-Frontend Integration** — integrate 2 tools | spec: frontend-integration |
-| Admin credential configuration (secure storage) | spec: frontend-integration — Credential configuration. **Deviation:** `.env` + last-4 masking, not encrypted storage. See § Deviations. |
+| Admin credential configuration (secure storage) | spec: frontend-integration — Admin credential configuration, Secure credential storage (Fernet-encrypted at rest, console-managed, last-4 masking) |
 | Real-time query/response sync ≤3s latency | spec: frontend-integration — Response latency; design § Latency budget |
 | Status monitoring + error logging | spec: frontend-integration — Connection status monitoring, Channel error logging |
 | End-to-end test function | spec: frontend-integration — End-to-end integration test |
@@ -104,13 +104,14 @@ Every clause of the source document is listed below with where it is covered. `s
 
 ## Deviations from the source document
 
-Each of these is a deliberate choice, not an oversight. Two were directed by the user; the third is a judgement call.
+Two remain, both confirmed with the project owner.
 
 | # | Source says | This spec does | Why |
 | --- | --- | --- | --- |
-| 1 | "Admin credential configuration (secure storage)" | Credentials in `.env`, displayed last-4 only; no encryption at rest, no console editing | User directed the lowest reasonable security bar. Raising it to console-managed encrypted storage is roughly half a day. **Open for your decision.** |
-| 2 | "fully functional, **deployed** KMS"; references Render/Vercel | Local run is the supported path; Docker and a public tunnel are optional extras | User directed that deployment is nice-to-have. The source's own Delivery section permits "deployed/**local**", so a local demo satisfies it. |
-| 3 | "Key Reference: LangChain Document Loaders" | Direct use of `pypdf`/`pdfplumber`/`python-docx`/`openpyxl`, no LangChain | Listed as a reference, not a mandate. LangChain adds a large dependency tree and its own abstractions for a surface we use thinly, against the "lightweight only" prohibition. |
+| 1 | "fully functional, **deployed** KMS"; references Render/Vercel | Local run is the supported path; Docker and a public tunnel are optional extras | Confirmed with the project owner. The source's own Delivery section permits "deployed/**local**", so a local demo satisfies it. |
+| 2 | "Key Reference: LangChain Document Loaders" | Direct use of `pypdf`/`pdfplumber`/`python-docx`/`openpyxl`, no LangChain | Listed as a reference, not a mandate. LangChain adds a large dependency tree and its own abstractions for a surface we use thinly, against the "lightweight only" prohibition. |
+
+**Resolved:** an earlier draft stored chat credentials in `.env` without encryption. The project owner confirmed that "secure storage" is core functionality, so the spec now requires console-managed, Fernet-encrypted-at-rest credentials with last-4 masking and fail-fast on a missing key.
 
 ## Items the source does not require, and that this spec does not build
 

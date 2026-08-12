@@ -96,25 +96,70 @@ The system SHALL expose a Bot Framework messaging endpoint for Microsoft Teams, 
 - **THEN** it is rejected
 - **AND** no query is processed
 
-### Requirement: Credential configuration
+### Requirement: Admin credential configuration
 
-The system SHALL read each channel's credentials from environment configuration, SHALL display only the last four characters of a configured credential, and SHALL name the variable to set when a credential is missing.
+The system SHALL allow an admin to enter, update, and clear each channel's credentials from the console — a bot token for Telegram, an application identifier and password for Teams — and SHALL apply saved credentials without a service restart.
 
-#### Scenario: Credential displayed masked
+#### Scenario: Telegram credentials configured from the console
 
-- **WHEN** the console displays a channel's configuration details
-- **THEN** only the last four characters of the credential are shown
+- **WHEN** an admin saves a Telegram bot token
+- **THEN** the channel becomes usable without a restart
 
-#### Scenario: Missing credential reported actionably
+#### Scenario: Teams credentials configured from the console
 
-- **WHEN** a channel has no credential configured
-- **THEN** the console reports the channel as Disconnected
-- **AND** names the environment variable that must be set
+- **WHEN** an admin saves a Teams application identifier and password
+- **THEN** the channel becomes usable without a restart
+
+#### Scenario: Credentials cleared
+
+- **WHEN** an admin clears a channel's credentials
+- **THEN** the stored values are removed
+- **AND** the channel reports Disconnected
 
 #### Scenario: Channel enabled state configurable
 
-- **WHEN** an operator disables a channel in configuration
+- **WHEN** an admin disables a channel
 - **THEN** inbound messages on that channel are not processed
+- **AND** the stored credentials are retained for later re-enabling
+
+### Requirement: Secure credential storage
+
+The system SHALL store chat platform credentials encrypted at rest using a symmetric key supplied by environment variable, SHALL never return a credential value in plaintext through the API or the console, and SHALL fail startup when the encryption key is missing or invalid rather than falling back to plaintext.
+
+#### Scenario: Credential encrypted on save
+
+- **WHEN** an admin saves a credential
+- **THEN** the value is encrypted before being persisted
+- **AND** the persisted value is not readable without the encryption key
+
+#### Scenario: Credential returned masked
+
+- **WHEN** the API returns a channel's configuration
+- **THEN** only the last four characters of the credential are included
+- **AND** the full value is never sent to the console
+
+#### Scenario: Missing encryption key blocks startup
+
+- **WHEN** the service starts without a valid credential encryption key
+- **THEN** startup fails with an error naming the missing environment variable
+- **AND** no credential is stored or read unencrypted
+
+#### Scenario: Encryption key never persisted
+
+- **WHEN** credentials are stored
+- **THEN** the encryption key is read from the environment only
+- **AND** it does not appear in the database or the configuration file
+
+#### Scenario: Undecryptable credential reported
+
+- **WHEN** a stored credential cannot be decrypted with the current key
+- **THEN** the channel reports Disconnected with a message stating the credential must be re-entered
+- **AND** the service continues running
+
+#### Scenario: Environment fallback for first run
+
+- **WHEN** no credential is stored for a channel and a corresponding environment variable is set
+- **THEN** that value is used and the console indicates it came from the environment
 
 ### Requirement: Channel-appropriate outbound formatting
 

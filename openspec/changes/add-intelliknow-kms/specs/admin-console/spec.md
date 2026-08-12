@@ -105,11 +105,22 @@ The system SHALL provide a Frontend Integration screen presenting one card per s
 - **THEN** its card shows Connected
 - **AND** a channel that is unconfigured or failing shows Disconnected with the recorded reason
 
+#### Scenario: Credentials entered from the card
+
+- **WHEN** an admin enters a channel's credentials on its card and saves
+- **THEN** the credentials are stored encrypted
+- **AND** the card redisplays them masked
+
 #### Scenario: Credential shown only as last four characters
 
 - **WHEN** a card displays its configuration details
 - **THEN** only the last four characters of the credential are shown
 - **AND** the full value is never displayed
+
+#### Scenario: Credentials cleared with confirmation
+
+- **WHEN** an admin clears a channel's credentials and confirms
+- **THEN** the stored credentials are removed and the card shows Disconnected
 
 #### Scenario: Test button verifies the integration
 
@@ -120,7 +131,7 @@ The system SHALL provide a Frontend Integration screen presenting one card per s
 #### Scenario: Setup guidance for an unconfigured channel
 
 - **WHEN** a channel has no credential configured
-- **THEN** the card names the environment variable to set and what the platform requires
+- **THEN** the card states what the platform requires and how to obtain the credential
 
 ### Requirement: Knowledge Base Management screen
 
