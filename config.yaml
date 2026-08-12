@@ -1,0 +1,67 @@
+llm:
+  provider: anthropic              # anthropic | openai | local
+  model_classify: claude-opus-5
+  model_generate: claude-opus-5
+  timeout_seconds: 20
+  max_retries: 2
+
+embedding:
+  provider: local                  # local | openai
+  model: all-MiniLM-L6-v2
+  dimension: 384
+  batch_size: 64
+
+rag:
+  chunk_chars: 800
+  chunk_overlap_chars: 100
+  vector_top_n: 20
+  keyword_top_n: 20
+  rrf_k: 60
+  rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2
+  rerank_candidates: 20            # fused pool fed to the cross-encoder
+  final_top_k: 5                   # kept after reranking
+  max_context_chars: 6000
+  relevance_floor: 0.45            # on sigmoid(cross-encoder score) — CALIBRATE, see below
+
+orchestrator:
+  confidence_threshold: 0.70
+  fallback_space: general
+  centroid_temperature: 0.05       # softmax over centroid similarities — CALIBRATE
+  escalate_to_llm: true            # call the LLM when centroid confidence < threshold
+
+intent_spaces:
+  - slug: hr
+    name: HR
+    description: "Employee policies, leave, benefits, payroll, onboarding."
+    keywords: [leave, vacation, salary, band, benefits, onboarding, appraisal]
+  - slug: legal
+    name: Legal
+    description: "Contracts, compliance, data protection, terms."
+    keywords: [contract, NDA, GDPR, compliance, liability, clause]
+  - slug: finance
+    name: Finance
+    description: "Expenses, reimbursement, budgets, invoicing, salary bands."
+    keywords: [expense, reimbursement, invoice, budget, procurement, tax]
+  - slug: operations
+    name: Operations
+    description: "Internal processes, tooling, facilities, IT requests."
+    keywords: [access, laptop, VPN, ticket, facilities, process]
+  - slug: general
+    name: General
+    description: "Fallback — searches every space."
+    keywords: []
+
+channels:
+  telegram: {enabled: true,  mode: polling, max_message_chars: 4096}
+  teams:    {enabled: false,                max_message_chars: 28000}
+
+ingestion:
+  max_upload_mb: 25
+  allowed_extensions: [".pdf", ".docx", ".xlsx"]
+
+storage:
+  sqlite_path: ./data/intelliknow.db
+  faiss_dir: ./data/faiss
+  upload_dir: ./data/uploads
+
+public_base_url: null              # only for Telegram webhook mode or real-tenant Teams
