@@ -12,13 +12,14 @@ rationale, which applies identically here:
 - **Transient-failure retry** goes through `app.providers.retry.with_retries`
   around the raw `chat.completions.create` call; the SDK client is built
   with `max_retries=0` so the SDK's own retry never runs underneath it.
-- **Schema-validation retry**: a response that fails to parse as JSON is
-  retried once before raising `ProviderError.backend`.
+- **Schema-validation retry**: a response that fails to parse as JSON, or
+  parses but does not conform to the requested schema, is retried once
+  before raising `ProviderError.backend` naming the violated schema. See
+  `app/providers/schema_validation.py`.
 """
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Any, Callable
 
@@ -26,6 +27,11 @@ import openai
 
 from app.providers.base import LLMResult, ProviderError
 from app.providers.retry import with_retries
+from app.providers.schema_validation import (
+    SchemaViolation,
+    describe_schema,
+    parse_and_validate,
+)
 
 _MAX_SCHEMA_ATTEMPTS = 2
 
@@ -117,13 +123,14 @@ def chat_complete(
             break
 
         try:
-            parsed = json.loads(text)
+            parsed = parse_and_validate(text, schema)
             break
-        except (json.JSONDecodeError, TypeError):
+        except SchemaViolation as violation:
             if attempt == schema_attempts:
                 raise ProviderError.backend(
-                    f"structured response did not parse as JSON after retry: {text!r}"
-                )
+                    f"structured response violated schema "
+                    f"{describe_schema(schema)} after retry: {violation}: {text!r}"
+                ) from violation
             continue
 
     return LLMResult(

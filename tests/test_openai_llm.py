@@ -156,6 +156,70 @@ def test_schema_retry_recovers_after_malformed_first_response():
     assert len(client.chat.completions.calls) == 2
 
 
+_INTENT_SCHEMA = {
+    "title": "IntentClassification",
+    "type": "object",
+    "properties": {"intent_slug": {"type": "string"}},
+    "required": ["intent_slug"],
+}
+
+
+def _schema_completion(text: str) -> _StubChatCompletion:
+    return _StubChatCompletion(text, "gpt-5", prompt_tokens=5, completion_tokens=4)
+
+
+def test_non_object_json_rejected_and_retried_then_raises_naming_the_schema():
+    """spec: ai-provider § Structured generation — see the equivalent test in
+    tests/test_anthropic_llm.py for the rationale.
+    """
+    llm, client = _make_llm()
+    client.chat.completions.queue_response(_schema_completion("[1, 2]"))
+    client.chat.completions.queue_response(_schema_completion("[1, 2]"))
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u", schema=_INTENT_SCHEMA)
+
+    assert excinfo.value.category == "backend"
+    assert "IntentClassification" in str(excinfo.value)
+    assert len(client.chat.completions.calls) == 2
+
+
+def test_scalar_json_rejected_even_though_it_parses():
+    llm, client = _make_llm()
+    client.chat.completions.queue_response(_schema_completion("42"))
+    client.chat.completions.queue_response(_schema_completion("42"))
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u", schema=_INTENT_SCHEMA)
+
+    assert excinfo.value.category == "backend"
+    assert len(client.chat.completions.calls) == 2
+
+
+def test_object_violating_the_schema_is_retried_then_raises_naming_the_schema():
+    llm, client = _make_llm()
+    client.chat.completions.queue_response(_schema_completion('{"wrong_key": "hr"}'))
+    client.chat.completions.queue_response(_schema_completion('{"wrong_key": "hr"}'))
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u", schema=_INTENT_SCHEMA)
+
+    assert excinfo.value.category == "backend"
+    assert "IntentClassification" in str(excinfo.value)
+    assert len(client.chat.completions.calls) == 2
+
+
+def test_schema_violation_recovers_on_retry():
+    llm, client = _make_llm()
+    client.chat.completions.queue_response(_schema_completion('{"wrong_key": "hr"}'))
+    client.chat.completions.queue_response(_schema_completion('{"intent_slug": "hr"}'))
+
+    result = llm.complete(system="s", user="u", schema=_INTENT_SCHEMA)
+
+    assert result.parsed == {"intent_slug": "hr"}
+    assert len(client.chat.completions.calls) == 2
+
+
 def test_auth_exception_mapped_to_auth_category():
     llm, client = _make_llm()
     client.chat.completions.queue_error(

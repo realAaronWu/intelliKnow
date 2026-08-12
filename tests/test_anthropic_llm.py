@@ -183,6 +183,92 @@ def test_schema_retry_recovers_after_malformed_first_response():
     assert len(client.messages.calls) == 2
 
 
+_INTENT_SCHEMA = {
+    "title": "IntentClassification",
+    "type": "object",
+    "properties": {"intent_slug": {"type": "string"}},
+    "required": ["intent_slug"],
+}
+
+
+def _schema_message(text: str) -> _StubMessage:
+    return _StubMessage(
+        content=[_StubTextBlock(text)],
+        model="claude-opus-5",
+        input_tokens=5,
+        output_tokens=4,
+    )
+
+
+def test_non_object_json_rejected_and_retried_then_raises_naming_the_schema():
+    """spec: ai-provider § Structured generation — the caller receives a
+    parsed object *conforming to the schema*. `[1, 2]` is syntactically valid
+    JSON but is not an object, so `LLMResult.parsed` (typed `dict | None`)
+    must never be handed one.
+    """
+    llm, client = _make_llm()
+    client.messages.queue_response(_schema_message("[1, 2]"))
+    client.messages.queue_response(_schema_message("[1, 2]"))
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u", schema=_INTENT_SCHEMA)
+
+    assert excinfo.value.category == "backend"
+    assert "IntentClassification" in str(excinfo.value)
+    assert len(client.messages.calls) == 2
+
+
+def test_scalar_json_rejected_even_though_it_parses():
+    llm, client = _make_llm()
+    client.messages.queue_response(_schema_message("42"))
+    client.messages.queue_response(_schema_message("42"))
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u", schema=_INTENT_SCHEMA)
+
+    assert excinfo.value.category == "backend"
+    assert len(client.messages.calls) == 2
+
+
+def test_object_violating_the_schema_is_retried_then_raises_naming_the_schema():
+    """A well-formed object that omits a required property is a schema
+    violation, and must feed the same retry-once path as a parse failure.
+    """
+    llm, client = _make_llm()
+    client.messages.queue_response(_schema_message('{"wrong_key": "hr"}'))
+    client.messages.queue_response(_schema_message('{"wrong_key": "hr"}'))
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u", schema=_INTENT_SCHEMA)
+
+    assert excinfo.value.category == "backend"
+    assert "IntentClassification" in str(excinfo.value)
+    assert len(client.messages.calls) == 2
+
+
+def test_schema_violation_recovers_on_retry():
+    llm, client = _make_llm()
+    client.messages.queue_response(_schema_message('{"wrong_key": "hr"}'))
+    client.messages.queue_response(_schema_message('{"intent_slug": "hr"}'))
+
+    result = llm.complete(system="s", user="u", schema=_INTENT_SCHEMA)
+
+    assert result.parsed == {"intent_slug": "hr"}
+    assert len(client.messages.calls) == 2
+
+
+def test_untitled_schema_is_still_named_in_the_error():
+    llm, client = _make_llm()
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
+    client.messages.queue_response(_schema_message("{}"))
+    client.messages.queue_response(_schema_message("{}"))
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u", schema=schema)
+
+    assert "answer" in str(excinfo.value)
+
+
 def test_auth_exception_mapped_to_auth_category():
     llm, client = _make_llm()
     client.messages.queue_error(

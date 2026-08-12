@@ -16,15 +16,15 @@ conflated:
   sleep, no fixed backoff schedule, and retrying on 5xx (which we map to
   `backend`, a category that must fail on first occurrence) — never runs
   underneath it.
-- **Schema-validation retry**: per `design.md`'s `ai-provider` spec, a
-  response that fails to parse against the requested schema is not a
-  `ProviderError` at all — it's retried once, and only if the retry *also*
-  fails to parse does a `ProviderError` with category `backend` get raised.
+- **Schema-validation retry**: per the `ai-provider` spec, a response that
+  fails to parse *or* fails to conform to the requested schema is not a
+  `ProviderError` at all — it's retried once, and only if the retry also
+  fails does a `ProviderError` with category `backend` get raised, naming
+  the violated schema. See `app/providers/schema_validation.py`.
 """
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Any, Callable
 
@@ -32,6 +32,11 @@ import anthropic
 
 from app.providers.base import LLMResult, ProviderError
 from app.providers.retry import with_retries
+from app.providers.schema_validation import (
+    SchemaViolation,
+    describe_schema,
+    parse_and_validate,
+)
 
 # Claude Opus 5 supports a low-effort mode that trims latency at some cost to
 # depth. Every other knob is left at its default — in particular `thinking`
@@ -110,13 +115,14 @@ class AnthropicLLM:
                 break
 
             try:
-                parsed = json.loads(text)
+                parsed = parse_and_validate(text, schema)
                 break
-            except (json.JSONDecodeError, TypeError):
+            except SchemaViolation as violation:
                 if attempt == schema_attempts:
                     raise ProviderError.backend(
-                        f"structured response did not parse as JSON after retry: {text!r}"
-                    )
+                        f"structured response violated schema "
+                        f"{describe_schema(schema)} after retry: {violation}: {text!r}"
+                    ) from violation
                 continue
 
         return LLMResult(
