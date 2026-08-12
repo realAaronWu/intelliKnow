@@ -1,0 +1,145 @@
+"""Test-plan §2 — ConfigService.
+
+Source: docs/superpowers/test-plans/01-foundation-tests.md §2
+
+Each test copies the shipped `config.yaml` into a pytest `tmp_path` rather
+than mutating the repo-root file, per the task-2 brief.
+"""
+
+import shutil
+from pathlib import Path
+
+import pytest
+import yaml
+
+from app.config_service import ConfigService
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SHIPPED_CONFIG = REPO_ROOT / "config.yaml"
+
+
+@pytest.fixture
+def config_path(tmp_path) -> Path:
+    dest = tmp_path / "config.yaml"
+    shutil.copy(SHIPPED_CONFIG, dest)
+    return dest
+
+
+# --- 2.1 Update threshold to 0.85 -------------------------------------------
+
+
+def test_2_1_update_threshold_reflected_in_current_and_on_disk(config_path):
+    service = ConfigService.load(config_path)
+
+    updated = service.update({"orchestrator": {"confidence_threshold": 0.85}})
+
+    assert updated.orchestrator.confidence_threshold == 0.85
+    assert service.current.orchestrator.confidence_threshold == 0.85
+
+    fresh = ConfigService.load(config_path)
+    assert fresh.current.orchestrator.confidence_threshold == 0.85
+
+
+# --- 2.2 Update with threshold 9.9 ------------------------------------------
+
+
+def test_2_2_invalid_update_raises_and_leaves_state_untouched(config_path):
+    original_bytes = config_path.read_bytes()
+    service = ConfigService.load(config_path)
+    assert service.current.orchestrator.confidence_threshold == 0.70
+
+    with pytest.raises(ValueError):
+        service.update({"orchestrator": {"confidence_threshold": 9.9}})
+
+    assert service.current.orchestrator.confidence_threshold == 0.70
+    assert config_path.read_bytes() == original_bytes
+
+
+# --- 2.3 Update writes backup ------------------------------------------------
+
+
+def test_2_3_update_writes_backup_with_previous_value(config_path):
+    service = ConfigService.load(config_path)
+
+    service.update({"orchestrator": {"confidence_threshold": 0.85}})
+
+    backup_path = config_path.with_suffix(config_path.suffix + ".bak")
+    assert backup_path.exists()
+    backup_data = yaml.safe_load(backup_path.read_text())
+    assert backup_data["orchestrator"]["confidence_threshold"] == 0.70
+
+
+# --- 2.4 Update leaves no temp file ------------------------------------------
+
+
+def test_2_4_no_tmp_file_left_after_update(config_path):
+    service = ConfigService.load(config_path)
+
+    service.update({"orchestrator": {"confidence_threshold": 0.85}})
+    assert list(config_path.parent.glob("*.tmp")) == []
+
+    with pytest.raises(ValueError):
+        service.update({"orchestrator": {"confidence_threshold": 9.9}})
+    assert list(config_path.parent.glob("*.tmp")) == []
+
+
+# --- 2.5 Partial patch merges ------------------------------------------------
+
+
+def test_2_5_partial_patch_merges_leaving_siblings_untouched(config_path):
+    service = ConfigService.load(config_path)
+    assert service.current.rag.relevance_floor == 0.45
+
+    updated = service.update({"rag": {"final_top_k": 8}})
+
+    assert updated.rag.final_top_k == 8
+    assert updated.rag.relevance_floor == 0.45
+
+
+# --- 2.6 Update intent space keywords ----------------------------------------
+
+
+def test_2_6_update_intent_space_keywords(config_path):
+    service = ConfigService.load(config_path)
+    spaces = [space.model_dump(mode="json") for space in service.current.intent_spaces]
+    for space in spaces:
+        if space["slug"] == "hr":
+            space["keywords"].append("parental-leave")
+
+    updated = service.update({"intent_spaces": spaces})
+
+    hr_space = next(space for space in updated.intent_spaces if space.slug == "hr")
+    assert "parental-leave" in hr_space.keywords
+
+
+# --- 2.7 Reload picks up an external edit ------------------------------------
+
+
+def test_2_7_reload_picks_up_external_edit(config_path):
+    service = ConfigService.load(config_path)
+    assert service.current.orchestrator.confidence_threshold == 0.70
+
+    raw = yaml.safe_load(config_path.read_text())
+    raw["orchestrator"]["confidence_threshold"] = 0.55
+    config_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+
+    reloaded = service.reload()
+
+    assert reloaded.orchestrator.confidence_threshold == 0.55
+    assert service.current.orchestrator.confidence_threshold == 0.55
+
+
+# --- 2.8 Failed update leaves no backup churn --------------------------------
+
+
+def test_2_8_failed_update_does_not_overwrite_existing_backup(config_path):
+    service = ConfigService.load(config_path)
+    service.update({"orchestrator": {"confidence_threshold": 0.85}})
+
+    backup_path = config_path.with_suffix(config_path.suffix + ".bak")
+    backup_bytes_after_first_update = backup_path.read_bytes()
+
+    with pytest.raises(ValueError):
+        service.update({"orchestrator": {"confidence_threshold": 9.9}})
+
+    assert backup_path.read_bytes() == backup_bytes_after_first_update
