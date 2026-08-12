@@ -1,13 +1,24 @@
-"""`EmbeddingProvider` backed by the OpenAI Embeddings API."""
+"""`EmbeddingProvider` backed by the OpenAI Embeddings API.
+
+Unlike `SentenceTransformerEmbedding`, this provider reaches a remote API on
+every `embed()` call, so it carries the same transient-failure retry
+requirement as the LLM providers (see `app/providers/anthropic_llm.py`'s
+module docstring for the full rationale): the raw SDK call is wrapped in
+`app.providers.retry.with_retries`, and the default SDK client is built with
+`max_retries=0` so the SDK's own retry never runs underneath the app-level
+policy.
+"""
 
 from __future__ import annotations
 
-from typing import Any
+import time
+from typing import Any, Callable
 
 import openai
 
 from app.providers.base import ProviderError, normalize
 from app.providers.openai_llm import map_exception
+from app.providers.retry import with_retries
 
 
 class OpenAIEmbedding:
@@ -20,11 +31,21 @@ class OpenAIEmbedding:
         batch_size: int,
         dimension: int | None = None,
         client: Any | None = None,
+        timeout_seconds: int = 20,
+        max_retries: int = 2,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._model_name = model_name
         self._batch_size = batch_size
         self._dimension = dimension
-        self._client = client if client is not None else openai.OpenAI(api_key=api_key)
+        self._max_retries = max_retries
+        self._sleep = sleep
+        self._client = client if client is not None else openai.OpenAI(
+            api_key=api_key,
+            timeout=float(timeout_seconds),
+            # The app-level `with_retries` policy is the only retry layer.
+            max_retries=0,
+        )
 
     @property
     def dimension(self) -> int:
@@ -39,10 +60,14 @@ class OpenAIEmbedding:
         results: list[list[float]] = []
         for start in range(0, len(texts), self._batch_size):
             batch = texts[start : start + self._batch_size]
-            try:
-                response = self._client.embeddings.create(model=self._model_name, input=batch)
-            except Exception as exc:
-                raise map_exception(exc) from exc
+
+            def _call(batch: list[str] = batch) -> Any:
+                try:
+                    return self._client.embeddings.create(model=self._model_name, input=batch)
+                except Exception as exc:
+                    raise map_exception(exc) from exc
+
+            response = with_retries(_call, max_retries=self._max_retries, sleep=self._sleep)
             vectors = [list(item.embedding) for item in response.data]
             results.extend(normalize(vectors))
         return results

@@ -1,9 +1,13 @@
-"""Tests for `OpenAIEmbedding` — Important 4 from fix round 1: previously
-untested. Every test injects a stub `client` so nothing here touches the
-network.
+"""Tests for `OpenAIEmbedding` — Important 4 from fix round 1 (construction /
+happy path / exception mapping), plus fix round 1 addendum (Critical 1
+applies here too: `OpenAIEmbedding` reaches the network, so its retry must
+go through `with_retries`, not the SDK). Every test injects a stub `client`
+so nothing here touches the network or blocks on real time.
 """
 
 from __future__ import annotations
+
+from collections import deque
 
 import httpx
 import openai
@@ -24,24 +28,27 @@ class _StubEmbeddingResponse:
 
 
 class _StubEmbeddingsResource:
+    """Records every call's kwargs; returns/raises whatever is queued, in order."""
+
     def __init__(self) -> None:
         self.calls: list[dict] = []
-        self._next_error: Exception | None = None
-        self._next_response: _StubEmbeddingResponse | None = None
+        self._queue: deque[tuple[str, object]] = deque()
 
     def queue_response(self, response: _StubEmbeddingResponse) -> None:
-        self._next_response = response
-        self._next_error = None
+        self._queue.append(("response", response))
 
     def queue_error(self, error: Exception) -> None:
-        self._next_error = error
-        self._next_response = None
+        self._queue.append(("error", error))
 
     def create(self, *, model: str, input: list[str]):
         self.calls.append({"model": model, "input": list(input)})
-        if self._next_error is not None:
-            raise self._next_error
-        return self._next_response
+        assert self._queue, (
+            "_StubEmbeddingsResource.create() called but nothing was queued."
+        )
+        kind, item = self._queue.popleft()
+        if kind == "error":
+            raise item
+        return item
 
 
 class _StubOpenAIClient:
@@ -108,7 +115,7 @@ def _fake_response(status_code: int) -> httpx.Response:
     return httpx.Response(status_code, request=httpx.Request("POST", "https://api.openai.com/"))
 
 
-def test_auth_exception_mapped_to_auth_category():
+def test_auth_exception_mapped_to_auth_category_and_not_retried():
     client = _StubOpenAIClient()
     client.embeddings.queue_error(
         openai.AuthenticationError("bad key", response=_fake_response(401), body=None)
@@ -119,15 +126,43 @@ def test_auth_exception_mapped_to_auth_category():
         batch_size=64,
         dimension=2,
         client=client,
+        max_retries=2,
+        sleep=lambda seconds: None,
     )
 
     with pytest.raises(ProviderError) as excinfo:
         provider.embed(["alpha"])
 
     assert excinfo.value.category == "auth"
+    assert len(client.embeddings.calls) == 1
+
+
+def test_backend_exception_mapped_to_backend_category_and_not_retried():
+    client = _StubOpenAIClient()
+    client.embeddings.queue_error(
+        openai.InternalServerError("oops", response=_fake_response(500), body=None)
+    )
+    provider = OpenAIEmbedding(
+        model_name="text-embedding-3-small",
+        api_key="unused",
+        batch_size=64,
+        dimension=2,
+        client=client,
+        max_retries=2,
+        sleep=lambda seconds: None,
+    )
+
+    with pytest.raises(ProviderError) as excinfo:
+        provider.embed(["alpha"])
+
+    assert excinfo.value.category == "backend"
+    assert len(client.embeddings.calls) == 1
 
 
 def test_rate_limit_exception_mapped_to_rate_limit_category():
+    # rate_limit is retryable at the app level; max_retries=0 isolates the
+    # category-mapping assertion from retry-count behaviour, which is
+    # covered separately by test_transient_failure_retried_by_app_level_policy_not_the_sdk.
     client = _StubOpenAIClient()
     client.embeddings.queue_error(
         openai.RateLimitError("slow down", response=_fake_response(429), body=None)
@@ -138,12 +173,49 @@ def test_rate_limit_exception_mapped_to_rate_limit_category():
         batch_size=64,
         dimension=2,
         client=client,
+        max_retries=0,
+        sleep=lambda seconds: None,
     )
 
     with pytest.raises(ProviderError) as excinfo:
         provider.embed(["alpha"])
 
     assert excinfo.value.category == "rate_limit"
+    assert len(client.embeddings.calls) == 1
+
+
+def test_transient_failure_retried_by_app_level_policy_not_the_sdk():
+    """Critical 1 applies to `OpenAIEmbedding` too — it reaches the network.
+
+    Proven the same way as the LLM providers: the exact 0.5/1.0 backoff
+    schedule shows up on the injected `sleep` (the SDK's own retry would
+    sleep for real and follow no fixed schedule), and the call only
+    succeeds on the third attempt.
+    """
+    sleeps: list[float] = []
+    client = _StubOpenAIClient()
+    client.embeddings.queue_error(
+        openai.RateLimitError("slow down", response=_fake_response(429), body=None)
+    )
+    client.embeddings.queue_error(
+        openai.RateLimitError("slow down", response=_fake_response(429), body=None)
+    )
+    client.embeddings.queue_response(_StubEmbeddingResponse([[3.0, 4.0]]))
+    provider = OpenAIEmbedding(
+        model_name="text-embedding-3-small",
+        api_key="unused",
+        batch_size=64,
+        dimension=2,
+        client=client,
+        max_retries=2,
+        sleep=sleeps.append,
+    )
+
+    vectors = provider.embed(["alpha"])
+
+    assert vectors == [pytest.approx([0.6, 0.8])]
+    assert len(client.embeddings.calls) == 3
+    assert sleeps == [0.5, 1.0]
 
 
 def test_default_client_constructed_from_api_key_without_network_call():
@@ -155,3 +227,18 @@ def test_default_client_constructed_from_api_key_without_network_call():
     )
 
     assert isinstance(provider._client, openai.OpenAI)
+
+
+def test_default_client_disables_sdk_level_retries():
+    """Critical 1: the SDK client must be built with max_retries=0 so the
+    app-level `with_retries` policy is the only thing that ever retries.
+    """
+    provider = OpenAIEmbedding(
+        model_name="text-embedding-3-small",
+        api_key="sk-test",
+        batch_size=64,
+        dimension=1536,
+        max_retries=5,
+    )
+
+    assert provider._client.max_retries == 0
