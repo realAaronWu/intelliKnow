@@ -30,7 +30,7 @@ from typing import Any, Callable
 
 import anthropic
 
-from app.providers.base import LLMResult, ProviderError
+from app.providers.base import DEFAULT_MAX_TOKENS, LLMResult, ProviderError
 from app.providers.retry import with_retries
 from app.providers.schema_validation import (
     SchemaViolation,
@@ -79,7 +79,7 @@ class AnthropicLLM:
         system: str,
         user: str,
         schema: dict | None = None,
-        max_tokens: int = 1024,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> LLMResult:
         output_config: dict[str, Any] = {}
         if _LOW_EFFORT_MODEL_MARKER in self._model:
@@ -109,6 +109,10 @@ class AnthropicLLM:
 
         for attempt in range(1, schema_attempts + 1):
             response = with_retries(_call, max_retries=self._max_retries, sleep=self._sleep)
+            # Before anything reads the body: a truncated or refused response
+            # has no usable content, and diagnosing it as a parse failure
+            # would burn the schema retry on a request that cannot succeed.
+            _check_stop_reason(response)
             text = _extract_text(response)
 
             if schema is None:
@@ -131,6 +135,31 @@ class AnthropicLLM:
             model=response.model,
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
+        )
+
+
+def _check_stop_reason(response: Any) -> None:
+    """Reject responses whose stop reason means the body is unusable.
+
+    Neither case is retryable: repeating an identical request that ran out
+    of budget, or that the model declined on policy grounds, produces the
+    same outcome.
+    """
+    stop_reason = getattr(response, "stop_reason", None)
+
+    if stop_reason == "max_tokens":
+        raise ProviderError.backend(
+            "response was truncated: the model stopped at the max_tokens "
+            "budget before finishing. On thinking-enabled models this budget "
+            "covers thinking plus visible response text combined, so raise "
+            "max_tokens rather than treating the partial text as an answer."
+        )
+
+    if stop_reason == "refusal":
+        raise ProviderError.backend(
+            "the model refused to produce a response (stop_reason "
+            "'refusal'); the request was declined on policy grounds and no "
+            "content was returned"
         )
 
 

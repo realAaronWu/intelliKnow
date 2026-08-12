@@ -55,6 +55,15 @@ class ProviderError(Exception):
         return cls(message, "backend")
 
 
+# On thinking-enabled models — including `claude-opus-5`, which the shipped
+# config uses and where thinking is on by default because we deliberately
+# omit the `thinking` parameter — this budget caps thinking *plus* the
+# visible response text combined. 1024 was small enough for a routine answer
+# to be cut off mid-generation, which providers now surface as an explicit
+# truncation error rather than a partial result.
+DEFAULT_MAX_TOKENS = 4096
+
+
 class LLMProvider(Protocol):
     """A backend capable of chat-style completion, optionally schema-guided."""
 
@@ -64,7 +73,7 @@ class LLMProvider(Protocol):
         system: str,
         user: str,
         schema: dict | None = None,
-        max_tokens: int = 1024,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> LLMResult: ...
 
 

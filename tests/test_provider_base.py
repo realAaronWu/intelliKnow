@@ -6,11 +6,22 @@ Covers test-plan §3.
 from __future__ import annotations
 
 import dataclasses
+import inspect
 import math
 
 import pytest
 
-from app.providers.base import LLMResult, ProviderError, normalize
+from app.providers.base import LLMProvider, LLMResult, ProviderError, normalize
+
+
+def test_protocol_max_tokens_default_leaves_room_for_thinking():
+    """The shipped config runs claude-opus-5, where thinking is on by default
+    (we deliberately omit the `thinking` parameter) and `max_tokens` caps
+    thinking *plus* visible response text. 1024 was small enough that a
+    normal answer could be truncated mid-generation.
+    """
+    default = inspect.signature(LLMProvider.complete).parameters["max_tokens"].default
+    assert default == 4096
 
 
 class TestProviderError:

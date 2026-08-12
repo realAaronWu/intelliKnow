@@ -41,10 +41,18 @@ class _StubUsage:
 
 
 class _StubMessage:
-    def __init__(self, content, model: str, input_tokens: int, output_tokens: int) -> None:
+    def __init__(
+        self,
+        content,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        stop_reason: str = "end_turn",
+    ) -> None:
         self.content = content
         self.model = model
         self.usage = _StubUsage(input_tokens, output_tokens)
+        self.stop_reason = stop_reason
 
 
 class _StubMessagesResource:
@@ -368,6 +376,94 @@ def test_other_api_exception_mapped_to_backend_category():
         llm.complete(system="s", user="u")
 
     assert excinfo.value.category == "backend"
+
+
+def test_default_max_tokens_leaves_room_for_thinking_plus_response():
+    llm, client = _make_llm()
+    client.messages.queue_response(
+        _StubMessage(
+            content=[_StubTextBlock("hi")],
+            model="claude-opus-5",
+            input_tokens=1,
+            output_tokens=1,
+        )
+    )
+
+    llm.complete(system="s", user="u")
+
+    assert client.messages.calls[0]["max_tokens"] == 4096
+
+
+def test_truncated_response_raises_backend_error_naming_truncation():
+    """A `max_tokens` stop reason means the budget ran out mid-generation.
+    Returning the partial text as a normal result would silently hand the
+    caller a half-finished answer.
+    """
+    llm, client = _make_llm()
+    client.messages.queue_response(
+        _StubMessage(
+            content=[_StubTextBlock("a partial ans")],
+            model="claude-opus-5",
+            input_tokens=1,
+            output_tokens=4096,
+            stop_reason="max_tokens",
+        )
+    )
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u")
+
+    assert excinfo.value.category == "backend"
+    assert "truncat" in str(excinfo.value).lower()
+    assert "max_tokens" in str(excinfo.value)
+
+
+def test_truncation_detected_even_when_a_schema_was_requested():
+    """The stop reason must be inspected before the response is parsed —
+    otherwise a truncated JSON body is misreported as a schema violation and
+    burns the retry.
+    """
+    llm, client = _make_llm()
+    client.messages.queue_response(
+        _StubMessage(
+            content=[_StubTextBlock('{"intent_slu')],
+            model="claude-opus-5",
+            input_tokens=1,
+            output_tokens=4096,
+            stop_reason="max_tokens",
+        )
+    )
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u", schema=_INTENT_SCHEMA)
+
+    assert "truncat" in str(excinfo.value).lower()
+    assert len(client.messages.calls) == 1
+
+
+def test_refusal_reported_as_a_refusal_not_as_a_missing_text_block():
+    """On Opus 5 a policy decline returns HTTP 200 with an empty `content`
+    array. Extracting text first surfaced the misleading "response contained
+    no text content block".
+    """
+    llm, client = _make_llm()
+    client.messages.queue_response(
+        _StubMessage(
+            content=[],
+            model="claude-opus-5",
+            input_tokens=10,
+            output_tokens=0,
+            stop_reason="refusal",
+        )
+    )
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u")
+
+    assert excinfo.value.category == "backend"
+    message = str(excinfo.value)
+    assert "refus" in message.lower()
+    assert "no text content block" not in message
 
 
 def test_low_effort_requested_and_thinking_never_disabled():

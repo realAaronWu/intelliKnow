@@ -25,7 +25,7 @@ from typing import Any, Callable
 
 import openai
 
-from app.providers.base import LLMResult, ProviderError
+from app.providers.base import DEFAULT_MAX_TOKENS, LLMResult, ProviderError
 from app.providers.retry import with_retries
 from app.providers.schema_validation import (
     SchemaViolation,
@@ -64,7 +64,7 @@ class OpenAILLM:
         system: str,
         user: str,
         schema: dict | None = None,
-        max_tokens: int = 1024,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> LLMResult:
         return chat_complete(
             self._client,
@@ -117,7 +117,10 @@ def chat_complete(
 
     for attempt in range(1, schema_attempts + 1):
         response = with_retries(_call, max_retries=max_retries, sleep=sleep)
-        text = response.choices[0].message.content
+        # Before anything reads the body — see the equivalent call in
+        # `app/providers/anthropic_llm.py`.
+        _check_finish_reason(response)
+        text = _extract_text(response)
 
         if schema is None:
             break
@@ -140,6 +143,38 @@ def chat_complete(
         input_tokens=response.usage.prompt_tokens,
         output_tokens=response.usage.completion_tokens,
     )
+
+
+def _check_finish_reason(response: Any) -> None:
+    """Reject responses whose finish reason means the body is unusable.
+
+    `length` is the OpenAI spelling of Anthropic's `max_tokens` stop reason;
+    `refusal` / `content_filter` are its policy declines. Neither is
+    retryable — see `app/providers/anthropic_llm._check_stop_reason`.
+    """
+    choice = response.choices[0]
+    finish_reason = getattr(choice, "finish_reason", None)
+
+    if finish_reason == "length":
+        raise ProviderError.backend(
+            "response was truncated: the model stopped at the "
+            "max_completion_tokens budget before finishing, so the partial "
+            "text is not an answer"
+        )
+
+    refusal = getattr(getattr(choice, "message", None), "refusal", None)
+    if refusal or finish_reason == "content_filter":
+        detail = refusal or "content filtered"
+        raise ProviderError.backend(
+            f"the model refused to produce a response: {detail}"
+        )
+
+
+def _extract_text(response: Any) -> str:
+    text = response.choices[0].message.content
+    if text is None:
+        raise ProviderError.backend("response contained no message content")
+    return text
 
 
 def map_exception(exc: Exception) -> ProviderError:

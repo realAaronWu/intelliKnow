@@ -12,7 +12,7 @@ import hashlib
 import json
 from collections import deque
 
-from app.providers.base import LLMResult, ProviderError, normalize
+from app.providers.base import DEFAULT_MAX_TOKENS, LLMResult, ProviderError, normalize
 
 _FAKE_MODEL = "fake-llm-model"
 
@@ -62,7 +62,7 @@ class FakeLLMProvider:
         system: str,
         user: str,
         schema: dict | None = None,
-        max_tokens: int = 1024,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> LLMResult:
         self.calls.append(
             {

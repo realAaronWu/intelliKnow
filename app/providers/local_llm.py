@@ -17,7 +17,7 @@ from typing import Any, Callable, Mapping
 
 import openai
 
-from app.providers.base import LLMResult
+from app.providers.base import DEFAULT_MAX_TOKENS, LLMResult
 from app.providers.openai_llm import chat_complete
 
 _DEFAULT_BASE_URL = "http://localhost:11434/v1"
@@ -58,7 +58,7 @@ class LocalLLM:
         system: str,
         user: str,
         schema: dict | None = None,
-        max_tokens: int = 1024,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> LLMResult:
         return chat_complete(
             self._client,

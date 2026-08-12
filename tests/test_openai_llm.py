@@ -23,13 +23,20 @@ from app.providers.openai_llm import OpenAILLM
 
 
 class _StubMessage:
-    def __init__(self, content: str) -> None:
+    def __init__(self, content: str, refusal: str | None = None) -> None:
         self.content = content
+        self.refusal = refusal
 
 
 class _StubChoice:
-    def __init__(self, content: str) -> None:
-        self.message = _StubMessage(content)
+    def __init__(
+        self,
+        content: str,
+        finish_reason: str = "stop",
+        refusal: str | None = None,
+    ) -> None:
+        self.message = _StubMessage(content, refusal=refusal)
+        self.finish_reason = finish_reason
 
 
 class _StubUsage:
@@ -39,8 +46,16 @@ class _StubUsage:
 
 
 class _StubChatCompletion:
-    def __init__(self, text: str, model: str, prompt_tokens: int, completion_tokens: int) -> None:
-        self.choices = [_StubChoice(text)]
+    def __init__(
+        self,
+        text: str,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        finish_reason: str = "stop",
+        refusal: str | None = None,
+    ) -> None:
+        self.choices = [_StubChoice(text, finish_reason=finish_reason, refusal=refusal)]
         self.model = model
         self.usage = _StubUsage(prompt_tokens, completion_tokens)
 
@@ -299,3 +314,84 @@ def test_default_client_disables_sdk_level_retries():
     )
 
     assert llm._client.max_retries == 0
+
+
+def test_truncated_response_raises_backend_error_naming_truncation():
+    """`finish_reason == "length"` is the OpenAI spelling of "the token
+    budget ran out mid-generation" — the partial text must not be returned
+    as a normal result.
+    """
+    llm, client = _make_llm()
+    client.chat.completions.queue_response(
+        _StubChatCompletion(
+            "a partial ans",
+            "gpt-5",
+            prompt_tokens=1,
+            completion_tokens=4096,
+            finish_reason="length",
+        )
+    )
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u")
+
+    assert excinfo.value.category == "backend"
+    assert "truncat" in str(excinfo.value).lower()
+
+
+def test_truncation_detected_before_schema_parsing():
+    llm, client = _make_llm()
+    client.chat.completions.queue_response(
+        _StubChatCompletion(
+            '{"intent_slu',
+            "gpt-5",
+            prompt_tokens=1,
+            completion_tokens=4096,
+            finish_reason="length",
+        )
+    )
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u", schema=_INTENT_SCHEMA)
+
+    assert "truncat" in str(excinfo.value).lower()
+    assert len(client.chat.completions.calls) == 1
+
+
+def test_refusal_reported_as_a_refusal():
+    llm, client = _make_llm()
+    client.chat.completions.queue_response(
+        _StubChatCompletion(
+            None,
+            "gpt-5",
+            prompt_tokens=10,
+            completion_tokens=2,
+            finish_reason="stop",
+            refusal="I can't help with that.",
+        )
+    )
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u")
+
+    assert excinfo.value.category == "backend"
+    assert "refus" in str(excinfo.value).lower()
+
+
+def test_content_filter_reported_as_a_refusal():
+    llm, client = _make_llm()
+    client.chat.completions.queue_response(
+        _StubChatCompletion(
+            None,
+            "gpt-5",
+            prompt_tokens=10,
+            completion_tokens=0,
+            finish_reason="content_filter",
+        )
+    )
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u")
+
+    assert excinfo.value.category == "backend"
+    assert "refus" in str(excinfo.value).lower()
