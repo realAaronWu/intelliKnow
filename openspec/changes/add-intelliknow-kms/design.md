@@ -55,36 +55,42 @@ Greenfield project, empty repository, one developer. See `proposal.md` — Why f
 ║             ▼                                                  │     ║
 ║  ┌────────────────────────┐                                    │     ║
 ║  │   Query Orchestrator   │◄───────────────────────────────────┘     ║
-║  │  classify → threshold  │   (the ONLY admin→orchestrator path;     ║
-║  │  → space list          │    powers "Try a query" + channel test)  ║
+║  │ centroid → escalate?   │   (the ONLY admin→orchestrator path;     ║
+║  │ → threshold → spaces   │    powers "Try a query" + channel test)  ║
 ║  └───────────┬────────────┘                                          ║
 ║              │ spaces[]                                              ║
 ║              ▼                                                       ║
 ║  ╭────────────────────── RAG Engine ──────────────────────────────╮  ║
 ║  │                                                                │  ║
-║  │  READ PATH                          WRITE PATH                 │  ║
-║  │  ┌──────────────────┐               ┌────────────────────┐    │  ║
-║  │  │ HybridRetriever  │               │  DocumentLoader    │    │  ║
-║  │  │  ├ VectorSearch  │◄──┐        ┌─►│  (pdf/docx/xlsx)   │    │  ║
-║  │  │  ├ KeywordSearch │◄─┐│        │  └─────────┬──────────┘    │  ║
-║  │  │  └ RRF Fusion    │  ││        │            ▼               │  ║
-║  │  └────────┬─────────┘  ││        │  ┌────────────────────┐    │  ║
-║  │           ▼            ││        │  │ StructuralChunker  │    │  ║
-║  │  ┌──────────────────┐  ││        │  └─────────┬──────────┘    │  ║
-║  │  │ RelevanceGate    │  ││        │            ▼               │  ║
-║  │  └────────┬─────────┘  ││        │  ┌────────────────────┐    │  ║
-║  │           ▼            ││        └──┤     Embedder       │    │  ║
-║  │  ┌──────────────────┐  ││           └─────────┬──────────┘    │  ║
-║  │  │ ContextBuilder   │  ││                     ▼               │  ║
-║  │  └────────┬─────────┘  ││        ┌────────────────────────┐   │  ║
-║  │           ▼            ││        │      IndexWriter       │   │  ║
-║  │  ┌──────────────────┐  ││        └───┬────────────────┬───┘   │  ║
-║  │  │ AnswerGenerator  │  ││            │                │       │  ║
-║  │  └────────┬─────────┘  ││            ▼                ▼       │  ║
-║  │           ▼            │└──── FAISS (per space)   SQLite FTS5 │  ║
-║  │  ┌──────────────────┐  └───────────────────────────────┘      │  ║
-║  │  │ CitationVerifier │                                          │  ║
-║  │  └──────────────────┘                                          │  ║
+║  │  READ PATH                           WRITE PATH                │  ║
+║  │  ┌───────────────────┐               ┌───────────────────┐    │  ║
+║  │  │ HybridRetriever   │               │  DocumentLoader   │    │  ║
+║  │  │  ├ VectorSearch   │◄───┐          │  (pdf/docx/xlsx)  │    │  ║
+║  │  │  ├ KeywordSearch  │◄──┐│          └─────────┬─────────┘    │  ║
+║  │  │  └ RRF Fusion     │   ││                    ▼              │  ║
+║  │  └─────────┬─────────┘   ││          ┌───────────────────┐    │  ║
+║  │            ▼             ││          │ StructuralChunker │    │  ║
+║  │  ┌───────────────────┐   ││          └─────────┬─────────┘    │  ║
+║  │  │ CrossEncoder      │   ││                    ▼              │  ║
+║  │  │ Reranker  20 → 5  │   ││          ┌───────────────────┐    │  ║
+║  │  └─────────┬─────────┘   ││          │     Embedder      │    │  ║
+║  │            ▼             ││          └─────────┬─────────┘    │  ║
+║  │  ┌───────────────────┐   ││                    ▼              │  ║
+║  │  │ RelevanceGate     │   ││          ┌───────────────────┐    │  ║
+║  │  │ (rerank score)    │   ││          │    IndexWriter    │    │  ║
+║  │  └─────────┬─────────┘   ││          └──┬─────────────┬──┘    │  ║
+║  │            ▼             ││             │             │       │  ║
+║  │  ┌───────────────────┐   ││             ▼             ▼       │  ║
+║  │  │ ContextBuilder    │   │└──── FAISS (per space)  SQLite FTS5 │  ║
+║  │  └─────────┬─────────┘   └────────────────────────────┘       │  ║
+║  │            ▼                                                   │  ║
+║  │  ┌───────────────────┐                                        │  ║
+║  │  │ AnswerGenerator   │                                        │  ║
+║  │  └─────────┬─────────┘                                        │  ║
+║  │            ▼                                                   │  ║
+║  │  ┌───────────────────┐                                        │  ║
+║  │  │ CitationVerifier  │                                        │  ║
+║  │  └───────────────────┘                                        │  ║
 ║  ╰────────────────────────────────────────────────────────────────╯  ║
 ║                        │                    │                        ║
 ║              ┌─────────┴────────┐   ┌───────┴────────┐               ║
@@ -161,7 +167,9 @@ Three properties this makes visible:
 | Component | Owns | Must not |
 | --- | --- | --- |
 | **Channel Adapters** | Protocol specifics: polling/webhook, payload → `InboundMessage`, `OutboundAnswer` → channel formatting, delivery, typing indicators, per-channel status. | Know about intents, retrieval, or prompts. |
-| **Query Orchestrator** | Classify → threshold check → produce the space list → invoke the RAG read path → emit the log record. Only reader of the confidence threshold. | Perform retrieval or build answer prompts. |
+| **Query Orchestrator** | Centroid classify → escalate to the LLM if unsure → threshold check → produce the space list → invoke the RAG read path → emit the log record. Only reader of the confidence threshold. | Perform retrieval or build answer prompts. |
+| **CentroidIndex** | Building and caching one centroid vector per intent space from its name, description, and keywords; rebuilding on config change; scoring a query against all of them. | Decide the threshold or the escalation policy. |
+| **Reranker** | Cross-encoder scoring of the fused candidate pool, and supplying the gate's relevance signal. | Choose the candidate pool or decide the floor. |
 | **DocumentLoader** | Format detection and extraction into an ordered block list (heading / paragraph / table) with source references. | Chunk or embed. |
 | **StructuralChunker** | Packing blocks into overlapping chunks under the structural rules in § RAG write path. | Know about embeddings or storage. |
 | **Embedder** | Batching text → vectors via the provider layer; normalization. | Decide what gets embedded. |
@@ -232,65 +240,91 @@ Tables are rendered to markdown so that row/column structure survives into the c
 
 ```
 question ──┬─► Embedder ──► VectorSearch (top 20 per space)  ─┐
-           │                                                   ├─► RRF ─► top 5
+           │        │                                          ├─► RRF ─► top 20
+           │        └──► centroid classify (routing, ~0 ms)    │
+           │                                                   │
            └─► KeywordSearch — FTS5 BM25 (top 20, intent-filtered) ─┘
                                                                      │
-                            RelevanceGate ◄────────────────────────  ┘
+                      CrossEncoder rerank (20 → 5) ◄──────────────  ┘
+                                 │
+                                 ▼
+                          RelevanceGate  ── fail ──► no-match, 0 generation calls
                                  │ pass
                                  ▼
                           ContextBuilder ─► AnswerGenerator ─► CitationVerifier
 ```
 
+The query embedding does triple duty: it drives dense retrieval, it classifies against the centroids, and it costs one call.
+
 **1. Dual retrieval.** Dense vector search over the routed space indexes, and BM25 keyword search over `chunk_fts` filtered to the same spaces by SQL. Both return their top 20.
 
 **Why hybrid, and not pure vector.** This is the single most important RAG decision here. Embeddings are good at paraphrase and bad at rare exact tokens — and enterprise knowledge is full of exact tokens: "Band L4", "Form 16", "Section 4.2", "Policy HR-2019-03", a specific salary figure. A user asking "what does Band L4 pay" against a pure-vector system gets chunks that are semantically about compensation but not the row they asked for. BM25 matches that token exactly. Conversely BM25 fails on "how much time off do I get" → "annual leave entitlement", which embeddings handle. Running both and fusing covers both failure modes, and it directly serves the brief's HR-salary-grid scenario.
 
-**2. Reciprocal Rank Fusion.** `score(chunk) = Σ_lists 1 / (k + rank)`, with `k = 60`.
+**2. Reciprocal Rank Fusion.** `score(chunk) = Σ_lists 1 / (k + rank)`, with `k = 60`. Produces the top-20 candidate pool for reranking.
 
 RRF is used instead of a weighted score blend because cosine similarity and BM25 live on incomparable scales — cosine is bounded roughly 0–1, BM25 is unbounded and corpus-dependent — so any weighted sum needs normalization constants that must be re-tuned whenever the corpus changes. RRF only reads *rank*, so it needs no normalization and no tuning, and it is about five lines of code. Chunks found by both retrievers naturally rise to the top, which is the behavior we want.
 
-**3. RelevanceGate.** Compares the best **dense cosine score** — not the fused score — against `relevance_floor` (default 0.35). The fused score is rank-derived and unitless, so it cannot express "nothing here is actually relevant"; the raw cosine can. Below the floor the query returns no-match and **no generation call is made**. This is what stops a confident misroute from producing a fluent, wrong, fully-cited answer.
+**3. Reranker.** The fused top-20 are scored by the cross-encoder in one batch, and the top-5 by that score go forward. Unlike the bi-encoder, which embeds query and chunk independently, the cross-encoder reads them together — which is why it ranks better and why it costs more per pair.
 
-**4. ContextBuilder** takes the top 5 fused chunks and:
+**4. RelevanceGate.** Compares the best `sigmoid(cross-encoder score)` against `relevance_floor`. Not the fused score, which is rank-derived and unitless and so cannot express "nothing here is actually relevant". Below the floor the query returns no-match and **no generation call is made**. This is what stops a confident misroute from producing a fluent, wrong, fully-cited answer.
+
+**5. ContextBuilder** takes the reranked top 5 and:
 - drops near-duplicates (chunks from the same document with heavy overlap),
 - re-sorts them by document and ordinal so the model reads them in the order they were written rather than in score order,
 - caps total context at 6,000 characters,
 - tags each as `[S1] Employee Handbook — p. 4 — Leave Policy › Annual Leave`.
 
-**5. AnswerGenerator** builds a prompt with the grounding rules, the channel's formatting profile (§ Decision 8), the tagged context, and the question. It instructs the model to answer only from the supplied context, to cite with the `[S#]` markers, and to say so plainly when the context does not contain the answer.
+**6. AnswerGenerator** builds a prompt with the grounding rules, the channel's formatting profile (§ Decision 8), the tagged context, and the question. It instructs the model to answer only from the supplied context, to cite with the `[S#]` markers, and to say so plainly when the context does not contain the answer.
 
-**6. CitationVerifier** parses `[S#]` markers out of the answer, maps them back to the chunks that were actually supplied, drops any marker that does not resolve, and attaches the resulting document names and source references. A confident answer citing a document that was never retrieved is the main failure mode of a small RAG system, and this check costs no extra model call.
+**7. CitationVerifier** parses `[S#]` markers out of the answer, maps them back to the chunks that were actually supplied, drops any marker that does not resolve, and attaches the resulting document names and source references. A confident answer citing a document that was never retrieved is the main failure mode of a small RAG system, and this check costs no extra model call.
 
-### Reranking, and what the critical path is actually spending on
+### Reranking
 
-**Open decision — needs a call before plan 04 is executed.**
+**Decision: cross-encoder reranking, with routing moved off the LLM to pay for it.**
 
-The critical path carries two sequential model calls. What each buys is very different:
+The starting design had two sequential LLM calls on the critical path and no reranker. What each call bought was very different:
 
-| Call | Cost | Output | What it determines |
+| Stage | Cost | Output | What it determines |
 | --- | ---: | --- | --- |
-| Classification | ~900 ms | ~30 tokens | *Which index to search* |
+| LLM classification | ~900 ms | ~30 tokens | *Which index to search* |
 | Answer generation | ~1400 ms | the answer | What the user reads |
-| *(candidate)* Cross-encoder rerank | ~150–250 ms | 20 scores | *Which 5 chunks the answer is written from* |
+| Cross-encoder rerank | ~200 ms | 20 scores | *Which 5 chunks the answer is written from* |
 
-Classification is the expensive call per unit of value. It spends ~900 ms — dominated by time-to-first-token, not generation — to emit thirty tokens that pick a directory of vectors. Reranking would spend a fraction of that on the step that decides the factual content of the answer. Excluding a 200 ms reranker while paying 900 ms to route is not a coherent latency position.
+Classification was the expensive stage per unit of value — ~900 ms, dominated by time-to-first-token rather than generation, to emit thirty tokens that pick a directory of vectors. So the LLM comes off the common path and the reranker goes on, and the total gets *faster*, not slower.
 
-Two further points argue for a reranker specifically here:
+**Why a reranker earns its place here specifically:**
 
-- **Corpus size is now in the range where it pays.** 32 documents, several hundred pages, ~5,000 chunks, with cross-space confusables deliberately included (IRS payroll tables under Finance, GitLab compensation under HR). Bi-encoder cosine makes exactly the ranking mistakes in that band that a cross-encoder corrects. At three documents it would have been pointless; at this size it is not.
-- **It would improve the relevance gate, which is the safety-critical component.** The gate currently reads bi-encoder cosine, chosen because it is the only absolute-scale signal available. A cross-encoder relevance score is a materially better-calibrated answer to "is this chunk actually relevant to this question" — which is precisely what the gate is asking. Adding a reranker would let the gate read the better signal.
+- **The corpus is in the band where it pays.** ~32 documents, several hundred pages, ~5,000 chunks, with cross-space confusables deliberately planted (IRS payroll tables under Finance, GitLab compensation under HR). Bi-encoder cosine makes exactly the ranking errors in that band that a cross-encoder corrects. At three documents it would have been pointless.
+- **It upgrades the relevance gate, which is the safety-critical component.** The gate previously read bi-encoder cosine only because that was the sole absolute-scale signal available — the fused RRF score is rank-derived and unitless. A cross-encoder score is a far better-calibrated answer to "is this chunk actually relevant to this question", which is exactly what the gate asks. Since the gate is what stops a fluent wrong answer, improving its input matters more than the ranking gain.
 
-**Options:**
+**Reranker:** `cross-encoder/ms-marco-MiniLM-L-6-v2` (22M params, ~90 MB), scoring the fused top-20 in one batch, passing the top-5 to the context builder and its own score to the gate.
 
-| | Change | Classify | Rerank | Total | Trade |
-| --- | --- | ---: | ---: | ---: | --- |
-| **A** | Cheap routing + reranker: replace LLM classification with embedding-centroid + keyword scoring, escalating to the LLM only when the top-2 margin is narrow | ~5 ms | ~200 ms | **~1.9 s** | Fastest and best-ranked, but redesigns the orchestrator and loses the classifier's `reasoning` string that the classification log shows. Cold start solved by seeding centroids from each space's description + keywords rather than its documents. |
-| **B** | Keep LLM classification on a faster model, add reranker | ~350 ms | ~200 ms | **~2.3 s** | One new component, one config change. Keeps `reasoning`, keeps keywords feeding the prompt as the brief describes. |
-| **C** | Status quo, no reranker | ~900 ms | — | ~2.6 s | Simplest; leaves ranking precision on the table and the gate on the weaker signal. |
+### Classification without an LLM on the common path
 
-**Recommendation: B.** It buys the ranking and gate improvements for less total latency than the status quo, adds one component rather than restructuring the orchestrator, and preserves the classifier reasoning that makes the classification log diagnostic. A is the better end state and is recorded as the upgrade path; it is not the right thing to attempt inside a 7-day build alongside everything else.
+Each intent space gets a **centroid**: the embedding of its name, description, and keywords concatenated. Classification compares the query embedding — already computed for retrieval, so free — against every centroid, and turns the similarities into a probability distribution with a temperature-scaled softmax. Confidence is the top probability, which is directly comparable to the 0.70 threshold and is a real distribution rather than a model's self-report.
 
-If B is adopted: the reranker is `cross-encoder/ms-marco-MiniLM-L-6-v2` (22M params, ~90 MB), scoring the fused top-20 in one batch, feeding the top-5 to the context builder, and supplying the gate's relevance score in place of dense cosine.
+```
+embed(query)  ──► cosine vs each centroid ──► softmax(sims / T) ──► p_top
+    (already computed, ~0 ms)
+
+p_top ≥ threshold  ──► use that space, method = "centroid"     (the common path)
+p_top <  threshold ──► LLM classification, method = "llm"      (the minority)
+                       └─ apply the threshold to the LLM's confidence,
+                          fall back to General if it is also unsure
+```
+
+**Cold start is solved by construction.** Centroids come from admin-authored text, not from documents, so classification works on a fresh install with an empty knowledge base — which is exactly when a document-derived centroid would have nothing to average.
+
+**Keywords become more load-bearing, not less.** Editing a space's keywords moves its centroid immediately, and also feeds the escalation prompt. The admin tuning loop — edit keywords, re-ask via "Try a query", watch the confidence move — gets shorter and more direct than it was when keywords only influenced a prompt.
+
+**What is lost:** the classifier's `reasoning` string on fast-path queries. The query log therefore records `classified_by` as `centroid` or `llm`, and `reasoning` is populated only on the escalation path. This is more informative than before — an admin can see *which* mechanism routed each query, not just what it decided.
+
+**What this costs, stated plainly.** Approach A introduces two numbers that are meaningless until calibrated against real data:
+
+- the softmax **temperature**, which controls how sharply similarities become probabilities and therefore what "0.70 confidence" means at all;
+- the **relevance floor**, which now applies to `sigmoid(cross-encoder score)` rather than to cosine, a different scale entirely — the previous 0.35 does not carry over.
+
+Both ship with starting values that are guesses. Calibrating them against the golden question set is a first-class task in plan 04, not a tuning afterthought, and the L3 gates cannot be trusted before it runs.
 
 ## Configuration
 
@@ -316,13 +350,17 @@ rag:
   vector_top_n: 20
   keyword_top_n: 20
   rrf_k: 60
-  final_top_k: 5
+  rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2
+  rerank_candidates: 20            # fused pool fed to the cross-encoder
+  final_top_k: 5                   # kept after reranking
   max_context_chars: 6000
-  relevance_floor: 0.35
+  relevance_floor: 0.45            # on sigmoid(cross-encoder score) — CALIBRATE, see below
 
 orchestrator:
   confidence_threshold: 0.70
   fallback_space: general
+  centroid_temperature: 0.05       # softmax over centroid similarities — CALIBRATE
+  escalate_to_llm: true            # call the LLM when centroid confidence < threshold
 
 intent_spaces:
   - slug: hr
@@ -404,8 +442,8 @@ chunk(id, document_id → document, intent_slug, ordinal, text,
 chunk_fts(rowid → chunk.id, text)            -- FTS5 virtual table, BM25
 
 query_log(id, created_at, channel, user_ref, question, intent_slug,
-          confidence, fallback_used, status, answer, citations_json,
-          retrieved_doc_ids_json, latency_ms, error)
+          confidence, classified_by, reasoning, fallback_used, status,
+          answer, citations_json, retrieved_doc_ids_json, latency_ms, error)
 
 integration(channel PK, display_name, enabled, credentials_encrypted,
             status, last_ok_at, last_error, updated_at)
@@ -415,7 +453,7 @@ integration(channel PK, display_name, enabled, credentials_encrypted,
 
 Alongside the FAISS directory sits `data/index_meta.json`, holding the embedding model name and dimension recorded at first ingest. It is a file rather than a table because it belongs to the index, not to the relational data — deleting `data/` resets both together.
 
-`status` is `success | no_match | failed` and is what the log's Status column renders. `retrieved_doc_ids_json` carries which documents answered the query — a JSON list rather than a join table, which is enough to rank most-accessed documents at MVP volumes and keeps the history readable as a single row per query. `document.sha256` deduplicates re-uploads. `ON DELETE CASCADE` from `document` to `chunk`; `query_log` holds no foreign key to `document`, so deleting a document does not erase the history of it having been used.
+`classified_by` is `centroid | llm`, and `reasoning` is populated only on the escalation path. `status` is `success | no_match | failed` and is what the log's Status column renders. `retrieved_doc_ids_json` carries which documents answered the query — a JSON list rather than a join table, which is enough to rank most-accessed documents at MVP volumes and keeps the history readable as a single row per query. `document.sha256` deduplicates re-uploads. `ON DELETE CASCADE` from `document` to `chunk`; `query_log` holds no foreign key to `document`, so deleting a document does not erase the history of it having been used.
 
 ## Request flows
 
@@ -460,17 +498,24 @@ A FastAPI `BackgroundTask`, not a queue — a single-process MVP needs no broker
 
 Target ≤ 3s. Concurrency per § Request flows.
 
-| Stage | Default (`claude-opus-5` both) | With `claude-haiku-4-5` classify |
+| Stage | Fast path (centroid routes) | Escalated (LLM routes) |
 | --- | --- | --- |
 | Inbound handling | ~30 ms | ~30 ms |
-| Classify ‖ embed | ~900 ms | ~350 ms |
+| Embed query | ~30 ms | ~30 ms |
+| Centroid classify | <1 ms | <1 ms |
+| LLM classification | — | ~350 ms (`claude-haiku-4-5`) |
 | Vector ‖ BM25 search + RRF | ~30 ms | ~30 ms |
+| Cross-encoder rerank (20 pairs) | ~200 ms | ~200 ms |
 | Context build | ~5 ms | ~5 ms |
 | Answer generation | ~1400 ms | ~1400 ms |
 | Format + deliver | ~250 ms | ~250 ms |
-| **Total** | **~2.6 s** | **~2.05 s** |
+| **Total** | **~1.95 s** | **~2.3 s** |
 
-The default meets the budget with ~400 ms of headroom, which is thin. Two mitigations are specified rather than assumed: the typing indicator goes out before any model call, and `model_classify` is independently configurable — classification emits ~30 tokens and needs far less capability than answer synthesis, so it is the call to make cheap. The channel test reports measured latency so this table can be verified on real hardware instead of trusted.
+The fast path carries roughly a second of headroom against the 3 s target, and it is the path most queries take — escalation fires only when centroid confidence falls below the threshold. The escalated path still fits, provided `model_classify` is a fast model; on `claude-opus-5` it lands near ~2.85 s, which fits but leaves almost nothing. `.env.example` and `config.yaml` therefore recommend `claude-haiku-4-5` for `model_classify`, since escalation emits ~30 tokens and needs far less capability than answer synthesis.
+
+The typing indicator goes out before any model call, and the channel test reports measured latency, so this table is verifiable on real hardware rather than trusted.
+
+**One number to watch during calibration.** Lowering `centroid_temperature` sharpens the softmax and raises confidence, which pushes more queries onto the fast path — faster, but more of them routed without an LLM second opinion. Raising it does the reverse. Temperature is therefore a latency knob and an accuracy knob at once, and it must be tuned against the golden set rather than by feel.
 
 ## Security
 
@@ -501,7 +546,7 @@ Explicitly not done: admin API tokens, rate limiting, prompt-injection hardening
 4. **Hard filter with General fallback.** Above threshold → search that space only; below threshold or classified General → search all. Rejected soft re-ranking over a global search: more forgiving of misclassification, but it makes routing cosmetic and undemonstrable, and goal 3 is explicitly about routing.
 5. **One intent space per document, admin-overridable.** The LLM suggests at upload from space descriptions plus the first 2000 characters; reassignment moves vectors without re-parsing. Rejected per-chunk intent — more accurate for genuinely mixed documents, but it costs an LLM call per chunk and gives the admin no practical way to correct it. Known limitation: a mixed handbook must pick one space; the workaround is splitting the file, documented in the README.
 6. **Embedding model pinned once documents exist.** Vectors from different models are not comparable, and cross-index score comparison depends on one shared model. The model name and dimension are recorded on first ingest; a mismatch fails startup with an error naming both models. Recovery is an explicit re-index.
-7. **LLM structured-output classification** returning `{intent_slug, confidence, reasoning}`, prompted with each space's config description. Rejected embedding-centroid classification — better calibrated numerically, but weak on short queries and it needs enough documents per space to form a centroid, which a fresh install lacks. Trade-off stated plainly: LLM self-reported confidence is not a calibrated probability, so 0.70 is a tunable heuristic — which is why it is in `config.yaml` and why the history view shows every confidence score.
+7. **Embedding-centroid classification with LLM escalation.** See § Classification without an LLM on the common path. Centroids are built from admin-authored name + description + keywords, so classification works on an empty knowledge base; confidence is a temperature-scaled softmax over centroid similarities, which is a real distribution rather than a model's self-report. The LLM is consulted only when that confidence falls below the threshold. Rejected pure LLM classification: ~900 ms of time-to-first-token on the common path to emit thirty tokens that pick a directory. Rejected pure centroid with no escalation: short or oddly-phrased queries are exactly where a bi-encoder is weakest, and those are the queries worth spending a model call on.
 8. **Channel-aware generation plus deterministic enforcement.** The prompt carries the channel's length limit and markup flavor so the model writes to fit; the adapter then escapes and hard-truncates at a word boundary. Both, because prompt-only makes a hard protocol limit probabilistic.
 9. **Telegram long-polling by default.** No inbound URL, no tunnel, no webhook registration to go stale. Webhook mode is available in config for anyone who wants it. Teams has no equivalent — Bot Framework needs a reachable endpoint, which the Emulator provides locally.
 10. **`config.yaml` is the single source of truth**, including intent spaces. No settings table. Console edits write the file back and reload in place.
@@ -518,7 +563,9 @@ Explicitly not done: admin API tokens, rate limiting, prompt-injection hardening
 | Hard filtering turns a misclassification into a no-match | The relevance gate catches weak retrieval; the General fallback catches low confidence; the history table makes misroutes visible. |
 | Two sequential LLM calls threaten the 3s budget | Classify ‖ embed overlap; independently configurable classify model; typing indicator for perceived latency; channel test reports measured latency. |
 | Hybrid retrieval doubles the moving parts in the read path | Each retriever is independently testable, and RRF is parameter-free. If BM25 proves useless on the sample corpus, `keyword_top_n: 0` disables it without a code change. |
-| Without a reranker, ranking precision is capped and the gate reads the weaker signal | Open decision in § Reranking — recommendation is to add one, which costs less total latency than the status quo. |
+| Temperature and relevance floor ship as guesses on new scales | Calibration against the golden question set is an explicit task in plan 04, gating the L3 run. Until it completes, no accuracy figure is trustworthy. |
+| Centroid routing is weaker than an LLM on short or oddly-phrased queries | Escalation catches exactly those — they are the ones falling below threshold. If escalation rate is high after calibration, raise the temperature or improve space descriptions. |
+| Reranker adds a third local model (~90 MB) | Loaded once at startup; batched scoring of 20 pairs is ~200 ms, offset by removing ~900 ms of LLM routing. |
 | `faiss-cpu` wheels are architecture-sensitive (Apple Silicon) | Pin a known-good version; a smoke test asserts an index round-trips at startup; sqlite-vec is the recorded fallback. |
 | Teams against a real tenant needs Azure Bot registration the developer may not have | Develop and demo against the Bot Framework Emulator, which needs no tenant. Azure is an optional deployment step, verified early (task 1.2) so it never blocks the build. |
 | Streamlit reruns on every interaction, making upload and polling awkward | Console is a thin API client with no local state; uploads return immediately and status is polled, so a rerun mid-ingest costs nothing. |
@@ -542,6 +589,6 @@ Rollback: stop both processes. Deleting `data/` resets all state.
 
 ## Open Questions
 
-**Blocking plan 04: reranking (§ Reranking).** Options A / B / C with a recommendation of B. This changes `spec: knowledge-retrieval` — a new reranking requirement, and the relevance gate reading the cross-encoder score instead of dense cosine — so it must be settled before plan 04 is executed. Plans 01–03 are unaffected either way.
+None blocking. Reranking and centroid routing are decided (§ Reranking, § Classification without an LLM on the common path); the two calibration values they introduce are handled as a plan-04 task rather than left open.
 
-Not blocking: the embedding-model choice is resolved in § RAG write path (`all-MiniLM-L6-v2`, with the swap documented).
+The embedding-model choice is resolved in § RAG write path (`all-MiniLM-L6-v2`, with the swap documented).

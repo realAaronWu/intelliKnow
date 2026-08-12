@@ -6,15 +6,15 @@
 
 **Goal:** Answer a question — classify it into an intent space, retrieve from that space with hybrid search, and generate a grounded, cited answer or an honest no-match.
 
-**Architecture:** The orchestrator classifies and decides *which* spaces to search, then hands an explicit space list to retrieval, which never makes that decision itself. Retrieval runs dense and keyword search in parallel and fuses the rankings by reciprocal rank. A relevance gate decides whether to answer at all. Context assembly, generation, and citation verification follow.
+**Architecture:** The orchestrator classifies against per-space centroids using the query embedding it already needs for retrieval, escalating to an LLM only when confidence is low, then hands an explicit space list to retrieval. Retrieval runs dense and keyword search, fuses by reciprocal rank, and reranks the pool with a cross-encoder. A relevance gate reading the reranker score decides whether to answer at all. Context assembly, generation, and citation verification follow.
 
-**Tech Stack:** `faiss-cpu`, SQLite FTS5, the plan-01 provider layer, FastAPI
+**Tech Stack:** `faiss-cpu`, SQLite FTS5, `sentence-transformers` (CrossEncoder), the plan-01 provider layer, FastAPI
 
 ## Global Constraints
 
 - All parameters from `config.yaml`.
 - Retrieval never chooses spaces; the orchestrator supplies them.
-- The relevance gate reads the **dense cosine similarity**, never the fused score.
+- The relevance gate reads the **normalized cross-encoder score**, never the fused score.
 - No answer is generated when the gate rejects — zero generation calls on the no-match path.
 - Classification failure degrades to fallback, never to a user-visible error.
 - L1 uses the fakes; L2 uses real FAISS/FTS5/embeddings with a fake LLM.
@@ -66,8 +66,26 @@
 - Score is the sum over lists of `1 / (k + rank)`.
 - A chunk present in both lists outranks an equally-ranked chunk present in one.
 - **No score normalization anywhere.** Cosine and BM25 live on incomparable scales; any weighted blend needs corpus-specific constants that must be retuned whenever the corpus changes. Rank-only fusion needs none.
-- `dense_score` is carried through unchanged, because the relevance gate needs it and the fused score cannot supply it.
+- `dense_score` is carried through unchanged for diagnostics; the gate reads the reranker score, not this one.
 - Deterministic: identical inputs give identical output, including tie ordering.
+
+- [ ] Write failing tests · [ ] Confirm fail · [ ] Implement · [ ] Confirm green · [ ] Commit
+
+---
+
+### Task 3a: Cross-encoder reranker
+
+**Files:** Create `app/rag/retrieve/rerank.py` · Test `tests/test_rerank.py`
+
+**Interfaces:**
+- Produces: `Reranker(model_name: str)` with `score(question: str, chunks: list[str]) -> list[float]`; `rerank(question, hits, engine, top_k) -> list[RankedHit]` where `RankedHit` extends `FusedHit` with `rerank_score: float` and `relevance: float` (the score normalized to 0–1).
+
+**Behaviour:**
+- Scores the whole candidate pool in one batch; the model loads once at startup, not per query.
+- Reordering is real — a lower-fused candidate scoring higher must move up.
+- Fewer candidates than the pool size is not an error.
+- `relevance` is the normalized score the gate consumes; the raw score is retained for diagnostics.
+- Model name and pool size come from config.
 
 - [ ] Write failing tests · [ ] Confirm fail · [ ] Implement · [ ] Confirm green · [ ] Commit
 
@@ -78,12 +96,11 @@
 **Files:** Create `app/rag/retrieve/gate.py` · Test `tests/test_relevance_gate.py`
 
 **Interfaces:**
-- Produces: `passes_gate(hits: list[FusedHit], floor: float) -> bool`
+- Produces: `passes_gate(hits: list[RankedHit], floor: float) -> bool`
 
 **Behaviour:**
-- Compares the **best dense cosine score** against the floor.
-- **Must not use the fused score.** The fused score is rank-derived and unitless — it cannot express "nothing here is actually relevant", so gating on it would let a top-ranked-but-irrelevant chunk through. Construct the adversarial case explicitly: high fused rank, sub-floor cosine, and assert rejection.
-- Hits with no dense score (keyword-only) do not satisfy the gate on their own.
+- Compares the **best normalized reranker score** against the floor.
+- **Must not use the fused score.** The fused score is rank-derived and unitless — it cannot express "nothing here is actually relevant", so gating on it would let a top-ranked-but-irrelevant chunk through. Construct the adversarial case explicitly: high fused rank, sub-floor reranker score, and assert rejection.
 - Empty hits fail the gate.
 
 This one function is what stops a confident misroute from producing a fluent, wrong, fully-cited answer. Test it accordingly.
@@ -161,12 +178,30 @@ This one function is what stops a confident misroute from producing a fluent, wr
 
 ---
 
+### Task 8a: Centroid index
+
+**Files:** Create `app/orchestrator/centroids.py` · Test `tests/test_centroids.py`
+
+**Interfaces:**
+- Produces: `CentroidIndex(embedder, cfg)` with `rebuild()`, `score(query_vector) -> dict[str, float]` (slug → probability), `top(query_vector) -> tuple[str, float]`.
+
+**Behaviour:**
+- One centroid per space, embedded from name + description + keywords joined.
+- Works with an empty knowledge base — centroids come from admin text, not documents.
+- Rebuilt when space configuration changes; a keyword edit moves the centroid with no restart and no re-indexing.
+- Similarities become probabilities via a temperature-scaled softmax; they sum to 1.
+- Lower temperature sharpens the distribution and raises top confidence.
+
+- [ ] Write failing tests · [ ] Confirm fail · [ ] Implement · [ ] Confirm green · [ ] Commit
+
+---
+
 ### Task 9: Intent classification
 
 **Files:** Create `app/orchestrator/classify.py` · Test `tests/test_classify.py`
 
 **Interfaces:**
-- Produces: `classify(question: str, cfg: AppConfig, llm) -> Classification` with `Classification(intent_slug, confidence: float, reasoning: str, failed: bool)`.
+- Produces: `classify(question, query_vector, cfg, centroids, llm) -> Classification` with `Classification(intent_slug, confidence: float, classified_by: Literal["centroid","llm"], reasoning: str | None, failed: bool)`.
 
 **Behaviour:**
 - One structured-output call returning slug, confidence, and reasoning.
@@ -211,12 +246,27 @@ The exact-equality row is the boundary case most likely to be implemented wrong;
 - Produces: `answer_question(question, channel: ChannelProfile, deps) -> QueryOutcome` with `answer, citations, intent_slug, confidence, fallback_used, status, retrieved_doc_ids, latency_ms, error`.
 
 **Behaviour:**
-- **Classification and query embedding run concurrently** — the embedding does not depend on the classification, only the index selection does. Assert measured elapsed time is materially below the sum of two stubbed latencies; a sequential implementation fails this.
+- **One embedding call serves both classification and retrieval.** Assert the fake embedder is called exactly once per query.
 - Gate rejection produces `status="no_match"` with **zero generation calls**, and a message naming the searched domain.
 - Generation failure produces `status="failed"` and a user-facing message.
 - Success produces `status="success"` with verified citations and retrieved document ids.
 
 - [ ] Write failing tests · [ ] Confirm fail · [ ] Implement · [ ] Confirm green · [ ] Commit
+
+---
+
+### Task 11a: Calibration
+
+**Files:** Create `scripts/calibrate.py` · Output: updated `config.yaml` plus a recorded report
+
+**Behaviour:**
+- Sweep `centroid_temperature` over a range against the golden question set; report classification accuracy, escalation rate, and fast-path share at each value.
+- Sweep `relevance_floor` against the negative question set; report the no-match rate on negatives and the false-no-match rate on unambiguous questions.
+- Choose values, write them to config, and record the sweep as evidence.
+
+**Why this is a task and not tuning.** Both numbers ship as guesses on scales that did not exist before this increment — temperature governs what "0.70 confidence" even means, and the floor now applies to a normalized cross-encoder score rather than cosine, so the old 0.35 does not carry over. **The L3 gates cannot be trusted until this runs.**
+
+- [ ] Run the temperature sweep · [ ] Run the floor sweep · [ ] Write values and evidence · [ ] Commit
 
 ---
 

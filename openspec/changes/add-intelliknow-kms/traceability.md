@@ -70,7 +70,7 @@ Every clause of the source document is listed below with where it is covered. `s
 | Semantic search | spec: knowledge-retrieval — Dense vector retrieval (+ keyword retrieval and fusion) |
 | Basic error handling | spec: document-ingestion — Ingestion error handling |
 | **Orchestrator** — 3 default spaces (HR, Legal, Finance) + custom add/edit/delete | spec: intent-management — 5 defaults incl. Operations and General; custom CRUD |
-| AI-powered classification, ≥70% configurable confidence | spec: query-orchestration; spec: intent-management — threshold default 0.70 |
+| AI-powered classification, ≥70% configurable confidence | spec: query-orchestration — embedding-centroid classification with softmax confidence, escalating to an LLM below threshold; spec: intent-management — threshold default 0.70. Confidence is a real probability distribution rather than a model self-report. |
 | Fallback to "General" space | spec: query-orchestration — General fallback |
 | Admin-guided accuracy improvement | spec: intent-management — Classification keywords; design § Decision 13 |
 | Route queries to relevant KB domains post-classification | spec: query-orchestration — Routing hand-off |

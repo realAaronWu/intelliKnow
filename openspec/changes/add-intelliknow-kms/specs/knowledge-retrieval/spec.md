@@ -67,20 +67,45 @@ The system SHALL combine the dense and keyword rankings using reciprocal rank fu
 - **WHEN** fusion completes
 - **THEN** the configured number of top chunks is passed forward
 
+### Requirement: Cross-encoder reranking
+
+The system SHALL score the fused candidate pool with a cross-encoder reranker in a single batch, SHALL order candidates by that score, and SHALL pass the configured final number forward.
+
+#### Scenario: Candidates reranked
+
+- **WHEN** fusion produces the configured candidate pool
+- **THEN** every candidate is scored by the cross-encoder
+- **AND** the top scoring candidates are passed forward in reranked order
+
+#### Scenario: Reranking can reorder fusion output
+
+- **WHEN** the cross-encoder scores a lower-fused candidate higher
+- **THEN** that candidate appears earlier in the final ordering
+
+#### Scenario: Reranker model is configurable
+
+- **WHEN** an operator changes the reranker model or candidate count in configuration
+- **THEN** subsequent queries use the new values without a restart
+
+#### Scenario: Fewer candidates than the pool size
+
+- **WHEN** fusion returns fewer candidates than the configured pool size
+- **THEN** all available candidates are reranked without error
+
 ### Requirement: Relevance gate
 
-The system SHALL compare the highest dense similarity score among retrieved chunks against the configured relevance floor, and SHALL return a no-match result without making an answer generation call when it falls below.
+The system SHALL compare the highest reranker relevance score, normalized to the range 0 to 1, against the configured relevance floor, and SHALL return a no-match result without making an answer generation call when it falls below.
 
 #### Scenario: Best result below the floor
 
-- **WHEN** the highest dense similarity is below the relevance floor
+- **WHEN** the highest normalized reranker score is below the relevance floor
 - **THEN** no answer generation call is made
 - **AND** a no-match result is returned
 
-#### Scenario: Gate uses the similarity score, not the fused score
+#### Scenario: Gate uses the reranker score, not the fused score
 
 - **WHEN** the relevance gate evaluates a query
-- **THEN** it uses the dense cosine similarity
+- **THEN** it uses the normalized cross-encoder relevance score
 - **AND** it does not use the rank-derived fused score, which carries no notion of absolute relevance
 
 #### Scenario: Gate is independent of classification confidence
@@ -96,7 +121,7 @@ The system SHALL compare the highest dense similarity score among retrieved chun
 
 ### Requirement: Context assembly
 
-The system SHALL build the generation context from the selected chunks by removing near-duplicates, ordering them by source document and position rather than by score, tagging each with a citation marker and its provenance, and enforcing a configured total character budget.
+The system SHALL build the generation context from the reranked chunks by removing near-duplicates, ordering them by source document and position rather than by score, tagging each with a citation marker and its provenance, and enforcing a configured total character budget.
 
 #### Scenario: Near-duplicates removed
 
@@ -194,7 +219,7 @@ The system SHALL pass the destination channel's formatting profile — maximum l
 
 ### Requirement: Retrieval parameters are configuration-driven
 
-The system SHALL read the dense result count, keyword result count, fusion constant, final chunk count, context character budget, and relevance floor from configuration, and SHALL apply changes to subsequent queries without a restart.
+The system SHALL read the dense result count, keyword result count, fusion constant, reranker model, candidate pool size, final chunk count, context character budget, and relevance floor from configuration, and SHALL apply changes to subsequent queries without a restart.
 
 #### Scenario: Retrieval tuning without code changes
 

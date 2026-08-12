@@ -44,15 +44,19 @@ Ordered as a 7-day solo plan per the brief's timeline constraint. Each day ends 
 
 - [ ] 4.1 Implement dense retrieval across the supplied space indexes with per-space top-N and score-ordered merge
 - [ ] 4.2 Implement BM25 keyword retrieval over `chunk_fts` filtered to the same spaces, disabled cleanly when the configured count is zero
-- [ ] 4.3 Implement reciprocal rank fusion with the configured constant and final top-K selection
-- [ ] 4.4 Implement the relevance gate on best dense cosine, returning no-match with no generation call
+- [ ] 4.3 Implement reciprocal rank fusion with the configured constant, producing the reranker candidate pool
+- [ ] 4.3a Implement the cross-encoder reranker over the candidate pool, keeping the configured final top-K
+- [ ] 4.4 Implement the relevance gate on the normalized reranker score, returning no-match with no generation call
 - [ ] 4.5 Implement `ContextBuilder`: near-duplicate removal, document-and-ordinal ordering, `[S#]` tagging with title/source ref/heading path, character budget enforcement
 - [ ] 4.6 Implement `AnswerGenerator` with grounding rules, channel formatting profile, and citation instructions
 - [ ] 4.7 Implement `CitationVerifier` resolving `[S#]` markers to supplied chunks and dropping unresolvable ones
 - [ ] 4.8 Implement the no-match response naming the searched domain, and generation-failure handling
-- [ ] 4.9 Implement classification with the structured schema, prompt built from live space names, descriptions, and keywords
+- [ ] 4.9 Implement the centroid index: one centroid per space from name+description+keywords, rebuilt on config change
+- [ ] 4.9a Implement centroid classification with temperature-scaled softmax confidence
+- [ ] 4.9b Implement LLM escalation below threshold, with the structured schema and a prompt built from live space names, descriptions, and keywords
 - [ ] 4.10 Implement threshold enforcement, General-means-all-spaces, unknown-slug handling, and classification failure/timeout fallback
-- [ ] 4.11 Run classification and query embedding concurrently
+- [ ] 4.11 Reuse the query embedding for both centroid classification and dense retrieval
+- [ ] 4.11a **Calibrate `centroid_temperature` and `relevance_floor` against the golden question set** and record the chosen values with the evidence
 - [ ] 4.12 Implement the `POST /admin/test-query` operation returning intent, confidence, answer, sources, and latency without any channel
 - [ ] 4.13 Test the read path: single-space isolation, hybrid finding an exact token dense search misses, below-floor no-match, citation verification dropping an unretrieved document, empty knowledge base
 - [ ] 4.14 Test routing: above threshold, below threshold, exactly at threshold, General-classified, unknown slug, provider failure

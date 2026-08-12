@@ -27,12 +27,12 @@ The system SHALL declare intent spaces in the configuration file, each with a sl
 
 ### Requirement: Classification keywords
 
-The system SHALL store a list of admin-editable keywords on each intent space and SHALL include them in the classification prompt, so that an admin can improve classification accuracy without changing code.
+The system SHALL store a list of admin-editable keywords on each intent space and SHALL use them in classification, so that an admin can improve classification accuracy without changing code.
 
 #### Scenario: Keywords supplied to the classifier
 
 - **WHEN** a query is classified
-- **THEN** the prompt includes each space's keywords alongside its name and description
+- **THEN** the space's keywords contribute to its centroid alongside its name and description
 
 #### Scenario: Editing keywords changes routing
 
@@ -124,6 +124,21 @@ The system SHALL report a classification accuracy rate for each intent space, co
 
 - **WHEN** a space has had no queries classified into it
 - **THEN** the accuracy rate is shown as not yet available rather than as zero
+
+### Requirement: Keywords drive both centroid and prompt
+
+The system SHALL use each intent space's keywords both in computing its classification centroid and in the escalation prompt, so that a keyword edit changes routing behaviour immediately.
+
+#### Scenario: Keyword edit moves the centroid
+
+- **WHEN** an admin edits a space's keywords and saves
+- **THEN** that space's centroid is recomputed
+- **AND** the next query is scored against the updated centroid with no restart and no re-indexing
+
+#### Scenario: Keyword edit reaches the escalation prompt
+
+- **WHEN** an escalation call is made after a keyword edit
+- **THEN** the prompt contains the updated keywords
 
 ### Requirement: Per-space vector index lifecycle
 

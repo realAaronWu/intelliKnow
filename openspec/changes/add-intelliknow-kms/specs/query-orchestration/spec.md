@@ -4,36 +4,89 @@ Decides which knowledge domain answers each incoming question by classifying it 
 
 ## ADDED Requirements
 
-### Requirement: AI-powered intent classification
+### Requirement: Intent space centroids
 
-The system SHALL classify every inbound question into exactly one configured intent space using the LLM provider with a structured output schema returning an intent slug, a confidence value between 0.0 and 1.0, and a short reasoning string.
+The system SHALL maintain one centroid vector per intent space, computed by embedding that space's name, description, and keywords, and SHALL rebuild a centroid whenever its space's configuration changes.
 
-#### Scenario: Question classified into a space
+#### Scenario: Centroids available on an empty knowledge base
 
-- **WHEN** a user asks "how many vacation days do I get after 3 years"
-- **THEN** the classifier returns an intent slug, a confidence value, and a reasoning string
-- **AND** the slug names one of the currently configured intent spaces
+- **WHEN** the service starts with intent spaces configured and no documents indexed
+- **THEN** every space has a centroid
+- **AND** classification functions
 
-#### Scenario: Model returns an unknown slug
+#### Scenario: Editing keywords rebuilds the centroid
 
-- **WHEN** the classifier returns a slug that matches no configured intent space
-- **THEN** the query is treated as below threshold and routed to the General fallback
-- **AND** the anomaly is recorded in the query log
+- **WHEN** an admin adds a keyword to a space and saves
+- **THEN** that space's centroid is recomputed
+- **AND** the next query is classified against the updated centroid without a restart
 
-### Requirement: Classification prompt built from intent space configuration
+#### Scenario: Adding a space adds a centroid
 
-The system SHALL build the classification prompt from each intent space's name, description, and classification keywords as currently configured, so that admin edits change routing behaviour without a restart.
+- **WHEN** a new intent space is created
+- **THEN** a centroid is computed for it and it becomes a classification target
 
-#### Scenario: Descriptions and keywords supplied
+#### Scenario: Centroids use the configured embedding model
 
-- **WHEN** classification runs
-- **THEN** the prompt includes every intent space's name, description, and keywords
+- **WHEN** centroids are computed
+- **THEN** they are produced by the same embedding provider used for chunks and queries
 
-#### Scenario: Admin edit takes effect immediately
+### Requirement: Centroid-based classification
 
-- **WHEN** an admin edits a space's description or keywords and saves
-- **THEN** the next query is classified using the updated text
-- **AND** no restart or re-indexing occurs
+The system SHALL classify a question by comparing its embedding against every intent space centroid and converting the similarities into a probability distribution using a temperature-scaled softmax, taking the highest-probability space as the classification and its probability as the confidence.
+
+#### Scenario: Question classified without an LLM call
+
+- **WHEN** a question's top centroid probability meets or exceeds the confidence threshold
+- **THEN** that space is used
+- **AND** no LLM call is made
+
+#### Scenario: Confidence is a distribution
+
+- **WHEN** a question is classified
+- **THEN** the per-space probabilities sum to 1
+- **AND** the reported confidence is the highest of them
+
+#### Scenario: Query embedding is reused
+
+- **WHEN** a question is classified
+- **THEN** the embedding computed for retrieval is reused
+- **AND** no additional embedding call is made for classification
+
+#### Scenario: Temperature is configurable
+
+- **WHEN** an operator changes the softmax temperature
+- **THEN** subsequent classifications use the new value without a restart
+
+### Requirement: Escalation to LLM classification
+
+The system SHALL escalate to an LLM classification call when centroid confidence falls below the configured threshold and escalation is enabled, and SHALL apply the threshold to the LLM's returned confidence.
+
+#### Scenario: Low centroid confidence escalates
+
+- **WHEN** the top centroid probability is below the threshold
+- **THEN** an LLM classification call is made
+- **AND** its result supersedes the centroid result
+
+#### Scenario: Escalation prompt carries space configuration
+
+- **WHEN** an escalation call is made
+- **THEN** the prompt includes every intent space's name, description, and keywords as currently configured
+
+#### Scenario: Escalated result also below threshold
+
+- **WHEN** the LLM's returned confidence is also below the threshold
+- **THEN** the query is routed to the fallback space
+
+#### Scenario: Escalation disabled
+
+- **WHEN** escalation is disabled in configuration and centroid confidence is below the threshold
+- **THEN** the query is routed to the fallback space
+- **AND** no LLM call is made
+
+#### Scenario: Escalation uses the classification model
+
+- **WHEN** an escalation call is made
+- **THEN** it uses the configured classification model rather than the generation model
 
 ### Requirement: Confidence threshold enforcement
 
@@ -45,11 +98,11 @@ The system SHALL compare the classification confidence against the configured th
 - **THEN** retrieval searches only the Finance space
 - **AND** the query is logged with the fallback flag false
 
-#### Scenario: Confidence below threshold
+#### Scenario: Confidence below threshold after escalation
 
-- **WHEN** classification returns confidence 0.42 and the threshold is 0.70
+- **WHEN** both centroid and escalated confidence fall below the threshold
 - **THEN** retrieval searches every intent space
-- **AND** the query is logged against the General space with the fallback flag true
+- **AND** the query is logged against the fallback space with the fallback flag true
 
 #### Scenario: Confidence exactly at the threshold
 
@@ -61,9 +114,9 @@ The system SHALL compare the classification confidence against the configured th
 - **WHEN** an admin raises the threshold and a new query arrives
 - **THEN** the new query is evaluated against the updated threshold
 
-### Requirement: General classification searches all spaces
+### Requirement: Fallback space searches all spaces
 
-The system SHALL treat a classification result of the General space as a request to search every intent space, regardless of the confidence value.
+The system SHALL treat a classification result of the fallback space as a request to search every intent space, regardless of the confidence value.
 
 #### Scenario: Confidently classified as General
 
@@ -73,29 +126,19 @@ The system SHALL treat a classification result of the General space as a request
 
 ### Requirement: Classification failure falls back rather than failing
 
-The system SHALL route a query to the General fallback when the classification call fails or times out, rather than returning an error to the user.
+The system SHALL route a query to the fallback space when an escalation call fails or times out, rather than returning an error to the user.
 
-#### Scenario: Provider error during classification
+#### Scenario: Provider error during escalation
 
-- **WHEN** the LLM provider raises an error during classification
-- **THEN** the query is routed to the General fallback and answered
+- **WHEN** the LLM provider raises an error during escalation
+- **THEN** the query is routed to the fallback space and answered
 - **AND** the query log records the classification failure
 
-#### Scenario: Classification timeout
+#### Scenario: Escalation timeout
 
-- **WHEN** the classification call exceeds its configured timeout
-- **THEN** the query proceeds through the General fallback
+- **WHEN** the escalation call exceeds its configured timeout
+- **THEN** the query proceeds through the fallback
 - **AND** the user still receives an answer
-
-### Requirement: Concurrent classification and query embedding
-
-The system SHALL issue the classification call and the query embedding call concurrently, since the embedding does not depend on the classification result.
-
-#### Scenario: Both calls overlap
-
-- **WHEN** a query arrives
-- **THEN** classification and query embedding are issued concurrently
-- **AND** retrieval begins once both have completed
 
 ### Requirement: Routing hand-off to retrieval
 
@@ -113,13 +156,24 @@ The system SHALL pass retrieval an explicit list of intent spaces to search — 
 
 ### Requirement: Per-query routing record
 
-The system SHALL record, for every query, the classified intent space, the confidence value, the classifier's reasoning, and whether the fallback was used, so that routing decisions are auditable after the fact.
+The system SHALL record, for every query, the classified intent space, the confidence value, which mechanism produced the classification, the reasoning when an LLM produced it, and whether the fallback was used.
+
+#### Scenario: Fast-path query records its mechanism
+
+- **WHEN** a query is classified by centroid alone
+- **THEN** its log entry records the mechanism as centroid
+- **AND** no reasoning string is present
+
+#### Scenario: Escalated query records reasoning
+
+- **WHEN** a query is escalated to the LLM
+- **THEN** its log entry records the mechanism as LLM
+- **AND** the reasoning string returned by the model is stored
 
 #### Scenario: Routing decision is auditable
 
 - **WHEN** any query completes
-- **THEN** its log entry contains the classified space, the confidence, the reasoning, and the fallback flag
-- **AND** an admin can determine from the log alone why the query was routed as it was
+- **THEN** an admin can determine from the log alone which space it went to, how confident the system was, which mechanism decided, and whether the fallback fired
 
 ### Requirement: Pipeline invocation without a chat channel
 
