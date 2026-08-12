@@ -316,6 +316,55 @@ def test_default_client_disables_sdk_level_retries():
     assert llm._client.max_retries == 0
 
 
+def test_token_budget_sent_as_max_completion_tokens_not_max_tokens():
+    """The installed SDK marks `max_tokens` deprecated in favour of
+    `max_completion_tokens`, and reasoning-model endpoints reject
+    `max_tokens` outright.
+    """
+    llm, client = _make_llm()
+    client.chat.completions.queue_response(
+        _StubChatCompletion("hi", "gpt-5", prompt_tokens=1, completion_tokens=1)
+    )
+
+    llm.complete(system="s", user="u")
+
+    sent_kwargs = client.chat.completions.calls[0]
+    assert sent_kwargs["max_completion_tokens"] == 4096
+    assert "max_tokens" not in sent_kwargs
+
+
+def test_explicit_max_tokens_argument_is_passed_as_max_completion_tokens():
+    llm, client = _make_llm()
+    client.chat.completions.queue_response(
+        _StubChatCompletion("hi", "gpt-5", prompt_tokens=1, completion_tokens=1)
+    )
+
+    llm.complete(system="s", user="u", max_tokens=256)
+
+    assert client.chat.completions.calls[0]["max_completion_tokens"] == 256
+
+
+def test_strict_mode_is_not_requested_for_an_arbitrary_caller_schema():
+    """OpenAI strict mode requires every object in the schema to carry
+    `additionalProperties: false` and to list all of its properties in
+    `required`. Callers supply ordinary schemas, so requesting strict mode
+    would have the API reject them. Conformance is enforced client-side
+    instead (app/providers/schema_validation.py), which also covers the
+    Anthropic and local backends.
+    """
+    llm, client = _make_llm()
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    client.chat.completions.queue_response(
+        _StubChatCompletion('{"answer": "42"}', "gpt-5", prompt_tokens=1, completion_tokens=1)
+    )
+
+    llm.complete(system="s", user="u", schema=schema)
+
+    json_schema = client.chat.completions.calls[0]["response_format"]["json_schema"]
+    assert "strict" not in json_schema
+    assert json_schema["schema"] == schema
+
+
 def test_truncated_response_raises_backend_error_naming_truncation():
     """`finish_reason == "length"` is the OpenAI spelling of "the token
     budget ran out mid-generation" — the partial text must not be returned

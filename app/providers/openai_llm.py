@@ -92,16 +92,25 @@ def chat_complete(
     """Shared request/response handling for any OpenAI-compatible client."""
     kwargs: dict[str, Any] = {
         "model": model,
-        "max_tokens": max_tokens,
+        # `max_tokens` is deprecated in the installed SDK and rejected
+        # outright by reasoning-model endpoints.
+        "max_completion_tokens": max_tokens,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
     }
     if schema is not None:
+        # `strict` is deliberately not sent. Strict mode requires every
+        # object in the schema to carry `additionalProperties: false` and to
+        # list all of its properties in `required`; callers supply ordinary
+        # schemas, and rewriting one to satisfy those rules would silently
+        # turn its optional fields into required ones. Conformance is
+        # enforced client-side by `app/providers/schema_validation.py`, which
+        # applies uniformly across the Anthropic, OpenAI, and local backends.
         kwargs["response_format"] = {
             "type": "json_schema",
-            "json_schema": {"name": "response", "schema": schema, "strict": True},
+            "json_schema": {"name": "response", "schema": schema},
         }
 
     def _call() -> Any:
