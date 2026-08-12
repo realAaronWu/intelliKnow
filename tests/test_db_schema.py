@@ -53,53 +53,42 @@ def test_wal_journal_mode_enabled(engine):
     assert mode == "wal"
 
 
+def _insert_chunk(conn, doc_id: int, body: str, ordinal: int = 0) -> int:
+    """Insert a chunk. The FTS row is written by trigger, never by hand."""
+    return conn.execute(
+        insert(chunks).values(
+            document_id=doc_id,
+            intent_slug="hr",
+            ordinal=ordinal,
+            text=body,
+            heading_path=None,
+            source_ref=None,
+            char_count=len(body),
+        )
+    ).inserted_primary_key[0]
+
+
+def _fts_rowids(engine, term: str) -> list[int]:
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT rowid FROM chunk_fts WHERE chunk_fts MATCH :term"),
+            {"term": term},
+        ).fetchall()
+    return [row[0] for row in rows]
+
+
 def test_fts5_match_finds_inserted_chunk_by_rowid(engine):
     with engine.begin() as conn:
         doc_id = _insert_document(conn)
-        chunk_id = conn.execute(
-            insert(chunks).values(
-                document_id=doc_id,
-                intent_slug="hr",
-                ordinal=0,
-                text="Employees accrue vacation days monthly.",
-                heading_path="Leave Policy",
-                source_ref="policy.pdf#p1",
-                char_count=40,
-            )
-        ).inserted_primary_key[0]
-        conn.execute(
-            text("INSERT INTO chunk_fts(rowid, text) VALUES (:rowid, :text)"),
-            {"rowid": chunk_id, "text": "Employees accrue vacation days monthly."},
-        )
+        chunk_id = _insert_chunk(conn, doc_id, "Employees accrue vacation days monthly.")
 
-    with engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT rowid FROM chunk_fts WHERE chunk_fts MATCH :term"),
-            {"term": "vacation"},
-        ).fetchone()
-
-    assert row is not None
-    assert row[0] == chunk_id
+    assert _fts_rowids(engine, "vacation") == [chunk_id]
 
 
 def test_bm25_ranking_available(engine):
     with engine.begin() as conn:
         doc_id = _insert_document(conn)
-        chunk_id = conn.execute(
-            insert(chunks).values(
-                document_id=doc_id,
-                intent_slug="hr",
-                ordinal=0,
-                text="Employees accrue vacation days monthly.",
-                heading_path=None,
-                source_ref=None,
-                char_count=40,
-            )
-        ).inserted_primary_key[0]
-        conn.execute(
-            text("INSERT INTO chunk_fts(rowid, text) VALUES (:rowid, :text)"),
-            {"rowid": chunk_id, "text": "Employees accrue vacation days monthly."},
-        )
+        _insert_chunk(conn, doc_id, "Employees accrue vacation days monthly.")
 
     with engine.connect() as conn:
         score = conn.execute(
@@ -108,6 +97,62 @@ def test_bm25_ranking_available(engine):
         ).scalar()
 
     assert isinstance(score, float)
+
+
+def test_chunk_fts_is_external_content_linked_to_chunks(engine):
+    """The "chunk_fts rowid equals chunks.id" convention must be enforced by
+    the schema, not left as a convention a caller can forget.
+    """
+    with engine.connect() as conn:
+        ddl = conn.execute(
+            text("SELECT sql FROM sqlite_master WHERE name = 'chunk_fts'")
+        ).scalar()
+
+    assert "content='chunks'" in ddl
+    assert "content_rowid='id'" in ddl
+
+
+def test_cascade_delete_of_a_document_removes_its_fts_rows(engine):
+    """Deleting a document cascades to its chunks; without the delete trigger
+    the FTS index kept orphaned rows, so keyword search would return hits
+    for chunks that no longer exist.
+    """
+    with engine.begin() as conn:
+        doc_id = _insert_document(conn)
+        chunk_id = _insert_chunk(conn, doc_id, "Employees accrue vacation days monthly.")
+    assert _fts_rowids(engine, "vacation") == [chunk_id]
+
+    with engine.begin() as conn:
+        conn.execute(documents.delete().where(documents.c.id == doc_id))
+
+    assert _fts_rowids(engine, "vacation") == []
+
+
+def test_deleting_a_chunk_directly_removes_its_fts_row(engine):
+    with engine.begin() as conn:
+        doc_id = _insert_document(conn)
+        chunk_id = _insert_chunk(conn, doc_id, "Employees accrue vacation days monthly.")
+
+    with engine.begin() as conn:
+        conn.execute(chunks.delete().where(chunks.c.id == chunk_id))
+
+    assert _fts_rowids(engine, "vacation") == []
+
+
+def test_updating_chunk_text_reindexes_it(engine):
+    with engine.begin() as conn:
+        doc_id = _insert_document(conn)
+        chunk_id = _insert_chunk(conn, doc_id, "Employees accrue vacation days monthly.")
+
+    with engine.begin() as conn:
+        conn.execute(
+            chunks.update()
+            .where(chunks.c.id == chunk_id)
+            .values(text="Employees accrue sabbatical days monthly.")
+        )
+
+    assert _fts_rowids(engine, "vacation") == []
+    assert _fts_rowids(engine, "sabbatical") == [chunk_id]
 
 
 def test_deleting_document_cascades_to_chunks(engine):

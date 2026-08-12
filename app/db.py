@@ -9,6 +9,9 @@ SQLite disables foreign-key enforcement per connection by default, so
 just once) — otherwise the `documents` → `chunks` cascade silently does
 nothing. `query_log` deliberately carries no foreign key to `documents`:
 deleting a document must not erase the history of it having been used.
+
+`chunk_fts` is an FTS5 *external content* table over `chunks`, kept in step
+by triggers — see the comment above `_CREATE_CHUNK_FTS`.
 """
 
 from __future__ import annotations
@@ -110,7 +113,42 @@ integrations = Table(
 # does not know about it — `init_schema` creates it with raw DDL instead.
 chunk_fts = table("chunk_fts", Column("text", Text))
 
-_CREATE_CHUNK_FTS = "CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(text)"
+# `content='chunks', content_rowid='id'` makes `chunk_fts` an *external
+# content* table: `chunks` owns the text, and the FTS table stores only the
+# index. That is what makes "chunk_fts rowid equals chunks.id" a property of
+# the schema rather than a convention every caller has to remember, and it
+# stops the two stores from diverging — a cascade delete of a document used
+# to leave orphaned FTS rows, so keyword search could return hits for chunks
+# that no longer existed.
+#
+# External content tables are not maintained automatically; the triggers
+# below are the standard FTS5 pattern for keeping the index in step. The
+# AFTER DELETE trigger also fires for rows removed by the
+# `documents` -> `chunks` ON DELETE CASCADE, so no separate cleanup is
+# needed (verified against the SQLite build in use).
+_CREATE_CHUNK_FTS = (
+    "CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts "
+    "USING fts5(text, content='chunks', content_rowid='id')"
+)
+
+_CREATE_CHUNK_FTS_TRIGGERS = (
+    """
+    CREATE TRIGGER IF NOT EXISTS chunks_after_insert AFTER INSERT ON chunks BEGIN
+        INSERT INTO chunk_fts(rowid, text) VALUES (new.id, new.text);
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS chunks_after_delete AFTER DELETE ON chunks BEGIN
+        INSERT INTO chunk_fts(chunk_fts, rowid, text) VALUES('delete', old.id, old.text);
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS chunks_after_update AFTER UPDATE ON chunks BEGIN
+        INSERT INTO chunk_fts(chunk_fts, rowid, text) VALUES('delete', old.id, old.text);
+        INSERT INTO chunk_fts(rowid, text) VALUES (new.id, new.text);
+    END
+    """,
+)
 
 
 def _configure_connection(dbapi_connection, connection_record) -> None:
@@ -137,7 +175,14 @@ def create_engine_for(path: Path) -> Engine:
 
 
 def init_schema(engine: Engine) -> None:
-    """Create every table (and the `chunk_fts` FTS5 index) if not present."""
+    """Create every table, the `chunk_fts` FTS5 index, and its sync triggers.
+
+    The triggers are created with the index because an external content FTS
+    table without them is silently empty — `chunks` writes would never reach
+    the index.
+    """
     metadata.create_all(engine)
     with engine.begin() as conn:
         conn.execute(text(_CREATE_CHUNK_FTS))
+        for trigger_ddl in _CREATE_CHUNK_FTS_TRIGGERS:
+            conn.execute(text(trigger_ddl))
