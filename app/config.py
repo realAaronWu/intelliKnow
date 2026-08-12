@@ -56,6 +56,11 @@ class RAGConfig(_StrictModel):
     chunk_chars: int = Field(default=800, gt=0)
     chunk_overlap_chars: int = Field(default=100, ge=0)
     vector_top_n: int = Field(default=20, gt=0)
+    # `ge=0`, deliberately not `gt=0`: `spec: knowledge-retrieval`
+    # § "Keyword retrieval disabled by configuration" makes 0 a supported
+    # setting that turns keyword retrieval off and leaves dense results to
+    # answer alone. Tightening this to `gt=0` would silently break that
+    # requirement.
     keyword_top_n: int = Field(default=20, ge=0)
     rrf_k: int = Field(default=60, gt=0)
     rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
@@ -93,7 +98,11 @@ class IntentSpace(_StrictModel):
 
 class ChannelConfig(_StrictModel):
     enabled: bool = False
-    mode: str | None = None
+    # A closed set, like every other provider-ish field: an unvalidated
+    # `str | None` accepted typos such as "webook" silently. `None` means the
+    # channel declares no mode (Teams, which has no polling/webhook choice to
+    # make until plan 05 wires it up).
+    mode: Literal["polling", "webhook"] | None = None
     max_message_chars: int = Field(gt=0)
 
 
@@ -190,6 +199,26 @@ class AppConfig(_StrictModel):
             if slug in seen:
                 raise ValueError(f"duplicate intent space slug: {slug!r}")
             seen.add(slug)
+        return self
+
+    @model_validator(mode="after")
+    def _webhook_mode_requires_public_base_url(self) -> "AppConfig":
+        """A webhook channel has nowhere to receive callbacks without a
+        public URL, so the combination must fail at startup rather than at
+        the first inbound message.
+        """
+        if self.public_base_url:
+            return self
+        for name, channel in (
+            ("telegram", self.channels.telegram),
+            ("teams", self.channels.teams),
+        ):
+            if channel.mode == "webhook":
+                raise ValueError(
+                    f"channels.{name}.mode is 'webhook' but public_base_url "
+                    "is not set; webhook mode needs a publicly reachable "
+                    "base URL for the platform to call back to"
+                )
         return self
 
     @model_validator(mode="after")

@@ -235,6 +235,88 @@ def test_1_13_missing_config_file_writes_defaults(tmp_path):
     assert {"hr", "legal", "finance", "operations", "general"} <= slugs
 
 
+# --- Channel mode is a closed set, and webhook mode has a prerequisite -------
+
+
+def test_channel_mode_rejects_an_unknown_value():
+    """`mode` was an unvalidated `str | None` while every other provider-ish
+    field used a Literal, so a typo like "webook" was accepted silently.
+    """
+    data = _valid_config_dict()
+    data["channels"]["telegram"]["mode"] = "webook"
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(data)
+
+
+def test_channel_mode_accepts_polling_and_webhook():
+    data = _valid_config_dict()
+    data["channels"]["telegram"]["mode"] = "polling"
+    assert AppConfig.model_validate(data).channels.telegram.mode == "polling"
+
+    data["channels"]["telegram"]["mode"] = "webhook"
+    data["public_base_url"] = "https://kms.example.com"
+    assert AppConfig.model_validate(data).channels.telegram.mode == "webhook"
+
+
+def test_channel_mode_may_be_omitted():
+    data = _valid_config_dict()
+    data["channels"]["teams"].pop("mode", None)
+    assert AppConfig.model_validate(data).channels.teams.mode is None
+
+
+def test_webhook_mode_requires_public_base_url():
+    data = _valid_config_dict()
+    data["channels"]["telegram"]["mode"] = "webhook"
+    data["public_base_url"] = None
+
+    with pytest.raises(ValidationError) as exc_info:
+        AppConfig.model_validate(data)
+
+    message = str(exc_info.value)
+    assert "public_base_url" in message
+    assert "telegram" in message
+
+
+def test_webhook_mode_accepted_when_public_base_url_is_set():
+    data = _valid_config_dict()
+    data["channels"]["teams"]["mode"] = "webhook"
+    data["public_base_url"] = "https://kms.example.com"
+
+    cfg = AppConfig.model_validate(data)
+
+    assert cfg.channels.teams.mode == "webhook"
+
+
+def test_polling_mode_does_not_require_public_base_url():
+    data = _valid_config_dict()
+    data["channels"]["telegram"]["mode"] = "polling"
+    data["public_base_url"] = None
+
+    assert AppConfig.model_validate(data).public_base_url is None
+
+
+# --- keyword_top_n = 0 is a supported setting, not a bug ---------------------
+
+
+def test_keyword_top_n_accepts_zero():
+    """`spec: knowledge-retrieval` § "Keyword retrieval disabled by
+    configuration": zero disables keyword retrieval by design and retrieval
+    proceeds on dense results alone. The bound is `ge=0`, not `gt=0` —
+    tightening it would silently break that requirement.
+    """
+    data = _valid_config_dict()
+    data["rag"]["keyword_top_n"] = 0
+
+    assert AppConfig.model_validate(data).rag.keyword_top_n == 0
+
+
+def test_keyword_top_n_rejects_a_negative_value():
+    data = _valid_config_dict()
+    data["rag"]["keyword_top_n"] = -1
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(data)
+
+
 # --- Tunables that must live in config.yaml, not in code ---------------------
 
 
