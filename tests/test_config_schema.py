@@ -12,6 +12,15 @@ sigmoid(cross-encoder score) gate. The task brief instructs config.yaml
 values to be copied verbatim from design.md. This test therefore asserts
 0.45, not the stale 0.35 in the test-plan table. See task-1-report.md for
 the full note.
+
+NOTE on 1.1 llm.provider/model: the test-plan table (and the original
+design.md draft) lists `claude-opus-5` under `anthropic`. Final review made
+the free local backend (Ollama-compatible, `llm.provider: local`) the
+shipped default so a fresh checkout costs nothing to run; the Anthropic path
+is now the opt-in demo configuration (see the comment block above `llm:` in
+config.yaml and design.md § Configuration). This test asserts the shipped
+`local` / `llama3.1` values, not the stale `anthropic` / `claude-opus-5`
+values in the test-plan table.
 """
 
 import copy
@@ -101,8 +110,10 @@ def _valid_config_dict() -> dict:
 
 def test_1_1_load_shipped_config_yaml():
     cfg = load_config(SHIPPED_CONFIG)
-    assert cfg.llm.model_classify == "claude-opus-5"
-    assert cfg.llm.model_generate == "claude-opus-5"
+    assert cfg.llm.provider == "local"
+    assert cfg.llm.model_classify == "llama3.1"
+    assert cfg.llm.model_generate == "llama3.1"
+    assert cfg.llm.base_url == "http://localhost:11434/v1"
     assert cfg.embedding.model == "all-MiniLM-L6-v2"
     assert cfg.embedding.dimension == 384
     assert cfg.orchestrator.confidence_threshold == 0.70
@@ -357,6 +368,23 @@ def test_embedding_timeout_must_be_positive():
     data["embedding"]["timeout_seconds"] = 0
     with pytest.raises(ValidationError):
         AppConfig.model_validate(data)
+
+
+def test_llm_base_url_defaults_to_ollama_endpoint():
+    """`base_url` is only consulted by the `local` backend, but it lives on
+    `LLMConfig` unconditionally like every other tunable — see
+    `spec: configuration` § "Single configuration file".
+    """
+    data = _valid_config_dict()
+    assert AppConfig.model_validate(data).llm.base_url == "http://localhost:11434/v1"
+
+
+def test_llm_base_url_is_configurable():
+    data = _valid_config_dict()
+    data["llm"]["base_url"] = "http://localhost:8000/v1"
+    assert (
+        AppConfig.model_validate(data).llm.base_url == "http://localhost:8000/v1"
+    )
 
 
 def test_embedding_max_retries_may_be_zero_but_not_negative():

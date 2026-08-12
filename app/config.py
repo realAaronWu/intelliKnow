@@ -38,6 +38,11 @@ class LLMConfig(_StrictModel):
     # it belongs here — it was previously inferred in provider code from the
     # substring "opus-5" in the model name.
     effort: EffortLevel = "low"
+    # Only consulted when provider == "local": the OpenAI-compatible base URL
+    # of the local model server. Ignored by the anthropic/openai backends,
+    # which talk to their own fixed endpoints. Defaults to Ollama's
+    # OpenAI-compatible endpoint.
+    base_url: str = "http://localhost:11434/v1"
 
 
 class EmbeddingConfig(_StrictModel):

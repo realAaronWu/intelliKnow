@@ -1,10 +1,18 @@
+# Local (Ollama) is the development default: it costs nothing to run and
+# exercises the same OpenAI-compatible HTTP path the remote backends use.
+# For the Anthropic demo path, change:
+#   llm.provider: anthropic
+#   llm.model_generate: claude-opus-5
+#   llm.model_classify: claude-haiku-4-5
+# and export ANTHROPIC_API_KEY (see .env.example).
 llm:
-  provider: anthropic              # anthropic | openai | local
-  model_classify: claude-opus-5
-  model_generate: claude-opus-5
+  provider: local                  # anthropic | openai | local
+  model_classify: llama3.1
+  model_generate: llama3.1
   timeout_seconds: 20
   max_retries: 2
   effort: low                      # low | medium | high | xhigh | max
+  base_url: http://localhost:11434/v1  # local backend only (Ollama's OpenAI-compatible endpoint)
 
 embedding:
   provider: local                  # local | openai

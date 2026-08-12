@@ -106,9 +106,20 @@ def test_classify_and_generate_providers_use_their_configured_models(
 
 
 def test_missing_credential_fails_startup_naming_the_env_var(tmp_path):
-    """spec: ai-provider § "Missing API key for a remote provider"."""
+    """spec: ai-provider § "Missing API key for a remote provider".
+
+    The shipped config's default backend (`local`) needs no credential, so
+    this test switches to the remote (`anthropic`) demo path explicitly —
+    the same way `local_config` switches the other direction — rather than
+    relying on the shipped default being a remote provider.
+    """
+    import yaml
+
     dest = tmp_path / "config.yaml"
     shutil.copy(SHIPPED_CONFIG, dest)
+    raw = yaml.safe_load(dest.read_text())
+    raw["llm"]["provider"] = "anthropic"
+    dest.write_text(yaml.safe_dump(raw, sort_keys=False))
 
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
         bootstrap(config_path=dest, env={})

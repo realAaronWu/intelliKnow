@@ -85,6 +85,7 @@ def build_llm_provider(
             api_key=env.get("LOCAL_LLM_API_KEY", ""),
             timeout_seconds=cfg.llm.timeout_seconds,
             max_retries=cfg.llm.max_retries,
+            base_url=cfg.llm.base_url,
             env=env,
         )
 

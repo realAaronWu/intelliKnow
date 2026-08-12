@@ -18,6 +18,7 @@ from app.config import AppConfig
 from app.providers.anthropic_llm import AnthropicLLM
 from app.providers.factory import build_embedding_provider, build_llm_provider
 from app.providers.local_embedding import SentenceTransformerEmbedding
+from app.providers.local_llm import LocalLLM
 from app.providers.openai_embedding import OpenAIEmbedding
 from app.providers.openai_llm import OpenAILLM
 
@@ -132,6 +133,40 @@ def test_local_embedding_with_empty_env_constructs_without_a_key():
 
     assert isinstance(provider, SentenceTransformerEmbedding)
     assert provider.dimension == cfg.embedding.dimension
+
+
+def test_local_llm_uses_configured_base_url_no_network_call():
+    """`LLMConfig.base_url` must reach `LocalLLM`'s client unmodified, and
+    constructing it must not require a running server — connection happens
+    on first call, not at construction.
+    """
+    cfg = AppConfig()
+    cfg.llm.provider = "local"
+    cfg.llm.base_url = "http://localhost:9999/v1"
+
+    provider = build_llm_provider(cfg, env={})
+
+    assert isinstance(provider, LocalLLM)
+    assert str(provider._client.base_url) == "http://localhost:9999/v1/"
+
+
+def test_local_llm_default_base_url_targets_ollama():
+    cfg = AppConfig()
+    cfg.llm.provider = "local"
+
+    provider = build_llm_provider(cfg, env={})
+
+    assert str(provider._client.base_url) == "http://localhost:11434/v1/"
+
+
+def test_local_llm_requires_no_api_key():
+    cfg = AppConfig()
+    cfg.llm.provider = "local"
+
+    # Must not raise even though env carries no credentials at all.
+    provider = build_llm_provider(cfg, env={})
+
+    assert isinstance(provider, LocalLLM)
 
 
 def test_embedding_batching_issues_ceil_n_over_batch_size_model_calls():
