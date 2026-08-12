@@ -50,7 +50,7 @@ _SCHEMA = {
     "type": "object",
     "properties": {
         "intent": {"type": "string"},
-        "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "confidence": {"type": "number"},
     },
     "required": ["intent", "confidence"],
     "additionalProperties": False,

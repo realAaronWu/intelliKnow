@@ -25,6 +25,7 @@ from app.providers.openai_llm import OpenAILLM
 
 def test_role_classify_vs_generate_selects_the_right_model():
     cfg = AppConfig()
+    cfg.llm.provider = "anthropic"
     cfg.llm.model_classify = "claude-opus-5-classify"
     cfg.llm.model_generate = "claude-opus-5-generate"
     env = {"ANTHROPIC_API_KEY": "test-key"}
@@ -83,6 +84,7 @@ def test_llm_effort_comes_from_config_not_from_the_model_name():
     changed meaning when the model was swapped.
     """
     cfg = AppConfig()
+    cfg.llm.provider = "anthropic"
     cfg.llm.effort = "high"
     cfg.llm.model_generate = "claude-sonnet-4"
 

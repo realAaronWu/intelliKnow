@@ -28,7 +28,7 @@ def test_provider_status_reports_providers_models_and_dimension():
 
     status = provider_status(cfg, env={"ANTHROPIC_API_KEY": _SECRET_VALUE})
 
-    assert status["llm"]["provider"] == "anthropic"
+    assert status["llm"]["provider"] == "local"
     assert status["llm"]["model_classify"] == "claude-opus-5-classify"
     assert status["llm"]["model_generate"] == "claude-opus-5-generate"
     assert status["embedding"]["provider"] == "local"
@@ -59,7 +59,7 @@ def test_secret_status_discloses_no_credential_value():
 
 def test_secret_status_names_the_env_var_for_the_active_llm_provider():
     cfg = AppConfig()
-    assert cfg.llm.provider == "anthropic"
+    cfg.llm.provider = "anthropic"
 
     status = secret_status(cfg, env={})
 
@@ -69,6 +69,7 @@ def test_secret_status_names_the_env_var_for_the_active_llm_provider():
 
 def test_secret_status_marks_a_present_key_as_set():
     cfg = AppConfig()
+    cfg.llm.provider = "anthropic"
 
     status = secret_status(cfg, env={"ANTHROPIC_API_KEY": _SECRET_VALUE})
 
@@ -80,6 +81,7 @@ def test_secret_status_treats_an_empty_value_as_unset():
     and the factory's `_require_key` already rejects it.
     """
     cfg = AppConfig()
+    cfg.llm.provider = "anthropic"
 
     status = secret_status(cfg, env={"ANTHROPIC_API_KEY": ""})
 
@@ -111,6 +113,7 @@ def test_local_providers_require_no_api_key():
 
 def test_provider_status_embeds_the_secret_presence_report():
     cfg = AppConfig()
+    cfg.llm.provider = "anthropic"
 
     status = provider_status(cfg, env={})
 

@@ -240,7 +240,7 @@ def test_1_13_missing_config_file_writes_defaults(tmp_path):
     assert not path.exists()
     cfg = load_config(path)
     assert path.exists()
-    assert cfg.llm.model_classify == "claude-opus-5"
+    assert cfg.llm.model_classify == "llama3.1"
     assert cfg.orchestrator.confidence_threshold == 0.70
     slugs = {space.slug for space in cfg.intent_spaces}
     assert {"hr", "legal", "finance", "operations", "general"} <= slugs

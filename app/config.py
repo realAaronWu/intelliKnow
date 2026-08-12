@@ -29,9 +29,9 @@ class _StrictModel(BaseModel):
 
 
 class LLMConfig(_StrictModel):
-    provider: Literal["anthropic", "openai", "local"] = "anthropic"
-    model_classify: str = "claude-opus-5"
-    model_generate: str = "claude-opus-5"
+    provider: Literal["anthropic", "openai", "local"] = "local"
+    model_classify: str = "llama3.1"
+    model_generate: str = "llama3.1"
     timeout_seconds: int = Field(default=20, gt=0)
     max_retries: int = Field(default=2, ge=0)
     # Reasoning effort requested of a thinking-capable model. A tunable, so
