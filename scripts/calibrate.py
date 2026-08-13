@@ -59,8 +59,9 @@ from app.orchestrator.centroids import CentroidIndex  # noqa: E402
 from app.orchestrator.classify import classify  # noqa: E402
 from app.rag.retrieve.dense import dense_search  # noqa: E402
 from app.rag.retrieve.fuse import fuse  # noqa: E402
+from app.rag.retrieve.gate import passes_gate  # noqa: E402
 from app.rag.retrieve.keyword import keyword_search  # noqa: E402
-from app.rag.retrieve.rerank import Reranker  # noqa: E402
+from app.rag.retrieve.rerank import RankedHit, Reranker  # noqa: E402
 from app.rag.vector_store import VectorStore  # noqa: E402
 
 # --- The bounded sanity-check question set ----------------------------------
@@ -95,12 +96,22 @@ def _spaces_with_chunks(engine) -> list[str]:
     return [row[0] for row in rows]
 
 
-def _best_relevance(question: str, spaces: list[str], cfg: AppConfig, engine, vector_store, embedding, reranker) -> float:
+def _rerank_for(question: str, spaces: list[str], cfg: AppConfig, engine, vector_store, embedding, reranker) -> list[RankedHit]:
+    """Run retrieval-through-rerank for `question` and return the ranked
+    hits -- callers read `.relevance` off them directly (for display) and
+    pass the list straight to `passes_gate` (the real gate function,
+    imported rather than re-implemented) for pass/fail decisions, so this
+    script's gate check can never silently drift from what
+    `app/orchestrator/pipeline.py::answer_question` actually does.
+    """
     [query_vector] = embedding.embed([question])
     dense_hits = dense_search(query_vector, spaces, cfg.rag.vector_top_n, vector_store)
     keyword_hits = keyword_search(question, spaces, cfg.rag.keyword_top_n, engine)
     fused = fuse(dense_hits, keyword_hits, cfg.rag.rrf_k, cfg.rag.rerank_candidates)
-    ranked = reranker.rerank(question, fused, engine, cfg.rag.final_top_k)
+    return reranker.rerank(question, fused, engine, cfg.rag.final_top_k)
+
+
+def _best_relevance(ranked: list[RankedHit]) -> float:
     if not ranked:
         return 0.0
     return max(hit.relevance for hit in ranked)
@@ -160,16 +171,18 @@ def main() -> int:
     # 3. Out-of-corpus question rejected by the gate.
     spaces = _spaces_with_chunks(engine)
     reranker = Reranker(cfg.rag.rerank_model)
-    positive_relevance = _best_relevance(
+    positive_ranked = _rerank_for(
         HR_QUESTION, spaces, cfg, engine, vector_store, application.embedding, reranker
     )
-    negative_relevance = _best_relevance(
+    negative_ranked = _rerank_for(
         OUT_OF_CORPUS_QUESTION, spaces, cfg, engine, vector_store, application.embedding, reranker
     )
+    positive_relevance = _best_relevance(positive_ranked)
+    negative_relevance = _best_relevance(negative_ranked)
     print(f"3. Out-of-corpus question: {OUT_OF_CORPUS_QUESTION!r}")
     print(f"   best relevance (in-corpus HR question):  {positive_relevance:.4f}")
     print(f"   best relevance (out-of-corpus question):  {negative_relevance:.4f}")
-    gate_rejects = not passes_gate_from_score(negative_relevance, cfg.rag.relevance_floor)
+    gate_rejects = not passes_gate(negative_ranked, cfg.rag.relevance_floor)
     print(f"   floor {cfg.rag.relevance_floor}: out-of-corpus question "
           f"{'is correctly rejected' if gate_rejects else 'INCORRECTLY PASSES'} the gate\n")
 
@@ -190,8 +203,8 @@ def main() -> int:
     print("=== Floor sweep (pass/fail at each candidate floor) ===")
     print(f"{'floor':>8} | {'HR question':>12} | {'out-of-corpus question':>24}")
     for floor in FLOOR_SWEEP:
-        hr_pass = positive_relevance >= floor
-        neg_pass = negative_relevance >= floor
+        hr_pass = passes_gate(positive_ranked, floor)
+        neg_pass = passes_gate(negative_ranked, floor)
         print(f"{floor:>8.2f} | {('pass' if hr_pass else 'FAIL'):>12} | "
               f"{('pass (bad)' if neg_pass else 'reject (good)'):>24}")
     print()
@@ -202,10 +215,6 @@ def main() -> int:
         "bounded sanity check and why."
     )
     return 0
-
-
-def passes_gate_from_score(score: float, floor: float) -> bool:
-    return score >= floor
 
 
 if __name__ == "__main__":

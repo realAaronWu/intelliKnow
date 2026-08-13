@@ -38,18 +38,18 @@ from sqlalchemy.engine import Engine
 
 from app.config import AppConfig
 from app.orchestrator.centroids import CentroidIndex
-from app.orchestrator.classify import classify
-from app.orchestrator.route import decide_spaces
+from app.orchestrator.classify import Classification, classify
+from app.orchestrator.route import RoutingDecision, decide_spaces
 from app.providers.base import EmbeddingProvider, LLMProvider, ProviderError
 from app.rag.citations import Citation, verify_citations
 from app.rag.context import build_context
 from app.rag.format import format_for_channel
 from app.rag.generate import ChannelProfile, generate_answer
-from app.rag.retrieve.dense import dense_search
-from app.rag.retrieve.fuse import fuse
+from app.rag.retrieve.dense import Hit, dense_search
+from app.rag.retrieve.fuse import FusedHit, fuse
 from app.rag.retrieve.gate import passes_gate
 from app.rag.retrieve.keyword import keyword_search
-from app.rag.retrieve.rerank import Reranker
+from app.rag.retrieve.rerank import RankedHit, Reranker
 from app.rag.vector_store import VectorStore
 
 _FAILURE_MESSAGE = (
@@ -108,6 +108,38 @@ class QueryOutcome:
     error: str | None
 
 
+@dataclass
+class QueryTrace:
+    """Optional stage-by-stage record of one `answer_question()` call,
+    filled in as each stage actually runs.
+
+    `QueryOutcome` alone doesn't carry the intermediate data a demo/debug
+    caller wants to show (`scripts/ask.py`'s trace: classification,
+    routing, dense hits, keyword hits, fused order, reranked order, gate
+    decision) — this exists so such a caller can get that by observing the
+    real pipeline run rather than re-implementing every stage itself to
+    reconstruct it (which is exactly how `scripts/ask.py` used to drift
+    from `answer_question` — I3). A caller that passes `None` (the
+    default, every other caller in this codebase) costs nothing beyond an
+    `is not None` check at each assignment point below; answer/citations/
+    latency are already on `QueryOutcome` and are not duplicated here.
+
+    Mutable, not frozen: fields are set one at a time as `answer_question`
+    reaches each stage, so a trace attached to a call that returns early
+    (a no_match or a generation failure) still holds everything computed
+    up to that point rather than nothing at all.
+    """
+
+    query_vector: list[float] | None = None
+    classification: Classification | None = None
+    routing: RoutingDecision | None = None
+    dense_hits: list[Hit] | None = None
+    keyword_hits: list[Hit] | None = None
+    fused: list[FusedHit] | None = None
+    ranked: list[RankedHit] | None = None
+    gate_passed: bool | None = None
+
+
 def _elapsed_ms(start: float) -> int:
     return int(round((time.perf_counter() - start) * 1000))
 
@@ -163,13 +195,32 @@ def _no_match_outcome(
     )
 
 
-def answer_question(question: str, channel: ChannelProfile, deps: PipelineDeps) -> QueryOutcome:
+def answer_question(
+    question: str,
+    channel: ChannelProfile,
+    deps: PipelineDeps,
+    *,
+    force_space: str | None = None,
+    trace: QueryTrace | None = None,
+) -> QueryOutcome:
     """Run `question` through the full read path and return a `QueryOutcome`.
 
     Never raises for an ordinary provider failure or a routing miss — the
     only exceptions that propagate are programming errors (a malformed
     `deps`, a database that doesn't exist), matching every other stage's
     "degrade to a recorded status, never crash the caller" contract.
+
+    `force_space`, when given, bypasses classification and routing
+    entirely and searches exactly that one space — the seam
+    `scripts/ask.py --space SLUG` uses to isolate retrieval behaviour from
+    classification. Every other caller (every real channel, the admin
+    `/admin/test-query` endpoint) omits it and gets the real classify-then-
+    route decision, unchanged.
+
+    `trace`, when given, is filled in with every pre-generation stage's
+    output as this call actually computes it — see `QueryTrace`'s
+    docstring. Omitted (the default), this function behaves exactly as
+    before `trace` existed.
     """
     start = time.perf_counter()
     # Read once, here, so every stage below sees one consistent config for
@@ -179,26 +230,53 @@ def answer_question(question: str, channel: ChannelProfile, deps: PipelineDeps) 
     cfg = deps.get_cfg()
 
     [query_vector] = deps.embedding.embed([question])
+    if trace is not None:
+        trace.query_vector = query_vector
 
-    # No-op when `intent_spaces` hasn't changed since the last query (the
-    # common case) — otherwise rebuilds the centroids from the edited
-    # config. Either way `deps.centroids` now reflects the current
-    # `centroid_temperature` too. See `CentroidIndex.sync`'s docstring.
-    deps.centroids.sync(cfg)
-    classification = classify(question, query_vector, cfg, deps.centroids, deps.classify_llm)
-    routing = decide_spaces(classification, cfg)
+    if force_space is not None:
+        classification = Classification(
+            intent_slug=force_space,
+            confidence=1.0,
+            classified_by="centroid",
+            reasoning=None,
+            failed=False,
+        )
+        routing = RoutingDecision(spaces=[force_space], logged_slug=force_space, fallback_used=False)
+    else:
+        # No-op when `intent_spaces` hasn't changed since the last query
+        # (the common case) — otherwise rebuilds the centroids from the
+        # edited config. Either way `deps.centroids` now reflects the
+        # current `centroid_temperature` too. See `CentroidIndex.sync`'s
+        # docstring.
+        deps.centroids.sync(cfg)
+        classification = classify(question, query_vector, cfg, deps.centroids, deps.classify_llm)
+        routing = decide_spaces(classification, cfg)
+    if trace is not None:
+        trace.classification = classification
+        trace.routing = routing
 
     dense_hits = dense_search(query_vector, routing.spaces, cfg.rag.vector_top_n, deps.vector_store)
     keyword_hits = keyword_search(question, routing.spaces, cfg.rag.keyword_top_n, deps.engine)
+    if trace is not None:
+        trace.dense_hits = dense_hits
+        trace.keyword_hits = keyword_hits
     fused = fuse(dense_hits, keyword_hits, cfg.rag.rrf_k, cfg.rag.rerank_candidates)
+    if trace is not None:
+        trace.fused = fused
     # No-op when the configured model name hasn't changed — otherwise
     # discards the cached cross-encoder client so the next call below
     # loads the newly configured model instead of silently continuing to
     # score with the old one. See `Reranker.set_model`'s docstring.
     deps.reranker.set_model(cfg.rag.rerank_model)
     ranked = deps.reranker.rerank(question, fused, deps.engine, cfg.rag.final_top_k)
+    if trace is not None:
+        trace.ranked = ranked
 
-    if not passes_gate(ranked, cfg.rag.relevance_floor):
+    gate_passed = passes_gate(ranked, cfg.rag.relevance_floor)
+    if trace is not None:
+        trace.gate_passed = gate_passed
+
+    if not gate_passed:
         return _no_match_outcome(
             routing.spaces,
             cfg,

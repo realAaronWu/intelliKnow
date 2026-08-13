@@ -22,6 +22,15 @@ generation will report a failure rather than crash.
 classification entirely — useful for isolating retrieval behaviour (dense
 vs. keyword vs. fused vs. reranked ordering) from classification.
 
+This script runs the exact same `app.orchestrator.pipeline.answer_question`
+every real caller (the admin `/admin/test-query` endpoint, and eventually a
+chat channel adapter) runs — it is a thin trace-printing wrapper around
+that one function, not a second implementation of the pipeline, via the
+optional `trace: QueryTrace` parameter `answer_question` accepts for
+exactly this purpose. That means any future change to `answer_question`
+(including what it returns) shows up here automatically, and this script
+cannot silently drift from what production actually does.
+
 **Environment note.** This is the first place in the whole increment
 where real FAISS search (`app/rag/vector_store.py`) and a real
 `sentence-transformers` `CrossEncoder` (`app/rag/retrieve/rerank.py`) run
@@ -40,7 +49,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
 from pathlib import Path
 
 # `python scripts/ask.py` puts this script's own directory on
@@ -56,17 +64,14 @@ from app.bootstrap import bootstrap  # noqa: E402
 from app.db import chunks as chunks_table  # noqa: E402
 from app.db import create_engine_for, documents as documents_table, init_schema  # noqa: E402
 from app.orchestrator.centroids import CentroidIndex  # noqa: E402
-from app.orchestrator.classify import Classification, classify  # noqa: E402
-from app.orchestrator.route import decide_spaces  # noqa: E402
-from app.providers.base import ProviderError  # noqa: E402
-from app.rag.citations import verify_citations  # noqa: E402
-from app.rag.context import build_context  # noqa: E402
-from app.rag.format import format_for_channel  # noqa: E402
-from app.rag.generate import ChannelProfile, generate_answer  # noqa: E402
-from app.rag.retrieve.dense import dense_search  # noqa: E402
-from app.rag.retrieve.fuse import fuse  # noqa: E402
+from app.orchestrator.pipeline import (  # noqa: E402
+    PipelineDeps,
+    QueryTrace,
+    _domain_label,
+    answer_question,
+)
+from app.rag.generate import ChannelProfile  # noqa: E402
 from app.rag.retrieve.gate import passes_gate  # noqa: E402
-from app.rag.retrieve.keyword import keyword_search  # noqa: E402
 from app.rag.retrieve.rerank import Reranker  # noqa: E402
 from app.rag.vector_store import VectorStore  # noqa: E402
 
@@ -115,16 +120,6 @@ def _chunk_previews(engine, chunk_ids: set[int]) -> dict[int, str]:
     return previews
 
 
-def _domain_label(spaces: list[str], cfg) -> str:
-    if len(spaces) == 1:
-        [slug] = spaces
-        for space in cfg.intent_spaces:
-            if space.slug == slug:
-                return space.name
-        return slug
-    return "the knowledge base"
-
-
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("question", help="the question to ask")
@@ -135,13 +130,7 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     application, cfg, engine, vector_store, centroids, reranker = _build_deps()
-    start = time.perf_counter()
 
-    print(f"Question: {args.question!r}")
-    [query_vector] = application.embedding.embed([args.question])
-
-    # --- Classification -------------------------------------------------
-    print("\n--- Classification ---")
     if args.space:
         valid_slugs = {space.slug for space in cfg.intent_spaces}
         if args.space not in valid_slugs:
@@ -151,18 +140,35 @@ def main(argv: list[str]) -> int:
                 file=sys.stderr,
             )
             return 2
+
+    deps = PipelineDeps(
+        engine=engine,
+        get_cfg=lambda: cfg,
+        embedding=application.embedding,
+        classify_llm=application.classify_llm,
+        generate_llm=application.generate_llm,
+        vector_store=vector_store,
+        centroids=centroids,
+        reranker=reranker,
+    )
+
+    print(f"Question: {args.question!r}")
+
+    # The one real call, exactly as any other caller makes it — `trace` is
+    # filled in with every pre-generation stage as `answer_question`
+    # actually computes it, and `force_space` is the `--space` bypass, both
+    # threaded straight into the pipeline rather than reimplemented here.
+    trace = QueryTrace()
+    outcome = answer_question(
+        args.question, DEMO_CHANNEL, deps, force_space=args.space, trace=trace
+    )
+
+    # --- Classification -------------------------------------------------
+    print("\n--- Classification ---")
+    if args.space:
         print(f"bypassed via --space {args.space!r}")
-        classification = Classification(
-            intent_slug=args.space,
-            confidence=1.0,
-            classified_by="centroid",
-            reasoning=None,
-            failed=False,
-        )
     else:
-        classification = classify(
-            args.question, query_vector, cfg, centroids, application.classify_llm
-        )
+        classification = trace.classification
         print(f"detected space:  {classification.intent_slug}")
         print(f"confidence:      {classification.confidence:.4f}")
         print(f"classified_by:   {classification.classified_by}")
@@ -172,82 +178,70 @@ def main(argv: list[str]) -> int:
             print("(escalation failed — fell back)")
 
     # --- Routing ----------------------------------------------------------
-    routing = decide_spaces(classification, cfg)
+    routing = trace.routing
     print("\n--- Routing ---")
     print(f"spaces searched: {', '.join(routing.spaces)}")
     print(f"fallback used:   {routing.fallback_used}")
 
     # --- Retrieval ----------------------------------------------------------
-    dense_hits = dense_search(query_vector, routing.spaces, cfg.rag.vector_top_n, vector_store)
-    keyword_hits = keyword_search(args.question, routing.spaces, cfg.rag.keyword_top_n, engine)
-    all_chunk_ids = {h.chunk_id for h in dense_hits} | {h.chunk_id for h in keyword_hits}
+    all_chunk_ids = {h.chunk_id for h in trace.dense_hits} | {
+        h.chunk_id for h in trace.keyword_hits
+    }
     previews = _chunk_previews(engine, all_chunk_ids)
 
-    print(f"\n--- Dense hits ({len(dense_hits)}) ---")
-    for hit in dense_hits:
+    print(f"\n--- Dense hits ({len(trace.dense_hits)}) ---")
+    for hit in trace.dense_hits:
         print(f"  [{hit.score:.4f}] chunk {hit.chunk_id}  {previews.get(hit.chunk_id, '')}")
 
-    print(f"\n--- Keyword hits ({len(keyword_hits)}) ---")
-    for hit in keyword_hits:
+    print(f"\n--- Keyword hits ({len(trace.keyword_hits)}) ---")
+    for hit in trace.keyword_hits:
         print(f"  [{hit.score:.4f}] chunk {hit.chunk_id}  {previews.get(hit.chunk_id, '')}")
 
-    fused = fuse(dense_hits, keyword_hits, cfg.rag.rrf_k, cfg.rag.rerank_candidates)
-    print(f"\n--- Fused order ({len(fused)}) ---")
-    for hit in fused:
+    print(f"\n--- Fused order ({len(trace.fused)}) ---")
+    for hit in trace.fused:
         print(f"  [{hit.fused_score:.4f}] chunk {hit.chunk_id}  {previews.get(hit.chunk_id, '')}")
 
-    ranked = reranker.rerank(args.question, fused, engine, cfg.rag.final_top_k)
-    print(f"\n--- Reranked order ({len(ranked)}) ---")
-    for hit in ranked:
+    print(f"\n--- Reranked order ({len(trace.ranked)}) ---")
+    for hit in trace.ranked:
         print(
             f"  [relevance={hit.relevance:.4f} raw={hit.rerank_score:.4f}] "
             f"chunk {hit.chunk_id}  {previews.get(hit.chunk_id, '')}"
         )
 
     # --- Gate ----------------------------------------------------------------
-    best_relevance = max((hit.relevance for hit in ranked), default=0.0)
-    gate_passed = passes_gate(ranked, cfg.rag.relevance_floor)
+    best_relevance = max((hit.relevance for hit in trace.ranked), default=0.0)
+    gate_passed = passes_gate(trace.ranked, cfg.rag.relevance_floor)
     print("\n--- Gate ---")
     print(f"best relevance: {best_relevance:.4f}   floor: {cfg.rag.relevance_floor}")
     print(f"decision: {'PASS' if gate_passed else 'FAIL — no answer generated'}")
 
-    if not gate_passed:
+    if outcome.status == "no_match":
         domain = _domain_label(routing.spaces, cfg)
         print("\n--- Result ---")
         print(
             f"No match: nothing in {domain} was relevant enough to answer "
             "this question. No generation call was made."
         )
-        latency_ms = int(round((time.perf_counter() - start) * 1000))
-        print(f"\nLatency: {latency_ms} ms")
+        print(f"\nLatency: {outcome.latency_ms} ms")
         return 0
 
-    # --- Context, generation, citations, formatting --------------------------
-    bundle = build_context(ranked, engine, cfg.rag)
-    try:
-        raw_answer = generate_answer(args.question, bundle, DEMO_CHANNEL, application.generate_llm)
-    except ProviderError as exc:
+    if outcome.status == "failed":
         print("\n--- Result ---")
-        print(f"Generation failed: {exc}")
-        latency_ms = int(round((time.perf_counter() - start) * 1000))
-        print(f"\nLatency: {latency_ms} ms")
+        print(f"Generation failed: {outcome.error}")
+        print(f"\nLatency: {outcome.latency_ms} ms")
         return 1
 
-    cleaned_answer, citations = verify_citations(raw_answer, bundle)
-    formatted_answer = format_for_channel(cleaned_answer, citations, DEMO_CHANNEL)
-
     print("\n--- Answer ---")
-    print(formatted_answer)
+    print(outcome.answer)
 
     print("\n--- Citations ---")
-    if not citations:
+    if not outcome.citations:
         print("  (none)")
-    for citation in citations:
+    for citation in outcome.citations:
         ref = f" ({citation.source_ref})" if citation.source_ref else ""
         print(f"  {citation.document_title}{ref}")
 
-    latency_ms = int(round((time.perf_counter() - start) * 1000))
-    print(f"\nLatency: {latency_ms} ms")
+    print(f"\nLatency: {outcome.latency_ms} ms")
     return 0
 
 

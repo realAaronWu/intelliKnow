@@ -23,7 +23,7 @@ from app.config_service import ConfigService
 from app.db import chunks as chunks_table
 from app.db import create_engine_for, documents as documents_table, init_schema
 from app.orchestrator.centroids import CentroidIndex
-from app.orchestrator.pipeline import PipelineDeps, answer_question
+from app.orchestrator.pipeline import PipelineDeps, QueryTrace, answer_question
 from app.providers.base import ProviderError
 from app.rag.generate import ChannelProfile
 from app.rag.retrieve.rerank import Reranker
@@ -543,3 +543,105 @@ def test_c2_reranker_model_change_takes_effect_on_next_query_no_restart(
         "the reranker model-name update on the live ConfigService never "
         "reached the Reranker instance held by PipelineDeps"
     )
+
+
+# --- I3: optional QueryTrace / force_space, so scripts/ask.py can call ------------
+# answer_question directly instead of re-implementing the pipeline.
+#
+# `scripts/ask.py` prints a stage-by-stage trace (classification, routing,
+# dense hits, keyword hits, fused order, reranked order, gate decision) that
+# `QueryOutcome` alone doesn't carry. Rather than have the demo CLI
+# re-implement every stage itself (the I3 defect: any future change to
+# `answer_question` would silently stop showing up in the demo), an
+# optional `trace: QueryTrace` parameter lets a caller opt into having
+# `answer_question` fill in that same intermediate data as it computes it
+# for real -- one embedding call, one rerank call, same as any other
+# caller. `force_space` is the other piece `scripts/ask.py --space SLUG`
+# needs: bypass classification/routing entirely and force retrieval to one
+# named space, without inventing a second, parallel way to run the
+# pipeline.
+
+
+def test_i3_trace_captures_every_pre_generation_stage(
+    engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids
+):
+    _seed_matching_chunk(engine, vector_store)
+    reranker = Reranker("fake-model", client=_FakeCrossEncoder({_CHUNK_TEXT: 5.0}))
+    generate_llm.expect_text("You get 25 days of leave. [1]")
+    deps = _deps(engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids, reranker)
+    trace = QueryTrace()
+
+    outcome = answer_question(_QUESTION, _CHANNEL, deps, trace=trace)
+
+    assert outcome.status == "success"
+    assert trace.query_vector is not None and len(trace.query_vector) == DIMENSION
+    assert trace.classification is not None
+    assert trace.classification.intent_slug == "hr"
+    assert trace.routing is not None
+    assert trace.routing.spaces == ["hr"]
+    assert trace.dense_hits is not None and len(trace.dense_hits) == 1
+    assert trace.keyword_hits is not None
+    assert trace.fused is not None and len(trace.fused) == 1
+    assert trace.ranked is not None and len(trace.ranked) == 1
+    assert trace.gate_passed is True
+
+
+def test_i3_trace_is_populated_even_when_the_gate_rejects(
+    engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids
+):
+    """The no_match path returns early, before context/generation -- the
+    trace must still carry everything computed up to that point rather
+    than stopping partway.
+    """
+    _seed_matching_chunk(engine, vector_store)
+    reranker = Reranker("fake-model", client=_FakeCrossEncoder({_CHUNK_TEXT: -10.0}))
+    deps = _deps(engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids, reranker)
+    trace = QueryTrace()
+
+    outcome = answer_question(_QUESTION, _CHANNEL, deps, trace=trace)
+
+    assert outcome.status == "no_match"
+    assert trace.ranked is not None and len(trace.ranked) == 1
+    assert trace.gate_passed is False
+
+
+def test_i3_trace_defaults_to_none_and_costs_nothing_when_not_requested(
+    engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids
+):
+    """Every other existing caller (the admin API, every other test in this
+    file) calls `answer_question` with no `trace` argument at all -- this
+    pins that the parameter is optional and changes nothing when omitted.
+    """
+    _seed_matching_chunk(engine, vector_store)
+    reranker = Reranker("fake-model", client=_FakeCrossEncoder({_CHUNK_TEXT: 5.0}))
+    generate_llm.expect_text("You get 25 days of leave. [1]")
+    deps = _deps(engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids, reranker)
+
+    outcome = answer_question(_QUESTION, _CHANNEL, deps)
+
+    assert outcome.status == "success"
+
+
+def test_i3_force_space_bypasses_classification_and_forces_routing(
+    engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids
+):
+    """`--space SLUG` in `scripts/ask.py` forces retrieval to one named
+    space and skips classification entirely -- no centroid lookup, no LLM
+    escalation call, regardless of what the question would otherwise
+    classify as.
+    """
+    _seed_matching_chunk(engine, vector_store)
+    reranker = Reranker("fake-model", client=_FakeCrossEncoder({_CHUNK_TEXT: 5.0}))
+    generate_llm.expect_text("You get 25 days of leave. [1]")
+    deps = _deps(engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids, reranker)
+    trace = QueryTrace()
+
+    outcome = answer_question(_QUESTION, _CHANNEL, deps, trace=trace, force_space="hr")
+
+    assert outcome.status == "success"
+    assert outcome.intent_slug == "hr"
+    assert outcome.fallback_used is False
+    assert len(classify_llm.calls) == 0
+    assert trace.classification is not None
+    assert trace.classification.intent_slug == "hr"
+    assert trace.routing.spaces == ["hr"]
