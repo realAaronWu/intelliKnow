@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import faiss
@@ -23,6 +24,7 @@ import faiss
 from app.config import AppConfig
 
 _META_FILENAME = "index_meta.json"
+_REINDEX_STATUS_FILENAME = "reindex_status.json"
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,57 @@ def record_meta_if_absent(faiss_dir: Path, model: str, dimension: int) -> None:
     """
     if read_meta(faiss_dir) is None:
         write_meta(faiss_dir, model=model, dimension=dimension)
+
+
+@dataclass(frozen=True)
+class ReindexStatus:
+    """The outcome of the most recent full re-index."""
+
+    status: str  # "ok" | "failed"
+    at: str
+    model: str
+    error: str | None = None
+
+
+def _status_path(faiss_dir: Path) -> Path:
+    return Path(faiss_dir).parent / _REINDEX_STATUS_FILENAME
+
+
+def write_reindex_status(
+    faiss_dir: Path, *, status: str, model: str, error: str | None = None
+) -> None:
+    """Record how the last full re-index ended.
+
+    A re-index runs as a background task behind a 202, so its outcome
+    reaches nobody: a failure part-way left the indexes in whatever state
+    it managed and the admin with no way to find out. This is the record
+    `GET /documents/reindex/status` reads back.
+    """
+    path = _status_path(faiss_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "status": status,
+        "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "model": model,
+        "error": error,
+    }
+    path.write_text(json.dumps(payload))
+
+
+def read_reindex_status(faiss_dir: Path) -> ReindexStatus | None:
+    """The recorded outcome of the last full re-index, or `None` if none
+    has ever run.
+    """
+    path = _status_path(faiss_dir)
+    if not path.exists():
+        return None
+    raw = json.loads(path.read_text())
+    return ReindexStatus(
+        status=raw["status"],
+        at=raw["at"],
+        model=raw["model"],
+        error=raw.get("error"),
+    )
 
 
 def _has_any_vectors(faiss_dir: Path) -> bool:

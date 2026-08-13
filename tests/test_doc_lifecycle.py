@@ -19,7 +19,7 @@ from app.db import chunks, create_engine_for, documents, init_schema, query_log
 from app.ingest.lifecycle import delete_document, reassign_document, reindex_all, reparse_document
 from app.ingest.worker import IngestDeps, ingest_document
 from app.providers.base import ProviderError
-from app.rag.index_meta import read_meta
+from app.rag.index_meta import read_meta, read_reindex_status, write_reindex_status
 from app.rag.index_writer import IndexWriter
 from app.rag.vector_store import VectorStore
 from tests.doubles import FakeEmbeddingProvider, FakeLLMProvider
@@ -387,3 +387,137 @@ def test_11_4_reindex_with_no_documents_still_records_index_meta(deps, cfg):
     meta = read_meta(Path(cfg.storage.faiss_dir))
     assert meta is not None
     assert meta.model == cfg.embedding.model
+
+
+# --- 11.4 Full re-index: failure handling and stale state --------------------------
+#
+# `reindex_all` deleted, recreated and repopulated each space in turn with
+# no failure handling at all. A failure part-way left earlier slugs on the
+# new model and later ones on the old — the exact mixed-model state
+# `index_meta.json` exists to prevent — with `write_meta` unreached, so the
+# record still named the old model and nothing could detect the mix. It
+# also never removed the `.index` file of a space that no longer had any
+# chunks. And it runs as a background task after a 202, so the failure was
+# invisible to the admin who triggered it.
+
+
+def test_reindex_deletes_the_index_file_of_a_space_with_no_chunks(
+    engine, deps, classify_llm, faiss_dir
+):
+    hr_doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="a" * 64)
+    classify_llm.expect_schema({"slug": "hr"})
+    ingest_document(hr_doc_id, FIXTURES / "handbook.pdf", deps)
+    finance_doc_id = _insert_pending_document(engine, "salary_bands.pdf", sha256="b" * 64)
+    classify_llm.expect_schema({"slug": "finance"})
+    ingest_document(finance_doc_id, FIXTURES / "salary_bands.pdf", deps)
+    delete_document(finance_doc_id, deps)
+    assert (faiss_dir / "finance.index").exists(), "precondition: the stale file is there"
+
+    reindex_all(deps)
+
+    assert (faiss_dir / "hr.index").exists()
+    assert not (faiss_dir / "finance.index").exists()
+
+
+def test_a_failed_reindex_leaves_the_existing_indexes_and_record_untouched(
+    engine, store, cfg, classify_llm, faiss_dir
+):
+    healthy_embedder = FakeEmbeddingProvider(dimension=DIMENSION)
+    healthy_deps = IngestDeps(
+        engine=engine,
+        cfg=cfg,
+        classify_llm=classify_llm,
+        embedding=healthy_embedder,
+        vector_store=store,
+        index_writer=IndexWriter(engine, store, healthy_embedder),
+    )
+    doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="a" * 64)
+    classify_llm.expect_schema({"slug": "hr"})
+    ingest_document(doc_id, FIXTURES / "handbook.pdf", healthy_deps)
+    vectors_before = _vector_count(store, "hr")
+    assert vectors_before > 0
+    assert read_meta(faiss_dir).model == cfg.embedding.model
+
+    # The operator has switched models and is re-indexing; the provider for
+    # the new model is down.
+    new_model_cfg = cfg.model_copy(
+        update={"embedding": cfg.embedding.model_copy(update={"model": "a-new-model"})}
+    )
+    failing_embedder = _FailingEmbeddingProvider(dimension=DIMENSION)
+    failing_deps = IngestDeps(
+        engine=engine,
+        cfg=new_model_cfg,
+        classify_llm=classify_llm,
+        embedding=failing_embedder,
+        vector_store=store,
+        index_writer=IndexWriter(engine, store, failing_embedder),
+    )
+
+    with pytest.raises(ProviderError):
+        reindex_all(failing_deps)
+
+    # Every space still holds its old vectors, and the record still names
+    # the model that actually built them — not the one that failed.
+    assert _vector_count(store, "hr") == vectors_before
+    assert read_meta(faiss_dir).model == cfg.embedding.model
+
+
+def test_a_failed_reindex_is_recorded_where_an_admin_can_see_it(
+    engine, store, cfg, classify_llm, faiss_dir
+):
+    failing_embedder = _FailingEmbeddingProvider(dimension=DIMENSION)
+    doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="a" * 64)
+    classify_llm.expect_schema({"slug": "hr"})
+    healthy_embedder = FakeEmbeddingProvider(dimension=DIMENSION)
+    ingest_document(
+        doc_id,
+        FIXTURES / "handbook.pdf",
+        IngestDeps(
+            engine=engine,
+            cfg=cfg,
+            classify_llm=classify_llm,
+            embedding=healthy_embedder,
+            vector_store=store,
+            index_writer=IndexWriter(engine, store, healthy_embedder),
+        ),
+    )
+    failing_deps = IngestDeps(
+        engine=engine,
+        cfg=cfg,
+        classify_llm=classify_llm,
+        embedding=failing_embedder,
+        vector_store=store,
+        index_writer=IndexWriter(engine, store, failing_embedder),
+    )
+
+    with pytest.raises(ProviderError):
+        reindex_all(failing_deps)
+
+    status = read_reindex_status(faiss_dir)
+    assert status is not None
+    assert status.status == "failed"
+    assert "unreachable" in status.error
+
+
+def test_a_successful_reindex_records_success(engine, deps, classify_llm, faiss_dir, cfg):
+    doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="a" * 64)
+    classify_llm.expect_schema({"slug": "hr"})
+    ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
+
+    reindex_all(deps)
+
+    status = read_reindex_status(faiss_dir)
+    assert status is not None
+    assert status.status == "ok"
+    assert status.error is None
+    assert status.model == cfg.embedding.model
+
+
+def test_a_later_successful_reindex_clears_a_recorded_failure(
+    engine, deps, classify_llm, faiss_dir
+):
+    write_reindex_status(faiss_dir, status="failed", model="old", error="provider was down")
+
+    reindex_all(deps)
+
+    assert read_reindex_status(faiss_dir).status == "ok"

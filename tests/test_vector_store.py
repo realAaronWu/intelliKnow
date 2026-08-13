@@ -167,3 +167,99 @@ def test_6_8_identical_vector_in_two_spaces_scores_identically(tmp_path):
     legal_score = store.search("legal", query, top_n=1)[0][1]
 
     assert hr_score == pytest.approx(legal_score, abs=1e-6)
+
+
+# --- Atomic full rebuild -----------------------------------------------------
+#
+# A full re-index used to delete each space's index and recreate it in
+# place, one slug at a time. A failure partway left earlier slugs rebuilt
+# under the new model and later ones still on the old — the mixed-model
+# state the whole mechanism exists to prevent — and it never removed the
+# `.index` file of a space that no longer had any chunks. `rebuild_all`
+# writes every new index to a temp file first and only swaps once all of
+# them exist.
+
+_E1 = [1.0, 0.0, 0.0, 0.0]
+_E2 = [0.0, 1.0, 0.0, 0.0]
+_E3 = [0.0, 0.0, 1.0, 0.0]
+
+
+def test_rebuild_all_replaces_every_space(tmp_path):
+    store = VectorStore(tmp_path, DIMENSION)
+    store.add("hr", [1], [_E1])
+    store.persist("hr")
+
+    store.rebuild_all({"hr": ([1, 2], [_E2, _E3]), "legal": ([3], [_E1])})
+
+    assert len(store.search("hr", _E2, top_n=10)) == 2
+    assert len(store.search("legal", _E1, top_n=10)) == 1
+
+
+def test_rebuild_all_is_visible_to_a_fresh_store(tmp_path):
+    """The swapped files, not just in-memory state, have to be the new
+    ones — a re-index that only updated memory would be undone by the next
+    restart.
+    """
+    store = VectorStore(tmp_path, DIMENSION)
+    store.add("hr", [1, 2, 3], [_E1, _E2, _E3])
+    store.persist("hr")
+
+    store.rebuild_all({"hr": ([1], [_E1])})
+
+    assert len(VectorStore(tmp_path, DIMENSION).search("hr", _E1, top_n=10)) == 1
+
+
+def test_rebuild_all_deletes_the_index_of_a_space_with_no_chunks(tmp_path):
+    store = VectorStore(tmp_path, DIMENSION)
+    store.add("hr", [1], [_E1])
+    store.persist("hr")
+    store.add("legal", [2], [_E2])
+    store.persist("legal")
+    assert (tmp_path / "legal.index").exists()
+
+    store.rebuild_all({"hr": ([1], [_E1])})
+
+    assert not (tmp_path / "legal.index").exists()
+    assert store.search("legal", _E2, top_n=10) == []
+
+
+def test_a_failed_rebuild_leaves_every_existing_index_untouched(tmp_path):
+    store = VectorStore(tmp_path, DIMENSION)
+    store.add("hr", [1], [_E1])
+    store.persist("hr")
+    store.add("legal", [2], [_E2])
+    store.persist("legal")
+
+    # A vector of the wrong dimension: FAISS rejects it while the second
+    # space is being staged, after the first has already been written to
+    # its temp file.
+    with pytest.raises(Exception):
+        store.rebuild_all(
+            {"hr": ([1, 2], [_E2, _E3]), "legal": ([9], [[1.0, 0.0]])}
+        )
+
+    fresh = VectorStore(tmp_path, DIMENSION)
+    assert len(fresh.search("hr", _E1, top_n=10)) == 1
+    assert len(fresh.search("legal", _E2, top_n=10)) == 1
+
+
+def test_a_failed_rebuild_leaves_no_temp_files_behind(tmp_path):
+    store = VectorStore(tmp_path, DIMENSION)
+    store.add("hr", [1], [_E1])
+    store.persist("hr")
+    before = sorted(p.name for p in tmp_path.iterdir())
+
+    with pytest.raises(Exception):
+        store.rebuild_all({"hr": ([1], [_E2]), "legal": ([9], [[1.0, 0.0]])})
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
+
+
+def test_rebuild_all_with_no_entries_clears_every_space(tmp_path):
+    store = VectorStore(tmp_path, DIMENSION)
+    store.add("hr", [1], [_E1])
+    store.persist("hr")
+
+    store.rebuild_all({})
+
+    assert not (tmp_path / "hr.index").exists()

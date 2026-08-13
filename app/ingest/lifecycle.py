@@ -20,15 +20,18 @@ removes the `documents` row itself (`query_log` carries no foreign key to
 
 Full re-index is the one operation that does not go through `IndexWriter`
 at all: it re-embeds every chunk already stored in `chunks` with whatever
-embedding provider `deps` currently holds and rebuilds each intent space's
-FAISS index from scratch, then records the new model/dimension via
-`app/rag/index_meta.py::write_meta` — the record `assert_compatible` (and
-the `ConfigService` guard built from it in `app/bootstrap.py`) checks
-against on every future config update.
+embedding provider `deps` currently holds and rebuilds every intent
+space's FAISS index atomically via `VectorStore.rebuild_all`, then records
+the new model/dimension via `app/rag/index_meta.py::write_meta` — the
+record `assert_compatible` checks against at startup and on every config
+update or reload. It is also the only operation whose outcome is recorded
+for an admin to read back (`write_reindex_status`), because it is the only
+one that runs detached from the request that asked for it.
 """
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from pathlib import Path
 
@@ -37,7 +40,9 @@ from sqlalchemy import delete, select
 from app.db import chunks as chunks_table
 from app.db import documents as documents_table
 from app.ingest.worker import IngestDeps, _mark_failed, _mark_indexed, _set_status, load_and_chunk
-from app.rag.index_meta import write_meta
+from app.rag.index_meta import write_meta, write_reindex_status
+
+logger = logging.getLogger(__name__)
 
 
 def reparse_document(doc_id: int, path: Path, deps: IngestDeps) -> None:
@@ -120,32 +125,53 @@ def reindex_all(deps: IngestDeps) -> None:
     Source files are never re-read and `chunks` rows are never rewritten —
     only their vectors change, per `spec: document-ingestion` §
     "Full re-index": "without re-uploading the source files."
+
+    All-or-nothing, in three stages that each have to complete before the
+    next begins:
+
+    1. Every chunk is embedded. Nothing has been written yet, so a
+       provider failure here costs only time.
+    2. `VectorStore.rebuild_all` stages every new index in a temp file and
+       swaps them into place together, deleting the index files of spaces
+       that no longer have chunks.
+    3. Only then is the new model recorded.
+
+    Previously this deleted and recreated each space in turn, so a failure
+    part-way left earlier slugs on the new model and later ones on the old
+    — the mixed-model state `index_meta.json` exists to prevent — and left
+    `write_meta` unreached, so the record still named the old model and
+    nothing could detect the mix. Because it runs as a background task
+    behind a 202, that failure was also invisible; the outcome is now
+    recorded for `GET /documents/reindex/status`.
     """
-    with deps.engine.connect() as conn:
-        rows = conn.execute(
-            select(chunks_table.c.id, chunks_table.c.intent_slug, chunks_table.c.text)
-        ).fetchall()
+    faiss_dir = Path(deps.cfg.storage.faiss_dir)
+    model = deps.cfg.embedding.model
 
-    by_slug: dict[str, list[tuple[int, str]]] = defaultdict(list)
-    for row in rows:
-        by_slug[row.intent_slug].append((row.id, row.text))
+    try:
+        with deps.engine.connect() as conn:
+            rows = conn.execute(
+                select(chunks_table.c.id, chunks_table.c.intent_slug, chunks_table.c.text)
+            ).fetchall()
 
-    batch_size = deps.cfg.embedding.batch_size
-    for slug, entries in by_slug.items():
-        ids = [entry[0] for entry in entries]
-        texts = [entry[1] for entry in entries]
-        vectors = _embed_batched(deps.embedding, texts, batch_size)
+        by_slug: dict[str, list[tuple[int, str]]] = defaultdict(list)
+        for row in rows:
+            by_slug[row.intent_slug].append((row.id, row.text))
 
-        deps.vector_store.delete_space(slug)
-        deps.vector_store.create_space(slug)
-        deps.vector_store.add(slug, ids, vectors)
-        deps.vector_store.persist(slug)
+        batch_size = deps.cfg.embedding.batch_size
+        entries: dict[str, tuple[list[int], list[list[float]]]] = {}
+        for slug, slug_entries in by_slug.items():
+            ids = [entry[0] for entry in slug_entries]
+            texts = [entry[1] for entry in slug_entries]
+            entries[slug] = (ids, _embed_batched(deps.embedding, texts, batch_size))
 
-    write_meta(
-        Path(deps.cfg.storage.faiss_dir),
-        model=deps.cfg.embedding.model,
-        dimension=deps.cfg.embedding.dimension,
-    )
+        deps.vector_store.rebuild_all(entries)
+    except Exception as exc:
+        logger.exception("full re-index to model %r failed; indexes left unchanged", model)
+        write_reindex_status(faiss_dir, status="failed", model=model, error=str(exc))
+        raise
+
+    write_meta(faiss_dir, model=model, dimension=deps.cfg.embedding.dimension)
+    write_reindex_status(faiss_dir, status="ok", model=model)
 
 
 def _embed_batched(embedding, texts: list[str], batch_size: int) -> list[list[float]]:

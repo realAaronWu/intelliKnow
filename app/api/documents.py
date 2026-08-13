@@ -30,6 +30,7 @@ from app.db import documents as documents_table
 from app.ingest.lifecycle import delete_document, reassign_document, reindex_all, reparse_document
 from app.ingest.validate import ValidationError, validate_upload
 from app.ingest.worker import IngestDeps, _utc_now_iso, ingest_document
+from app.rag.index_meta import read_reindex_status
 
 
 class ReassignRequest(BaseModel):
@@ -268,5 +269,24 @@ def build_documents_router(deps: IngestDeps) -> APIRouter:
     def reindex(background_tasks: BackgroundTasks) -> dict:
         background_tasks.add_task(reindex_all, deps)
         return {"status": "reindexing"}
+
+    @router.get("/documents/reindex/status")
+    def reindex_status() -> dict:
+        """How the last full re-index ended.
+
+        A re-index is scheduled as a background task behind a 202, so
+        without this its outcome reaches nobody: a failure part-way used to
+        leave the admin who triggered it with no way to find out that it
+        had not, in fact, re-indexed anything.
+        """
+        status = read_reindex_status(Path(deps.cfg.storage.faiss_dir))
+        if status is None:
+            return {"status": "never_run", "at": None, "model": None, "error": None}
+        return {
+            "status": status.status,
+            "at": status.at,
+            "model": status.model,
+            "error": status.error,
+        }
 
     return router

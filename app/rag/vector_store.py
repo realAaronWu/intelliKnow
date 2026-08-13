@@ -19,6 +19,8 @@ been written to needs no file at all.
 
 from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 
 import faiss
@@ -118,6 +120,56 @@ class VectorStore:
         path = self._index_path(slug)
         if path.exists():
             path.unlink()
+
+    def rebuild_all(self, entries: dict[str, tuple[list[int], list[list[float]]]]) -> None:
+        """Replace every space's index with one built from `entries`, and
+        delete the index of any space `entries` does not mention.
+
+        Atomic across all spaces: each new index is written to a temp file
+        in `faiss_dir` first, and nothing is swapped into place until every
+        one of them has been written. A failure part-way therefore leaves
+        every existing `.index` exactly as it was, rather than the mix of
+        rebuilt and stale spaces that rebuilding in place produces — which,
+        for a full re-index under a new embedding model, is the mixed-model
+        state `index_meta.json` exists to prevent, and it would go
+        unrecorded because the metadata write never runs.
+
+        Spaces absent from `entries` have no chunks left, so their index
+        file is removed rather than left behind as a stale artifact holding
+        vectors for chunks that no longer exist.
+        """
+        self._faiss_dir.mkdir(parents=True, exist_ok=True)
+
+        staged: dict[str, Path] = {}
+        try:
+            for slug, (ids, vectors) in entries.items():
+                index = self._new_index()
+                if ids:
+                    index.add_with_ids(
+                        np.array(vectors, dtype="float32"),
+                        np.array(ids, dtype="int64"),
+                    )
+                handle, temp_name = tempfile.mkstemp(
+                    dir=self._faiss_dir, prefix=f".{slug}.", suffix=".rebuild"
+                )
+                os.close(handle)
+                staged[slug] = Path(temp_name)
+                faiss.write_index(index, temp_name)
+        except BaseException:
+            for temp_path in staged.values():
+                temp_path.unlink(missing_ok=True)
+            raise
+
+        for slug, temp_path in staged.items():
+            os.replace(temp_path, self._index_path(slug))
+            # Drop the cached index so the next touch reads the new file.
+            self._indexes.pop(slug, None)
+
+        for index_file in self._faiss_dir.glob("*.index"):
+            slug = index_file.stem
+            if slug not in entries:
+                index_file.unlink()
+                self._indexes.pop(slug, None)
 
     def persist(self, slug: str) -> None:
         index = self._get_or_create(slug)

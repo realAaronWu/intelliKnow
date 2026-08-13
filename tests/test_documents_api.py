@@ -479,3 +479,25 @@ def test_reindex_endpoint_reembeds_every_document(client, classify_llm, embedder
 
     assert resp.status_code == 202
     assert len(embedder.calls) > 0
+
+
+def test_reindex_status_before_any_reindex_has_run(client):
+    resp = client.get("/documents/reindex/status")
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "never_run"
+
+
+def test_reindex_status_reports_the_last_outcome(client, classify_llm):
+    """A re-index is scheduled behind a 202, so without a readable record
+    its outcome — including a failure that re-indexed nothing — reached
+    nobody.
+    """
+    _upload(client, classify_llm, "handbook.pdf", "hr")
+
+    client.post("/documents/reindex")
+
+    body = client.get("/documents/reindex/status").json()
+    assert body["status"] == "ok"
+    assert body["error"] is None
+    assert body["at"]
