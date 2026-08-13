@@ -273,6 +273,26 @@ def test_12_8_reassign_endpoint_changes_space_and_preserves_chunk_count(
     assert embedder.calls == []
 
 
+def test_12_8_reassign_of_a_failed_document_actually_moves_it(client):
+    """A `failed` document has no chunks, and the reassignment's
+    `documents` update used to sit inside the early return taken when
+    there are none — so the move did nothing while this endpoint still
+    answered 200 with the *old* space, which is the worst possible way to
+    report a no-op.
+    """
+    content = (FIXTURES / "corrupt.pdf").read_bytes()
+    doc_id = client.post(
+        "/documents", files={"file": ("corrupt.pdf", content, "application/pdf")}
+    ).json()["id"]
+    assert client.get(f"/documents/{doc_id}").json()["status"] == "failed"
+
+    resp = client.patch(f"/documents/{doc_id}", json={"intent_slug": "legal"})
+
+    assert resp.status_code == 200
+    assert resp.json()["intent_slug"] == "legal"
+    assert client.get(f"/documents/{doc_id}").json()["intent_slug"] == "legal"
+
+
 def test_12_8_reassign_to_unconfigured_space_is_rejected(client, classify_llm):
     doc_id = _upload(client, classify_llm, "handbook.pdf", "hr")
 

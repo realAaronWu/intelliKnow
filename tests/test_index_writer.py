@@ -260,3 +260,191 @@ def test_8_6_embedding_is_batched_at_configured_size(engine, store, embedder):
 def _unit(vector: list[float]) -> list[float]:
     length = math.sqrt(sum(c * c for c in vector))
     return [c / length for c in vector]
+
+
+# --- Reassigning a document that has no chunks (I1) --------------------------------
+#
+# The `documents.intent_slug` update sat inside the early return taken when
+# a document has no chunks, so reassigning a `pending`, `failed`, or
+# zero-chunk document silently did nothing at all — while the API happily
+# returned 200 with the old space.
+
+
+def test_reassign_moves_a_failed_document_with_no_chunks(engine, store, embedder):
+    doc_id = _insert_document(engine, intent_slug="hr")
+    with engine.begin() as conn:
+        conn.execute(
+            documents.update()
+            .where(documents.c.id == doc_id)
+            .values(status="failed", error_message="could not parse", chunk_count=0)
+        )
+    writer = IndexWriter(engine, store, embedder)
+
+    writer.reassign_document(doc_id, "legal")
+
+    with engine.connect() as conn:
+        slug = conn.execute(
+            select(documents.c.intent_slug).where(documents.c.id == doc_id)
+        ).scalar_one()
+    assert slug == "legal"
+    assert embedder.calls == []
+
+
+def test_reassign_of_a_pending_document_moves_it_too(engine, store, embedder):
+    doc_id = _insert_document(engine, intent_slug="hr")
+    with engine.begin() as conn:
+        conn.execute(
+            documents.update().where(documents.c.id == doc_id).values(status="pending")
+        )
+    writer = IndexWriter(engine, store, embedder)
+
+    writer.reassign_document(doc_id, "legal")
+
+    with engine.connect() as conn:
+        row = conn.execute(select(documents).where(documents.c.id == doc_id)).one()
+    assert row.intent_slug == "legal"
+    assert row.status == "pending"
+
+
+# --- Failure injection: the three stores never split (I3) ---------------------------
+#
+# All three mutations committed their SQL before touching FAISS, with no
+# repair path: a `VectorStore` failure left the database saying one thing
+# and the index another, with the document still marked `indexed` and
+# nothing anywhere noticing. For a module whose whole reason to exist is
+# that the three stores agree, the failure paths were the untested half.
+
+
+class _FlakyVectorStore:
+    """Delegates to a real `VectorStore`, raising on one named method.
+
+    A real store underneath is the point: the assertions are about what
+    survives in the actual index after a mid-operation failure, which a
+    pure stub could not show.
+    """
+
+    def __init__(self, inner: VectorStore, fail_on: str) -> None:
+        self._inner = inner
+        self._fail_on = fail_on
+        self.load_calls: list[str] = []
+
+    def _maybe_fail(self, name: str) -> None:
+        if name == self._fail_on:
+            raise RuntimeError(f"FAISS {name} failed")
+
+    def create_space(self, slug: str) -> None:
+        self._maybe_fail("create_space")
+        self._inner.create_space(slug)
+
+    def add(self, slug: str, ids: list[int], vectors: list[list[float]]) -> None:
+        self._maybe_fail("add")
+        self._inner.add(slug, ids, vectors)
+
+    def remove(self, slug: str, ids: list[int]) -> None:
+        self._maybe_fail("remove")
+        self._inner.remove(slug, ids)
+
+    def move(self, from_slug: str, to_slug: str, ids: list[int]) -> None:
+        self._maybe_fail("move")
+        self._inner.move(from_slug, to_slug, ids)
+
+    def persist(self, slug: str) -> None:
+        self._maybe_fail("persist")
+        self._inner.persist(slug)
+
+    def load(self, slug: str) -> None:
+        self.load_calls.append(slug)
+        self._inner.load(slug)
+
+    def search(self, slug: str, vector: list[float], top_n: int):
+        return self._inner.search(slug, vector, top_n)
+
+
+def test_write_document_leaves_no_rows_behind_when_faiss_add_fails(engine, store, embedder):
+    doc_id = _insert_document(engine)
+    flaky = _FlakyVectorStore(store, fail_on="add")
+    writer = IndexWriter(engine, flaky, embedder)
+
+    with pytest.raises(RuntimeError, match="FAISS add failed"):
+        writer.write_document(doc_id, "hr", _make_chunks(3))
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(chunks).where(chunks.c.document_id == doc_id)).fetchall()
+    assert rows == []
+    assert _chunk_fts_count_for(engine, doc_id) == 0
+    assert _vector_count(store, "hr") == 0
+
+
+def test_write_document_leaves_no_rows_behind_when_persist_fails(engine, store, embedder):
+    doc_id = _insert_document(engine)
+    flaky = _FlakyVectorStore(store, fail_on="persist")
+    writer = IndexWriter(engine, flaky, embedder)
+
+    with pytest.raises(RuntimeError, match="FAISS persist failed"):
+        writer.write_document(doc_id, "hr", _make_chunks(3))
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(chunks).where(chunks.c.document_id == doc_id)).fetchall()
+    assert rows == []
+    # The in-memory index was rolled back to what is on disk, so the
+    # unpersisted vectors do not survive to disagree with the empty table.
+    assert _vector_count(store, "hr") == 0
+
+
+def test_a_failed_write_does_not_disturb_an_already_indexed_document(engine, store, embedder):
+    first_id = _insert_document(engine, sha256="a" * 64)
+    IndexWriter(engine, store, embedder).write_document(first_id, "hr", _make_chunks(2))
+    assert _vector_count(store, "hr") == 2
+
+    second_id = _insert_document(engine, sha256="b" * 64)
+    flaky = IndexWriter(engine, _FlakyVectorStore(store, fail_on="add"), embedder)
+    with pytest.raises(RuntimeError):
+        flaky.write_document(second_id, "hr", _make_chunks(3))
+
+    assert _vector_count(store, "hr") == 2
+    with engine.connect() as conn:
+        surviving = conn.execute(select(chunks.c.id)).fetchall()
+    assert len(surviving) == 2
+
+
+def test_remove_document_keeps_rows_when_the_vector_removal_fails(engine, store, embedder):
+    doc_id = _insert_document(engine)
+    IndexWriter(engine, store, embedder).write_document(doc_id, "hr", _make_chunks(3))
+
+    flaky = IndexWriter(engine, _FlakyVectorStore(store, fail_on="remove"), embedder)
+    with pytest.raises(RuntimeError, match="FAISS remove failed"):
+        flaky.remove_document(doc_id)
+
+    # Both stores still hold all three chunks — split state would be one
+    # store emptied and the other not.
+    with engine.connect() as conn:
+        rows = conn.execute(select(chunks).where(chunks.c.document_id == doc_id)).fetchall()
+    assert len(rows) == 3
+    assert _chunk_fts_count_for(engine, doc_id) == 3
+    assert _vector_count(store, "hr") == 3
+
+
+def test_reassign_keeps_both_stores_on_the_old_space_when_the_move_fails(
+    engine, store, embedder
+):
+    doc_id = _insert_document(engine, intent_slug="hr")
+    IndexWriter(engine, store, embedder).write_document(doc_id, "hr", _make_chunks(3))
+
+    flaky = IndexWriter(engine, _FlakyVectorStore(store, fail_on="move"), embedder)
+    with pytest.raises(RuntimeError, match="FAISS move failed"):
+        flaky.reassign_document(doc_id, "legal")
+
+    with engine.connect() as conn:
+        doc_slug = conn.execute(
+            select(documents.c.intent_slug).where(documents.c.id == doc_id)
+        ).scalar_one()
+        chunk_slugs = {
+            row.intent_slug
+            for row in conn.execute(
+                select(chunks.c.intent_slug).where(chunks.c.document_id == doc_id)
+            ).fetchall()
+        }
+    assert doc_slug == "hr"
+    assert chunk_slugs == {"hr"}
+    assert _vector_count(store, "hr") == 3
+    assert _vector_count(store, "legal") == 0
