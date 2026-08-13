@@ -118,7 +118,9 @@ def application(tmp_path: Path) -> Application:
 
 
 def _upload(client: TestClient, classify_llm: FakeLLMProvider, filename: str) -> int:
-    classify_llm.expect_schema({"slug": _SPACE_SLUG})
+    classify_llm.expect_schema(
+        {"slug": _SPACE_SLUG, "confidence": 1.0, "reasoning": "preflight"}
+    )
     classify_llm.expect_schema({"slug": _SPACE_SLUG, "confidence": 0.95, "reasoning": "clear match"})
     content = (FIXTURES / filename).read_bytes()
     resp = client.post(

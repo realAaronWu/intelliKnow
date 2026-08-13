@@ -86,7 +86,12 @@ git pull --ff-only
 
 Do not use `git pull` while IntelliKnow is serving a demo. Stop it first.
 
-## 4. Configure secrets once
+## 4. Configure secrets on each laptop
+
+The repository contains `.env.example`, which lists variable names but no
+credentials. Every administrator creates a separate, private `.env` on the
+laptop being deployed. Do not copy another user's whole `.env` file and do not
+put real values in `.env.example`.
 
 Create the private environment file:
 
@@ -105,21 +110,64 @@ Open `.env` in a text editor and set:
 
 ```dotenv
 ANTHROPIC_API_KEY=your-anthropic-api-key
+HF_TOKEN=your-hugging-face-read-token
+HF_HUB_DISABLE_XET=0
+HF_XET_HIGH_PERFORMANCE=1
 ADMIN_PASSWORD=use-at-least-12-private-characters
 CREDENTIAL_ENCRYPTION_KEY=paste-the-generated-fernet-key
 ```
 
-Keep the Fernet key stable. Changing it makes previously stored Telegram or Teams credentials unreadable.
+Create the credentials from their official services:
 
-If the laptop needs the local SOCKS proxy used for this demo, also set:
+| Variable | Where it comes from | Required |
+| --- | --- | --- |
+| `ANTHROPIC_API_KEY` | The organization's Anthropic Console account | Yes for the checked-in provider configuration |
+| `HF_TOKEN` | A Read token from [Hugging Face access tokens](https://huggingface.co/settings/tokens) | Recommended for authenticated, higher-limit model downloads |
+| `ADMIN_PASSWORD` | A new private password chosen for this deployment | Yes; use at least 12 characters |
+| `CREDENTIAL_ENCRYPTION_KEY` | The Fernet generation command above | Yes |
+| `TELEGRAM_BOT_TOKEN` | Telegram `@BotFather` | Only for a Telegram demo |
+| `TEAMS_APP_ID` and `TEAMS_APP_PASSWORD` | Microsoft Entra/Azure Bot registration | Only for real Teams; not needed by the local Emulator demo |
+
+The recommended Xet settings provide visible, resumable transfers and enable
+additional download concurrency. If Xet cannot establish TLS through a
+particular corporate proxy, set `HF_HUB_DISABLE_XET=1` and retry with the
+standard HTTPS downloader.
+
+For a brand-new knowledge base, generate a new Fernet key on that laptop. For
+a restored or transferred `data/intelliknow.db`, securely provide the original
+`CREDENTIAL_ENCRYPTION_KEY` through the organization's password manager or
+secret store. A new key cannot decrypt Telegram or Teams credentials already
+stored in that database.
+
+If the laptop uses a local HTTP proxy, set all outbound proxy variables to its
+HTTP URL. For the MonoProxy setup used by this demo:
 
 ```dotenv
-ALL_PROXY=socks5://127.0.0.1:8119
-HTTPS_PROXY=socks5://127.0.0.1:8119
-HTTP_PROXY=socks5://127.0.0.1:8119
+ALL_PROXY=http://127.0.0.1:8118
+HTTPS_PROXY=http://127.0.0.1:8118
+HTTP_PROXY=http://127.0.0.1:8118
 ```
 
-The application loads `.env` itself. Do not run `source .env`, and never commit or send this file to another person.
+Alternatively, for a SOCKS proxy with remote DNS, use:
+
+```dotenv
+ALL_PROXY=socks5h://127.0.0.1:8119
+HTTPS_PROXY=socks5h://127.0.0.1:8119
+HTTP_PROXY=socks5h://127.0.0.1:8119
+```
+
+The application loads `.env` itself. Do not run `source .env`, and never commit,
+email, or paste this file into chat. When several administrators need access,
+share individual secrets through an approved password manager and have each
+administrator construct `.env` locally from `.env.example`.
+
+Confirm that Git will ignore the private file:
+
+```bash
+git check-ignore .env
+```
+
+This command should print `.env`.
 
 ## 5. Confirm the demo configuration
 
@@ -137,13 +185,28 @@ Avoid changing embedding model or dimension after documents are indexed. Intelli
 
 ## 6. Preflight before a demo
 
+Download both local models once, before the first startup:
+
+```bash
+./scripts/laptop-demo download-models
+```
+
+This downloads and runs the configured embedding and reranker models. Do not
+start the demo until it prints `Both local models are cached and executable.`
+Interrupted Hugging Face transfers are resumable; rerun the same command.
+
 Run:
 
 ```bash
 ./scripts/laptop-demo preflight
 ```
 
-This validates the required secrets and Fernet key, then makes one real structured LLM request and one embedding call. It intentionally fails before startup when the provider, API key, proxy, model name, or embedding dimension is wrong.
+This validates the required secrets and Fernet key, then makes one real
+structured LLM request, one embedding call, and one two-passage reranker call.
+Startup uses cache-only mode and never downloads a model. It fails immediately
+with a `download-models` instruction when either local model is absent. It also
+fails when the provider, API key, model name, embedding dimension, or local
+inference runtime is wrong.
 
 Expected final line:
 
@@ -151,7 +214,9 @@ Expected final line:
 Preflight passed.
 ```
 
-The first local model load can take longer because model files may be downloaded and cached.
+The first preflight can take longer because it downloads and caches both
+`sentence-transformers/all-MiniLM-L6-v2` and
+`cross-encoder/ms-marco-MiniLM-L-6-v2`. Later starts reuse the cache.
 
 ## 7. Start everything
 
@@ -300,6 +365,7 @@ To restore, stop IntelliKnow, restore `data/` and `config.yaml` together, restor
 | `uv is not installed` | Missing prerequisite | Install `uv`, reopen Terminal, run `install` |
 | Missing `.env` value | Incomplete secret setup | Fill the named value in `.env`; do not add it to `config.yaml` |
 | Provider preflight fails | Key, model, proxy, or network problem | Read the exact error, verify `.env` and `config.yaml`, then rerun `preflight` |
+| Hugging Face remains at zero downloaded bytes | Proxy route cannot transfer from the model CDN | Check the proxy node, then rerun `download-models`; use `HF_HUB_DISABLE_XET=1` only when Xet itself cannot establish TLS |
 | Port already in use | Old process or another app | Stop it, or choose alternate ports as shown below |
 | Console cannot connect | API did not start or URL mismatch | Run `status`, then inspect `api.log` and `ui.log` |
 | Upload is Unclassified | Provider failed, returned invalid output, or confidence was too low | Fix provider/intent definitions and retry; no content was indexed |

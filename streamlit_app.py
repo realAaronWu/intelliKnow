@@ -267,6 +267,18 @@ def _format_size(size: int) -> str:
     return f"{size / (1024 * 1024):.1f} MB"
 
 
+def _show_upload_results(results: list[dict]) -> None:
+    if not results:
+        return
+    succeeded = [item for item in results if item["status"] == "indexed"]
+    failed = [item for item in results if item["status"] != "indexed"]
+    if succeeded:
+        names = ", ".join(item["filename"] for item in succeeded)
+        st.success(f"Searchable ({len(succeeded)}): {names}")
+    for item in failed:
+        st.error(f"{item['filename']}: {item['error']}", icon=":material/error:")
+
+
 def knowledge_base() -> None:
     page_header("Knowledge Base", "Upload, organize, inspect, and refresh source documents.", "green")
     config = _call(_client().get, "/admin/config")
@@ -276,28 +288,89 @@ def knowledge_base() -> None:
     with st.container(border=True):
         section_title("Upload document", "Build knowledge")
         extensions = [item.lstrip(".").upper() for item in config["ingestion"]["allowed_extensions"]]
-        uploaded = st.file_uploader(
+        upload_results = st.session_state.pop("document-upload-results", None)
+        if upload_results:
+            _show_upload_results(upload_results)
+        uploader_version = st.session_state.get("document-uploader-version", 0)
+        uploaded_files = st.file_uploader(
             f"PDF, DOCX, or XLSX up to {config['ingestion']['max_upload_mb']} MB",
             type=[item.lower() for item in extensions],
+            accept_multiple_files=True,
+            key=f"document-uploader-{uploader_version}",
         )
-        if uploaded and st.button("Upload", type="primary", icon=":material/upload:"):
-            progress = st.progress(20, text="Uploading document")
-            result = _call(_client().upload, uploaded.name, uploaded.getvalue(), uploaded.type)
-            if result:
-                progress.progress(55, text="Processing document")
-                for _ in range(30):
-                    detail = _call(_client().get, f"/documents/{result['id']}")
-                    if not detail or detail["status"] in ("indexed", "failed"):
-                        break
+        if uploaded_files and st.button("Upload all", type="primary", icon=":material/upload:"):
+            progress = st.progress(0, text=f"Uploading 0 of {len(uploaded_files)} files")
+            pending: dict[int, str] = {}
+            results: list[dict] = []
+            client = _client()
+
+            for index, uploaded in enumerate(uploaded_files, start=1):
+                progress.progress(
+                    int(index / len(uploaded_files) * 45),
+                    text=f"Uploading {index} of {len(uploaded_files)}: {uploaded.name}",
+                )
+                try:
+                    result = client.upload(
+                        uploaded.name,
+                        uploaded.getvalue(),
+                        uploaded.type or "application/octet-stream",
+                    )
+                except APIError as exc:
+                    results.append(
+                        {"filename": uploaded.name, "status": "failed", "error": str(exc)}
+                    )
+                else:
+                    pending[result["id"]] = uploaded.name
+
+            for attempt in range(60):
+                if not pending:
+                    break
+                completed: list[int] = []
+                for doc_id, filename in pending.items():
+                    try:
+                        detail = client.get(f"/documents/{doc_id}")
+                    except APIError as exc:
+                        results.append(
+                            {"filename": filename, "status": "failed", "error": str(exc)}
+                        )
+                        completed.append(doc_id)
+                        continue
+                    if detail["status"] == "indexed":
+                        results.append(
+                            {"filename": filename, "status": "indexed", "error": None}
+                        )
+                        completed.append(doc_id)
+                    elif detail["status"] == "failed":
+                        results.append(
+                            {
+                                "filename": filename,
+                                "status": "failed",
+                                "error": detail.get("error_message")
+                                or "Document processing failed.",
+                            }
+                        )
+                        completed.append(doc_id)
+                for doc_id in completed:
+                    pending.pop(doc_id, None)
+                progress.progress(
+                    min(95, 50 + int((attempt + 1) / 60 * 45)),
+                    text=f"Processing {len(pending)} remaining file(s)",
+                )
+                if pending:
                     time.sleep(0.5)
-                if detail and detail["status"] == "indexed":
-                    progress.progress(100, text="Document processed")
-                    st.success(f"{uploaded.name} is searchable.")
-                elif detail:
-                    progress.progress(100, text="Processing failed")
-                    st.error(detail.get("error_message") or "Document processing failed.")
-                time.sleep(0.4)
-                st.rerun()
+
+            for filename in pending.values():
+                results.append(
+                    {
+                        "filename": filename,
+                        "status": "pending",
+                        "error": "Processing is still running. Check the document library shortly.",
+                    }
+                )
+            progress.progress(100, text="Batch complete")
+            st.session_state["document-upload-results"] = results
+            st.session_state["document-uploader-version"] = uploader_version + 1
+            st.rerun()
     with st.container(border=True):
         section_title("Document library", "Search and filter")
         filter_cols = st.columns([2, 1, 1, 1])
@@ -349,27 +422,50 @@ def knowledge_base() -> None:
             st.subheader(detail["filename"])
             meta = st.columns(4)
             meta[0].metric("Status", {"indexed": "Processed", "failed": "Error"}.get(detail["status"], "Pending"))
-                meta[1].metric(
-                    "Intent",
-                    "Unclassified"
-                    if detail["intent_slug"] == "unclassified"
-                    else detail["intent_slug"].title(),
-                )
+            meta[1].metric(
+                "Intent",
+                "Unclassified"
+                if detail["intent_slug"] == "unclassified"
+                else detail["intent_slug"].title(),
+            )
             meta[2].metric("Chunks", detail["chunk_count"])
             meta[3].metric("Size", _format_size(detail["size_bytes"]))
             if detail.get("error_message"):
                 st.error(detail["error_message"], icon=":material/error:")
             action_cols = st.columns([1.4, 1.4, 1, 4])
+            intent_slugs = [item["slug"] for item in intents]
+            current_intent = detail["intent_slug"]
+            current_intent_index = (
+                intent_slugs.index(current_intent) if current_intent in intent_slugs else None
+            )
             new_intent = action_cols[0].selectbox(
                 "Assigned intent",
-                [item["slug"] for item in intents],
-                index=[item["slug"] for item in intents].index(detail["intent_slug"]),
+                intent_slugs,
+                index=current_intent_index,
+                placeholder="Select an intent",
                 key=f"assign-{selected_id}",
             )
-            if action_cols[1].button("Reassign", key=f"reassign-{selected_id}", icon=":material/drive_file_move:"):
+            intent_selected = new_intent is not None
+            intent_changed = intent_selected and new_intent != current_intent
+            if action_cols[1].button(
+                "Assign" if current_intent == "unclassified" else "Reassign",
+                key=f"reassign-{selected_id}",
+                icon=":material/drive_file_move:",
+                disabled=not intent_changed,
+            ):
                 if _call(_client().patch, f"/documents/{selected_id}", json={"intent_slug": new_intent}) is not None:
                     st.rerun()
-            if action_cols[2].button("Re-parse", key=f"reparse-{selected_id}", icon=":material/refresh:"):
+            if action_cols[2].button(
+                "Re-process",
+                key=f"reparse-{selected_id}",
+                icon=":material/refresh:",
+                disabled=current_intent == "unclassified",
+                help=(
+                    "Assign an intent before re-processing this document."
+                    if current_intent == "unclassified"
+                    else None
+                ),
+            ):
                 if _call(_client().post, f"/documents/{selected_id}/reparse", json={}) is not None:
                     st.success("Re-processing started.")
                     time.sleep(0.35)
@@ -417,7 +513,13 @@ def intent_configuration() -> None:
             existing = next((item for item in intents if item["slug"] == choice), None)
             with st.form("intent-editor"):
                 name = st.text_input("Name", value=existing["name"] if existing else "")
-                slug = st.text_input("Slug", value=existing["slug"] if existing else "", disabled=existing is not None)
+                slug = st.text_input(
+                    "Slug",
+                    value=existing["slug"] if existing else "",
+                    disabled=existing is not None,
+                    help="Lowercase identifier used by routing. Spaces and capitals are normalized when saved.",
+                    placeholder="tech or it-support",
+                )
                 description = st.text_area("Description", value=existing["description"] if existing else "")
                 keywords = st.text_input(
                     "Classification keywords",

@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """Live provider smoke check — increment 01 plan, Task 8.
 
-Makes ONE real, schema-constrained LLM completion and ONE real embedding
-call against whatever backend `config.yaml` currently selects (local,
-openai, or anthropic), via the same `app.bootstrap.bootstrap()` composition
-root every other entry point uses. This script never hard-codes a provider,
-so it stays valid whichever backend `llm.provider` / `embedding.provider`
-currently name — including across the local-default / anthropic-demo flip
-described in `config.yaml`'s `llm:` comment block.
+Makes ONE real, schema-constrained LLM completion, ONE real embedding call,
+and ONE local reranker call using whatever models `config.yaml` currently
+selects. It uses the same `app.bootstrap.bootstrap()` composition root every
+other entry point uses and never hard-codes a provider or model name.
 
 Why this exists (from the plan): every provider test injects a stub client,
 so the suite proves our request/response shape is internally consistent —
@@ -29,9 +26,10 @@ Run manually once a backend is available:
 
     uv run python scripts/smoke_provider.py
 
-On success it prints the parsed schema-constrained object, the model id the
-backend reports, and the embedding vector's dimension -- so a human can
-eyeball that both match expectations before moving on.
+On success it prints the embedding vector's dimension, reranker scores, the
+parsed schema-constrained object, and the model id the backend reports. The
+deployment helper runs this script in cache-only mode, after `download-models`
+has prepared both local models.
 """
 
 from __future__ import annotations
@@ -45,55 +43,57 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from app.bootstrap import bootstrap
-
-# A small, representative schema in the same shape the orchestrator's intent
-# classifier will use starting in increment 04 -- exercising the real
-# structured-output request path this early is the whole point of this
-# script.
-_SCHEMA = {
-    "title": "smoke_check_classification",
-    "type": "object",
-    "properties": {
-        "intent": {"type": "string"},
-        "confidence": {"type": "number"},
-    },
-    "required": ["intent", "confidence"],
-    "additionalProperties": False,
-}
+from app.ingest.classify_doc import preflight_classifier
+from app.rag.retrieve.rerank import Reranker
 
 
 def main() -> int:
     app = bootstrap()
     cfg = app.config
-    print(f"llm.provider = {cfg.llm.provider}")
-    print(f"embedding.provider = {cfg.embedding.provider}")
+    print(f"llm.provider = {cfg.llm.provider}", flush=True)
+    print(f"embedding.provider = {cfg.embedding.provider}", flush=True)
 
-    print("\n--- schema-constrained completion (classify_llm) ---")
-    result = app.classify_llm.complete(
-        system=(
-            "You are a routing classifier. Reply with ONLY a JSON object "
-            "matching the given schema -- no prose, no markdown fences."
-        ),
-        user=(
-            "Classify this message into one of: hr, legal, finance, "
-            "operations, general. Message: 'How many vacation days do I "
-            "have left this year?'"
-        ),
-        schema=_SCHEMA,
-    )
-    print("parsed object:", json.dumps(result.parsed, indent=2))
-    print("model id:", result.model)
-
-    print("\n--- embedding call ---")
-    [vector] = app.embedding.embed(["How many vacation days do I have left?"])
+    print("\n--- embedding call ---", flush=True)
+    try:
+        [vector] = app.embedding.embed(["How many vacation days do I have left?"])
+    except Exception as exc:
+        print(f"FAILED: cached embedding model is unavailable: {exc}", file=sys.stderr)
+        return 1
     print("configured dimension:", app.embedding.dimension)
     print("actual vector length:", len(vector))
 
-    if result.parsed is None:
-        print("\nFAILED: no parsed object returned", file=sys.stderr)
-        return 1
     if len(vector) != app.embedding.dimension:
         print("\nFAILED: vector length does not match configured dimension", file=sys.stderr)
+        return 1
+
+    print("\n--- reranker call ---", flush=True)
+    print("configured model:", cfg.rag.rerank_model, flush=True)
+    reranker = Reranker(cfg.rag.rerank_model)
+    try:
+        scores = reranker.score(
+            "Which form should I submit for travel expenses?",
+            [
+                "Submit travel expenses using form FIN-204.",
+                "The office kitchen is cleaned every Friday.",
+            ],
+        )
+    except Exception as exc:
+        print(f"FAILED: cached reranker model is unavailable: {exc}", file=sys.stderr)
+        return 1
+    print("scores:", scores)
+    if len(scores) != 2:
+        print("\nFAILED: reranker did not return one score per passage", file=sys.stderr)
+        return 1
+
+    print("\n--- schema-constrained completion (classify_llm) ---", flush=True)
+    # Use the exact document-classification request contract used before an
+    # upload is saved. A provider can accept a simpler sample schema while
+    # rejecting the production schema, which makes that sample a false pass.
+    result = preflight_classifier(cfg, app.classify_llm)
+    print("parsed object:", json.dumps(result.parsed, indent=2))
+    print("model id:", result.model)
+    if result.parsed is None:
+        print("\nFAILED: no parsed object returned", file=sys.stderr)
         return 1
 
     print("\nsmoke check OK")

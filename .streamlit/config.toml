@@ -1,0 +1,4 @@
+[client]
+# The localhost default enables developer shortcuts, including Control-C
+# for "Clear cache", which conflicts with normal text copying on macOS.
+toolbarMode = "viewer"

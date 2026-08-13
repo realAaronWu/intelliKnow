@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from app.config import AppConfig
-from app.ingest.classify_doc import suggest_intent
+from app.ingest.classify_doc import preflight_classifier, suggest_intent
 from app.orchestrator.errors import ClassificationError
 from app.providers.base import ProviderError
 from tests.doubles import FakeLLMProvider
@@ -101,3 +101,25 @@ def test_low_confidence_document_classification_fails_closed(cfg, llm):
 
     with pytest.raises(ClassificationError, match="below the required"):
         suggest_intent("Possibly an expense document.", cfg, llm)
+
+
+def test_anthropic_compatible_schema_keeps_confidence_validation_in_application(cfg, llm):
+    llm.expect_schema({"slug": "finance", "confidence": 1.2, "reasoning": "invalid"})
+
+    with pytest.raises(ClassificationError, match="invalid confidence"):
+        suggest_intent("Expense reimbursement and budget content.", cfg, llm)
+
+    confidence_schema = llm.calls[0]["schema"]["properties"]["confidence"]
+    assert confidence_schema == {"type": "number"}
+
+
+def test_preflight_exercises_the_exact_document_classification_schema(cfg, llm):
+    probe_slug = cfg.intent_spaces[0].slug
+    llm.expect_schema({"slug": probe_slug, "confidence": 1.0, "reasoning": "preflight"})
+
+    preflight_classifier(cfg, llm)
+    preflight_schema = llm.calls[0]["schema"]
+
+    llm.expect_schema({"slug": "finance", "confidence": 0.95, "reasoning": "clear match"})
+    suggest_intent("Expense reimbursement and budget content.", cfg, llm)
+    assert preflight_schema == llm.calls[1]["schema"]

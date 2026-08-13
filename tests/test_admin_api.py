@@ -138,6 +138,38 @@ def test_intent_crud_protects_general_and_space_with_documents(tmp_path):
     assert "1 assigned document" in blocked.json()["detail"]
 
 
+def test_explicit_intent_slug_is_normalized_for_nontechnical_admins(tmp_path):
+    client, _, _ = _setup(tmp_path)
+
+    response = client.post(
+        "/admin/intents",
+        json={
+            "name": "Tech Support",
+            "slug": "Tech Support",
+            "description": "Internal technology support and infrastructure.",
+            "keywords": ["GPU", "network"],
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["slug"] == "tech-support"
+
+
+def test_intent_slug_without_letters_or_numbers_has_actionable_error(tmp_path):
+    client, _, _ = _setup(tmp_path)
+
+    response = client.post(
+        "/admin/intents",
+        json={"name": "Tech", "slug": "---", "description": "Technology docs"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Slug must contain at least one letter or number, for example 'tech' "
+        "or 'it-support'."
+    )
+
+
 def test_intent_classifier_preflight_failure_returns_503_and_saves_nothing(tmp_path):
     def unavailable(_cfg):
         raise ClassificationError("Classification service is unavailable; please retry.")

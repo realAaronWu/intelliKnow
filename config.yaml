@@ -1,27 +1,18 @@
-# The demo configuration uses Anthropic's fast model; set ANTHROPIC_API_KEY
-# in .env. For a zero-cost local path, change provider to local, set both
-# model names to one served by Ollama (for example llama3.1), and start its
-# OpenAI-compatible endpoint at base_url. `effort` is supported on
-# Opus 4.5 and later, Opus 5, Sonnet 5, and Sonnet 4.6, but is rejected by
-# claude-haiku-4-5 and Sonnet 4.5 — leave it null unless the model in use
-# accepts it.
 llm:
-  provider: anthropic              # anthropic | openai | local
+  provider: anthropic
   model_classify: claude-haiku-4-5
   model_generate: claude-haiku-4-5
   timeout_seconds: 20
   max_retries: 2
-  effort: null                     # low | medium | high | xhigh | max | null
-  base_url: http://localhost:11434/v1  # local backend only (Ollama's OpenAI-compatible endpoint)
-
+  effort: null
+  base_url: http://localhost:11434/v1
 embedding:
-  provider: local                  # local | openai
+  provider: local
   model: all-MiniLM-L6-v2
   dimension: 384
   batch_size: 64
-  timeout_seconds: 20              # remote (openai) backend only
-  max_retries: 2                   # remote (openai) backend only
-
+  timeout_seconds: 20
+  max_retries: 2
 rag:
   chunk_chars: 800
   chunk_overlap_chars: 100
@@ -29,54 +20,88 @@ rag:
   keyword_top_n: 20
   rrf_k: 60
   rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2
-  rerank_candidates: 20            # fused pool fed to the cross-encoder
-  final_top_k: 5                   # kept after reranking
+  rerank_candidates: 20
+  final_top_k: 5
   max_context_chars: 6000
-  relevance_floor: 0.45            # on sigmoid(cross-encoder score) — bounded sanity check kept the
-                                    # default (see docs/superpowers/reports/04-rag-read-path-calibration-report.md);
-                                    # real calibration against the golden question set is still pending
-
+  relevance_floor: 0.45
 orchestrator:
-  confidence_threshold: 0.70
+  confidence_threshold: 0.7
   fallback_space: general
-  centroid_temperature: 0.05       # softmax over centroid similarities — bounded sanity check kept the
-                                    # default (see docs/superpowers/reports/04-rag-read-path-calibration-report.md);
-                                    # real calibration against the golden question set is still pending
-  escalate_to_llm: true            # call the LLM when centroid confidence < threshold
-
+  centroid_temperature: 0.05
+  escalate_to_llm: true
 intent_spaces:
-  - slug: hr
-    name: HR
-    description: "Employee policies, leave, benefits, payroll, onboarding."
-    keywords: [leave, vacation, salary, band, benefits, onboarding, appraisal]
-  - slug: legal
-    name: Legal
-    description: "Contracts, compliance, data protection, terms."
-    keywords: [contract, NDA, GDPR, compliance, liability, clause]
-  - slug: finance
-    name: Finance
-    description: "Expenses, reimbursement, budgets, invoicing, salary bands."
-    keywords: [expense, reimbursement, invoice, budget, procurement, tax]
-  - slug: operations
-    name: Operations
-    description: "Internal processes, tooling, facilities, IT requests."
-    keywords: [access, laptop, VPN, ticket, facilities, process]
-  - slug: general
-    name: General
-    description: "Cross-functional topics that do not belong to one specialist domain."
-    keywords: []
-
+- slug: hr
+  name: HR
+  description: Employee policies, leave, benefits, payroll, onboarding.
+  keywords:
+  - leave
+  - vacation
+  - salary
+  - band
+  - benefits
+  - onboarding
+  - appraisal
+- slug: legal
+  name: Legal
+  description: Contracts, compliance, data protection, terms.
+  keywords:
+  - contract
+  - NDA
+  - GDPR
+  - compliance
+  - liability
+  - clause
+- slug: finance
+  name: Finance
+  description: Expenses, reimbursement, budgets, invoicing, salary bands.
+  keywords:
+  - expense
+  - reimbursement
+  - invoice
+  - budget
+  - procurement
+  - tax
+- slug: operations
+  name: Operations
+  description: Internal processes, tooling, facilities, IT requests.
+  keywords:
+  - access
+  - laptop
+  - VPN
+  - ticket
+  - facilities
+  - process
+- slug: general
+  name: General
+  description: Cross-functional topics that do not belong to one specialist domain.
+  keywords: []
+- slug: tech
+  name: Tech
+  description: NVIDIA tech docs for dynamo and nccl
+  keywords:
+  - NVIDIA
+  - tech
+  - design
+  - architecutre
+  - dynamo
+  - nccl
 channels:
-  telegram: {enabled: true,  mode: polling, max_message_chars: 4096}
-  teams:    {enabled: false,                max_message_chars: 28000}
-
+  telegram:
+    enabled: true
+    mode: polling
+    max_message_chars: 4096
+  teams:
+    enabled: false
+    mode: null
+    max_message_chars: 28000
 ingestion:
   max_upload_mb: 25
-  allowed_extensions: [".pdf", ".docx", ".xlsx"]
-
+  allowed_extensions:
+  - .pdf
+  - .docx
+  - .xlsx
 storage:
   sqlite_path: ./data/intelliknow.db
   faiss_dir: ./data/faiss
   upload_dir: ./data/uploads
-
-public_base_url: null              # only for Telegram webhook mode or real-tenant Teams
+public_base_url: null

@@ -8,7 +8,7 @@ from typing import Literal
 
 from app.config import AppConfig
 from app.orchestrator.errors import ClassificationError
-from app.providers.base import LLMProvider, ProviderError
+from app.providers.base import LLMProvider, LLMResult, ProviderError
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,10 @@ _SUGGEST_SCHEMA = {
     "type": "object",
     "properties": {
         "slug": {"type": "string"},
-        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        # Anthropic structured outputs reject numeric range keywords such as
+        # `minimum` and `maximum`. The range and configured confidence
+        # threshold are enforced below after parsing, for every provider.
+        "confidence": {"type": "number"},
         "reasoning": {"type": "string"},
     },
     "required": ["slug", "confidence", "reasoning"],
@@ -47,14 +50,6 @@ _SYSTEM_PROMPT = (
     "the slug of the single best-matching space, confidence from 0 to 1, "
     "and a short reason. Do not guess when the document is ambiguous."
 )
-
-_PREFLIGHT_SCHEMA = {
-    "type": "object",
-    "properties": {"slug": {"type": "string"}},
-    "required": ["slug"],
-    "additionalProperties": False,
-}
-
 
 def _spaces_block(cfg: AppConfig) -> str:
     lines = []
@@ -102,7 +97,12 @@ def suggest_intent(
             "The document classifier returned invalid confidence. "
             "The document was not indexed; please retry."
         ) from exc
-    if not 0.0 <= confidence <= 1.0 or confidence < cfg.orchestrator.confidence_threshold:
+    if not 0.0 <= confidence <= 1.0:
+        raise ClassificationError(
+            "The document classifier returned invalid confidence outside 0 to 1. "
+            "The document was not indexed; please retry."
+        )
+    if confidence < cfg.orchestrator.confidence_threshold:
         raise ClassificationError(
             f"Document classification confidence {confidence:.0%} is below the required "
             f"{cfg.orchestrator.confidence_threshold:.0%}. The document was not indexed; "
@@ -111,17 +111,18 @@ def suggest_intent(
     return IntentSuggestion(slug, confidence, "model")
 
 
-def preflight_classifier(cfg: AppConfig, llm: LLMProvider) -> None:
-    """Make one structured call so offline classifiers fail before a write."""
+def preflight_classifier(cfg: AppConfig, llm: LLMProvider) -> LLMResult:
+    """Exercise the production schema so classifier failures precede a write."""
     probe_slug = cfg.intent_spaces[0].slug
     try:
         result = llm.complete(
             system=(
                 "This is an availability check for an intent classifier. "
-                "Return exactly the requested slug using the schema."
+                "Return exactly the requested slug, confidence 1.0, and a short "
+                "reason using the schema."
             ),
             user=f"Return this slug exactly: {probe_slug}",
-            schema=_PREFLIGHT_SCHEMA,
+            schema=_SUGGEST_SCHEMA,
         )
     except ProviderError as exc:
         raise ClassificationError(
@@ -129,8 +130,16 @@ def preflight_classifier(cfg: AppConfig, llm: LLMProvider) -> None:
             "Please retry when the model is available."
         ) from exc
     parsed = result.parsed if isinstance(result.parsed, dict) else {}
-    if parsed.get("slug") != probe_slug:
+    try:
+        confidence = float(parsed.get("confidence"))
+    except (TypeError, ValueError) as exc:
+        raise ClassificationError(
+            "Classification service failed its response check; nothing was saved. "
+            "Please retry."
+        ) from exc
+    if parsed.get("slug") != probe_slug or not 0.0 <= confidence <= 1.0:
         raise ClassificationError(
             "Classification service failed its response check; nothing was saved. "
             "Please retry."
         )
+    return result

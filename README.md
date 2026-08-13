@@ -49,20 +49,33 @@ uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_
 Set at least these values in `.env`:
 
 ```dotenv
+ANTHROPIC_API_KEY=your-anthropic-api-key
+HF_TOKEN=your-hugging-face-read-token
+HF_HUB_DISABLE_XET=1
 ADMIN_PASSWORD=choose-a-private-password
 CREDENTIAL_ENCRYPTION_KEY=paste-the-generated-key
 ```
 
-The shipped demo uses Anthropic's `claude-haiku-4-5` for classification and generation, plus local sentence-transformer embeddings. Set `ANTHROPIC_API_KEY` in `.env`. A zero-cost Ollama-compatible path remains available by changing the provider, model names, and `llm.base_url` in `config.yaml`.
+Each laptop creates its own `.env` from the credential-free template; never copy
+or commit another operator's file. `HF_TOKEN` is recommended for authenticated,
+higher-limit model downloads. The complete credential source and database
+transfer guidance is in [Configure secrets on each laptop](docs/LAPTOP-DEMO-DEPLOYMENT.md#4-configure-secrets-on-each-laptop).
+
+The shipped demo uses Anthropic's `claude-haiku-4-5` for classification and generation, plus local sentence-transformer embeddings. A zero-cost Ollama-compatible path remains available by changing the provider, model names, and `llm.base_url` in `config.yaml`.
 
 ## Run
 
-For the recommended laptop deployment, follow [IntelliKnow Laptop Demo Deployment](docs/LAPTOP-DEMO-DEPLOYMENT.md). Its lifecycle helper validates the provider and starts both components with health checks:
+For the recommended laptop deployment, follow [IntelliKnow Laptop Demo Deployment](docs/LAPTOP-DEMO-DEPLOYMENT.md). Its lifecycle helper validates the provider, downloads and exercises both local models, and starts both components with health checks:
 
 ```bash
 ./scripts/laptop-demo install
+./scripts/laptop-demo download-models
 ./scripts/laptop-demo start
 ```
+
+`start` never downloads models. Run `download-models` once and wait for both
+models to report ready; interrupted transfers can be resumed with the same
+command.
 
 The equivalent manual commands are below.
 

@@ -130,7 +130,12 @@ class AdminService:
         ]
 
     def create_intent(self, data: dict[str, Any]) -> dict[str, Any]:
-        slug = data.get("slug") or _slugify(data.get("name", ""))
+        slug = _slugify(data.get("slug") or data.get("name", ""))
+        if not slug:
+            raise ValueError(
+                "Slug must contain at least one letter or number, for example 'tech' "
+                "or 'it-support'."
+            )
         space = IntentSpace.model_validate({**data, "slug": slug})
         spaces = [item.model_dump(mode="json") for item in self.config.intent_spaces]
         if any(item["slug"] == slug for item in spaces):

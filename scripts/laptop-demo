@@ -117,9 +117,27 @@ install() {
 
 preflight() {
   check_files_and_secrets
-  say "Checking the configured LLM and embedding provider..."
-  uv run python scripts/smoke_provider.py
+  say "Checking the configured LLM and cached local models..."
+  say "Model downloads are disabled during startup."
+  if ! HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+    "$ROOT_DIR/.venv/bin/python" scripts/smoke_provider.py; then
+    die "Preflight failed. If a local model is missing, run: ./scripts/laptop-demo download-models"
+  fi
   say "Preflight passed."
+}
+
+download_models() {
+  check_files_and_secrets
+  say "Downloading and validating the configured embedding and reranker models..."
+  say "The first download can take time. Progress must continue increasing."
+  "$ROOT_DIR/.venv/bin/python" scripts/download_models.py &
+  local child_pid=$!
+  trap 'kill -INT "$child_pid" 2>/dev/null || true' INT
+  trap 'kill -TERM "$child_pid" 2>/dev/null || true' TERM
+  local result=0
+  wait "$child_pid" || result=$?
+  trap - INT TERM
+  return "$result"
 }
 
 wait_for_api() {
@@ -287,7 +305,8 @@ Usage: ./scripts/laptop-demo COMMAND
 
 Commands:
   install     Install exact dependencies from uv.lock
-  preflight   Validate secrets and make real LLM/embedding checks
+  download-models  Download and validate the embedding and reranker models
+  preflight   Validate secrets, the real LLM, and both cached local models
   start       Preflight, then start the API and admin console
   status      Show managed process status and URLs
   logs        Follow API and console logs
@@ -301,6 +320,7 @@ EOF
 
 case "${1:-}" in
   install) install ;;
+  download-models) download_models ;;
   preflight) preflight ;;
   start) start ;;
   stop) stop ;;
