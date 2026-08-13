@@ -20,10 +20,11 @@ from typing import Mapping
 
 from dotenv import load_dotenv
 
-from app.config import AppConfig
+from app.config import AppConfig, load_config
 from app.config_service import ConfigService, Guard
 from app.providers.base import EmbeddingProvider, LLMProvider
 from app.providers.factory import build_embedding_provider, build_llm_provider
+from app.rag.index_meta import assert_compatible
 
 DEFAULT_CONFIG_PATH = Path("config.yaml")
 DEFAULT_ENV_FILE = Path(".env")
@@ -61,11 +62,26 @@ def bootstrap(
     providers: a remote backend with no API key fails with a `RuntimeError`
     naming the missing variable, per `spec: ai-provider` § "Startup
     credential validation".
+
+    Every `ConfigService` built here also carries the embedding-
+    immutability guard: `app/rag/index_meta.py::assert_compatible`,
+    adapted exactly as its own docstring suggests
+    (`lambda old, new: assert_compatible(new, faiss_dir)`), so an
+    embedding-model change while indexed documents exist is rejected at
+    `update()` time rather than only noticed at the next startup. Any
+    caller-supplied `guards` run in addition to it.
     """
     load_dotenv(env_file, override=False)
     env = env if env is not None else os.environ
 
-    config_service = ConfigService.load(config_path, guards=guards)
+    # Read once, unguarded, purely to learn `storage.faiss_dir` — the
+    # embedding guard closes over it. `ConfigService.load` below re-reads
+    # the (by then certainly existing) file to build the real, guarded
+    # service.
+    faiss_dir = Path(load_config(config_path).storage.faiss_dir)
+    embedding_guard: Guard = lambda old, new: assert_compatible(new, faiss_dir)
+
+    config_service = ConfigService.load(config_path, guards=(embedding_guard, *guards))
     cfg = config_service.current
 
     return Application(
