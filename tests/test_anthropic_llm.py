@@ -25,6 +25,7 @@ import pytest
 
 from app.providers.anthropic_llm import AnthropicLLM
 from app.providers.base import ProviderError
+from app.providers.schema_validation import InvalidSchemaError
 
 
 class _StubTextBlock:
@@ -134,25 +135,45 @@ def test_free_form_completion_returns_text_model_and_token_counts():
 # output_config.format.schema: For 'object' type, 'additionalProperties'
 # must be explicitly set to false` for any object-typed schema node missing
 # that key. Every automated test injects a stub client, so nothing here
-# would ever have caught a request shape the real API rejects — these two
-# tests exist so that defect can never again reach a live run silently: the
-# guard must fire before the stub client is even called.
+# would ever have caught a request shape the real API rejects — these tests
+# exist so that defect can never again reach a live run silently: the guard
+# must fire before the stub client is even called.
+#
+# The rule itself is checked provider-independently over every schema in
+# `app/` (tests/test_schema_shapes.py). What is asserted here is that this
+# provider applies it, and that it raises `InvalidSchemaError` rather than
+# `ProviderError` — a `ProviderError` would be caught by `suggest_intent`
+# and turned back into the silent fallback the guard exists to prevent.
 
 
 def test_schema_missing_additional_properties_false_is_rejected_by_guard():
     llm, client = _make_llm()
 
-    with pytest.raises(ProviderError) as excinfo:
+    with pytest.raises(InvalidSchemaError) as excinfo:
         llm.complete(
             system="s",
             user="u",
             schema={"type": "object", "properties": {"answer": {"type": "string"}}},
         )
 
-    assert excinfo.value.category == "backend"
     assert "additionalProperties" in str(excinfo.value)
     # The guard must run before any request is attempted.
     assert client.messages.calls == []
+
+
+def test_a_malformed_schema_is_not_reported_as_a_provider_error():
+    """A caller-supplied schema that is malformed is a bug in this
+    codebase, identical on every request — not a backend condition. Typing
+    it as `ProviderError` put it on the same fallback path as a provider
+    outage, so `suggest_intent` would have filed every document under the
+    fallback space rather than failing.
+    """
+    llm, _client = _make_llm()
+
+    with pytest.raises(InvalidSchemaError) as excinfo:
+        llm.complete(system="s", user="u", schema={"type": "object"})
+
+    assert not isinstance(excinfo.value, ProviderError)
 
 
 def test_nested_object_schema_missing_additional_properties_is_checked_too():
@@ -173,11 +194,9 @@ def test_nested_object_schema_missing_additional_properties_is_checked_too():
         },
     }
 
-    with pytest.raises(ProviderError) as excinfo:
+    with pytest.raises(InvalidSchemaError, match="metadata"):
         llm.complete(system="s", user="u", schema=schema)
 
-    assert excinfo.value.category == "backend"
-    assert "metadata" in str(excinfo.value)
     assert client.messages.calls == []
 
 

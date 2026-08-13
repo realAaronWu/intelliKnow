@@ -15,7 +15,9 @@ build the final error message with `describe_schema`.
 
 An invalid *schema* (as opposed to an invalid response) is a caller bug
 rather than a backend failure, so `jsonschema.SchemaError` is left to
-propagate unmasked instead of being retried.
+propagate unmasked instead of being retried. `validate_schema_shape`
+follows the same convention for the one structural rule the schema
+language itself cannot express — see its docstring.
 """
 
 from __future__ import annotations
@@ -31,6 +33,82 @@ class SchemaViolation(Exception):
     Internal to the provider layer — callers outside it see the
     `ProviderError` a provider raises after its retry is exhausted.
     """
+
+
+class InvalidSchemaError(ValueError):
+    """A caller-supplied schema is malformed.
+
+    Deliberately **not** a `ProviderError`. Nothing about a bad schema is
+    a backend condition — it is a bug in this codebase, identical on every
+    request and every provider — and the application's `ProviderError`
+    fallback paths (`suggest_intent` files the document under the fallback
+    space; `repair_table` keeps the raw extraction) exist to absorb
+    transient backend trouble. Letting a schema bug take those paths is
+    how "every document filed under `general`" happened once already, and
+    a `ProviderError`-typed schema guard would have quietly recreated it.
+    """
+
+
+def validate_schema_shape(schema: dict, path: str = "schema") -> None:
+    """Raise `InvalidSchemaError` if any `type: "object"` node in `schema`
+    — at any nesting depth — does not set `additionalProperties: false`.
+
+    The Anthropic API returns `400 invalid_request_error:
+    output_config.format.schema: For 'object' type, 'additionalProperties'
+    must be explicitly set to false`. No other provider enforces it, so a
+    schema built and tested against the local or OpenAI backends passes
+    every test and only 400s the moment `llm.provider` becomes
+    `anthropic` — exactly how that defect reached a live run undetected.
+    Checking it here, in the provider-independent layer, is what lets
+    `tests/test_schema_shapes.py` sweep every schema in `app/` at test
+    time regardless of which provider is configured.
+
+    Walks every place a subschema can appear: `properties`, `items` (both
+    the single-schema and tuple-validation list forms), `anyOf`/`oneOf`/
+    `allOf`, `not`, and `$defs`/`definitions`. `path` names the offending
+    node in the raised error so a multi-object schema doesn't leave the
+    caller guessing which part is wrong.
+    """
+    if not isinstance(schema, dict):
+        return
+
+    if schema.get("type") == "object" and schema.get("additionalProperties") is not False:
+        raise InvalidSchemaError(
+            f"schema node at {path!r} has type 'object' but does not set "
+            "'additionalProperties: false'; the Anthropic API rejects "
+            "object schemas without it (400 invalid_request_error)"
+        )
+
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        for key, subschema in properties.items():
+            validate_schema_shape(subschema, f"{path}.properties.{key}")
+
+    items = schema.get("items")
+    if isinstance(items, dict):
+        validate_schema_shape(items, f"{path}.items")
+    elif isinstance(items, list):
+        for index, subschema in enumerate(items):
+            validate_schema_shape(subschema, f"{path}.items[{index}]")
+
+    for keyword in ("anyOf", "oneOf", "allOf"):
+        variants = schema.get(keyword)
+        if isinstance(variants, list):
+            for index, subschema in enumerate(variants):
+                validate_schema_shape(subschema, f"{path}.{keyword}[{index}]")
+
+    not_schema = schema.get("not")
+    if isinstance(not_schema, dict):
+        validate_schema_shape(not_schema, f"{path}.not")
+
+    defs = schema.get("$defs")
+    defs_keyword = "$defs"
+    if not isinstance(defs, dict):
+        defs = schema.get("definitions")
+        defs_keyword = "definitions"
+    if isinstance(defs, dict):
+        for key, subschema in defs.items():
+            validate_schema_shape(subschema, f"{path}.{defs_keyword}.{key}")
 
 
 def describe_schema(schema: dict) -> str:
