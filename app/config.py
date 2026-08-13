@@ -36,8 +36,11 @@ class LLMConfig(_StrictModel):
     max_retries: int = Field(default=2, ge=0)
     # Reasoning effort requested of a thinking-capable model. A tunable, so
     # it belongs here — it was previously inferred in provider code from the
-    # substring "opus-5" in the model name.
-    effort: EffortLevel = "low"
+    # substring "opus-5" in the model name. Opt-out, not mandatory: not
+    # every model supports this parameter (e.g. claude-haiku-4-5 and Sonnet
+    # 4.5 reject it outright), so `None` means "omit it from the request"
+    # rather than "send it as null", and is the default.
+    effort: EffortLevel | None = None
     # Only consulted when provider == "local": the OpenAI-compatible base URL
     # of the local model server. Ignored by the anthropic/openai backends,
     # which talk to their own fixed endpoints. Defaults to Ollama's

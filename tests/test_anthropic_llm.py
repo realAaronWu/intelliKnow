@@ -89,7 +89,7 @@ def _make_llm(
     model: str = "claude-opus-5",
     max_retries: int = 2,
     sleep: Callable[[float], None] | None = None,
-    effort: str = "low",
+    effort: str | None = "low",
 ) -> tuple[AnthropicLLM, _StubAnthropicClient]:
     client = _StubAnthropicClient()
     llm = AnthropicLLM(
@@ -508,3 +508,50 @@ def test_effort_is_taken_from_config_not_inferred_from_the_model_name():
     llm.complete(system="s", user="u")
 
     assert client.messages.calls[0]["output_config"]["effort"] == "xhigh"
+
+
+def test_effort_omitted_from_output_config_when_unset():
+    """`effort` is opt-out, not mandatory: `claude-haiku-4-5` rejects the
+    `effort` parameter outright (400 invalid_request_error: "This model does
+    not support the effort parameter"), so when `effort` is not configured
+    the key must be absent from `output_config` entirely — sending
+    `"effort": None` is a different, still-broken request shape.
+    """
+    llm, client = _make_llm(model="claude-haiku-4-5", effort=None)
+    client.messages.queue_response(
+        _StubMessage(
+            content=[_StubTextBlock("hi")],
+            model="claude-haiku-4-5",
+            input_tokens=1,
+            output_tokens=1,
+        )
+    )
+
+    llm.complete(system="s", user="u")
+
+    sent_kwargs = client.messages.calls[0]
+    assert "effort" not in sent_kwargs.get("output_config", {})
+
+
+def test_structured_output_unaffected_by_unset_effort():
+    """The `format` key is decided independently of the effort decision, so
+    a schema-guided call must still work — and still omit `effort` — on a
+    model that rejects the parameter.
+    """
+    llm, client = _make_llm(model="claude-haiku-4-5", effort=None)
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    client.messages.queue_response(
+        _StubMessage(
+            content=[_StubTextBlock('{"answer": "42"}')],
+            model="claude-haiku-4-5",
+            input_tokens=5,
+            output_tokens=4,
+        )
+    )
+
+    result = llm.complete(system="s", user="u", schema=schema)
+
+    assert result.parsed == {"answer": "42"}
+    sent_kwargs = client.messages.calls[0]
+    assert sent_kwargs["output_config"]["format"] == {"type": "json_schema", "schema": schema}
+    assert "effort" not in sent_kwargs["output_config"]

@@ -331,13 +331,24 @@ def test_keyword_top_n_rejects_a_negative_value():
 # --- Tunables that must live in config.yaml, not in code ---------------------
 
 
-def test_llm_effort_defaults_to_low_and_is_read_from_config():
+def test_llm_effort_defaults_to_none_and_is_read_from_config():
     """`spec: configuration` § "Single configuration file": the reasoning
     effort used to be inferred in code from the substring "opus-5" in the
     model name, which is a tunable living outside config.yaml.
+
+    The shipped default is `null` (opt-out), not a literal level: `effort`
+    is rejected outright by some models (e.g. claude-haiku-4-5, Sonnet 4.5),
+    so it must be omitted from the request unless an operator explicitly
+    turns it on for a model that supports it.
     """
     cfg = load_config(SHIPPED_CONFIG)
-    assert cfg.llm.effort == "low"
+    assert cfg.llm.effort is None
+
+
+def test_llm_effort_accepts_null_meaning_unset():
+    data = _valid_config_dict()
+    data["llm"]["effort"] = None
+    assert AppConfig.model_validate(data).llm.effort is None
 
 
 def test_llm_effort_rejects_an_unsupported_level():

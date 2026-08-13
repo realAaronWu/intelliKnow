@@ -337,14 +337,17 @@ Both ship with starting values that are guesses. Calibrating them against the go
 #   llm.provider: anthropic
 #   llm.model_generate: claude-opus-5
 #   llm.model_classify: claude-haiku-4-5
-# and export ANTHROPIC_API_KEY (see .env.example).
+# and export ANTHROPIC_API_KEY (see .env.example). `effort` is supported on
+# Opus 4.5 and later, Opus 5, Sonnet 5, and Sonnet 4.6, but is rejected by
+# claude-haiku-4-5 and Sonnet 4.5 — leave it null unless the model in use
+# accepts it.
 llm:
   provider: local                  # anthropic | openai | local
   model_classify: llama3.1
   model_generate: llama3.1
   timeout_seconds: 20
   max_retries: 2
-  effort: low                      # low | medium | high | xhigh | max
+  effort: null                     # low | medium | high | xhigh | max | null
   base_url: http://localhost:11434/v1  # local backend only (Ollama's OpenAI-compatible endpoint)
 
 embedding:

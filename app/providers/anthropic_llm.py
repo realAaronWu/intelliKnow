@@ -57,7 +57,7 @@ class AnthropicLLM:
         api_key: str,
         timeout_seconds: int,
         max_retries: int,
-        effort: EffortLevel,
+        effort: EffortLevel | None,
         client: Any | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -84,7 +84,14 @@ class AnthropicLLM:
         # `thinking` is deliberately never sent: setting it to `disabled` on
         # this model risks the assistant emitting tool calls as plain text
         # and leaking raw thinking tags into the visible response.
-        output_config: dict[str, Any] = {"effort": self._effort}
+        #
+        # `effort` is opt-out, not mandatory: not every model accepts this
+        # parameter (claude-haiku-4-5 and Sonnet 4.5 reject it with a 400),
+        # so it is included only when configured — sending `"effort": null`
+        # is a different, still-rejected request shape.
+        output_config: dict[str, Any] = {}
+        if self._effort is not None:
+            output_config["effort"] = self._effort
         if schema is not None:
             output_config["format"] = {"type": "json_schema", "schema": schema}
 
