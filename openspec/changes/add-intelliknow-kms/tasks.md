@@ -44,8 +44,8 @@ The implementation is organized by delivered increments, followed by a stabiliza
 - [x] 5.1 Implement Fernet-encrypted integration credentials with masked output ready for the admin API
 - [x] 5.2 Persist per-channel status, recent errors, last success, and last reply reference
 - [x] 5.3 Implement normalized inbound contracts and one shared channel handler
-- [ ] 5.4 Implement Telegram long polling, typing indication, delivery, and duplicate-offset protection
-- [ ] 5.5 Implement the authenticated Bot Framework messaging endpoint for Teams
+- [x] 5.4 Implement Telegram long polling, typing indication, delivery, and duplicate-offset protection
+- [x] 5.5 Implement the authenticated Bot Framework messaging endpoint for Teams
 - [x] 5.6 Log query results after delivery and isolate analytics failures from user replies
 - [ ] 5.7 Add authenticated integration status/configuration/test endpoints
 - [ ] 5.8 Verify real Telegram and real Teams round trips and measure latency through send completion

@@ -100,6 +100,25 @@ class ChannelStore:
                     .values(updated_at=now, **values)
                 )
 
+    def initialize(self, channel: str, *, enabled: bool) -> None:
+        """Create first-run state without overwriting later admin choices."""
+        self._validate_channel(channel)
+        now = _iso(self._clock())
+        with self._engine.begin() as conn:
+            exists = conn.execute(
+                select(integrations.c.channel).where(integrations.c.channel == channel)
+            ).first()
+            if exists is None:
+                conn.execute(
+                    insert(integrations).values(
+                        channel=channel,
+                        display_name=_DISPLAY_NAMES[channel],
+                        enabled=enabled,
+                        status="disconnected",
+                        updated_at=now,
+                    )
+                )
+
     def save_credentials(self, channel: str, credentials: Mapping[str, str]) -> None:
         self._validate_channel(channel)
         values = {str(key): str(value) for key, value in credentials.items()}
@@ -123,25 +142,24 @@ class ChannelStore:
             ).one_or_none()
 
         if row is not None:
-            if row.credentials_encrypted is None:
-                return None
-            try:
-                decrypted = self._fernet.decrypt(
-                    row.credentials_encrypted.encode("ascii")
-                )
-                values = json.loads(decrypted)
-            except (InvalidToken, ValueError, TypeError, json.JSONDecodeError) as exc:
-                message = "Stored credentials cannot be decrypted; re-enter them."
-                self.mark_disconnected(channel, message)
-                raise CredentialError(message) from exc
-            if not isinstance(values, dict) or not all(
-                isinstance(key, str) and isinstance(value, str)
-                for key, value in values.items()
-            ):
-                message = "Stored credentials are invalid; re-enter them."
-                self.mark_disconnected(channel, message)
-                raise CredentialError(message)
-            return Credentials(values=values, source="stored")
+            if row.credentials_encrypted is not None:
+                try:
+                    decrypted = self._fernet.decrypt(
+                        row.credentials_encrypted.encode("ascii")
+                    )
+                    values = json.loads(decrypted)
+                except (InvalidToken, ValueError, TypeError, json.JSONDecodeError) as exc:
+                    message = "Stored credentials cannot be decrypted; re-enter them."
+                    self.mark_disconnected(channel, message)
+                    raise CredentialError(message) from exc
+                if not isinstance(values, dict) or not all(
+                    isinstance(key, str) and isinstance(value, str)
+                    for key, value in values.items()
+                ):
+                    message = "Stored credentials are invalid; re-enter them."
+                    self.mark_disconnected(channel, message)
+                    raise CredentialError(message)
+                return Credentials(values=values, source="stored")
 
         env_fields = _ENV_FIELDS[channel]
         values = {name: self._env.get(variable, "") for name, variable in env_fields.items()}

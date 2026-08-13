@@ -17,6 +17,8 @@ for testing has none of those side effects.
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import Depends, FastAPI
@@ -30,6 +32,8 @@ from app.api.query import build_query_router
 from app.bootstrap import Application, bootstrap
 from app.channels.handler import ChannelHandler
 from app.channels.store import ChannelStore
+from app.channels.telegram import TelegramPoller
+from app.channels.teams import TeamsEndpoint, build_teams_router
 from app.db import create_engine_for, init_schema, recover_interrupted_documents
 from app.ingest.worker import IngestDeps
 from app.orchestrator.centroids import CentroidIndex
@@ -44,6 +48,8 @@ def create_app(
     pipeline_deps: PipelineDeps | None = None,
     *,
     admin_password: str | None = None,
+    lifespan=None,
+    teams_endpoint: TeamsEndpoint | None = None,
 ) -> FastAPI:
     """Build the FastAPI app bound to `deps` (and, when supplied,
     `pipeline_deps`). Pure: no I/O beyond constructing the
@@ -54,7 +60,7 @@ def create_app(
     particular) keeps working unchanged — the `/admin/test-query` route
     is simply absent when it is not supplied.
     """
-    fastapi_app = FastAPI(title="IntelliKnow KMS")
+    fastapi_app = FastAPI(title="IntelliKnow KMS", lifespan=lifespan)
     admin_dependencies = (
         [Depends(build_admin_auth(admin_password))] if admin_password is not None else []
     )
@@ -65,7 +71,24 @@ def create_app(
         fastapi_app.include_router(
             build_query_router(pipeline_deps), dependencies=admin_dependencies
         )
+    if teams_endpoint is not None:
+        fastapi_app.include_router(build_teams_router(teams_endpoint))
     return fastapi_app
+
+
+def _poller_lifespan(poller: TelegramPoller):
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        task = asyncio.create_task(poller.run(), name="telegram-poller")
+        try:
+            yield
+        finally:
+            poller.stop()
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    return lifespan
 
 
 def _build_default_deps(
@@ -187,6 +210,10 @@ def __getattr__(name: str):
             application.credential_encryption_key,
             env=application.channel_env,
         )
+        channel_store.initialize(
+            "telegram", enabled=cfg.channels.telegram.enabled
+        )
+        channel_store.initialize("teams", enabled=cfg.channels.teams.enabled)
         vector_store = VectorStore(Path(cfg.storage.faiss_dir), cfg.embedding.dimension)
 
         deps = _build_default_deps(application, engine, vector_store)
@@ -212,11 +239,27 @@ def __getattr__(name: str):
             ),
             query_logger,
         )
+        telegram_poller = TelegramPoller(
+            channel_store,
+            channel_handler,
+            max_message_chars=cfg.channels.telegram.max_message_chars,
+        )
+        teams_endpoint = TeamsEndpoint(
+            channel_store,
+            channel_handler,
+            max_message_chars=cfg.channels.teams.max_message_chars,
+        )
         fastapi_app = create_app(
-            deps, pipeline_deps, admin_password=application.admin_password
+            deps,
+            pipeline_deps,
+            admin_password=application.admin_password,
+            lifespan=_poller_lifespan(telegram_poller),
+            teams_endpoint=teams_endpoint,
         )
         fastapi_app.state.channel_store = channel_store
         fastapi_app.state.query_logger = query_logger
         fastapi_app.state.channel_handler = channel_handler
+        fastapi_app.state.telegram_poller = telegram_poller
+        fastapi_app.state.teams_endpoint = teams_endpoint
         return fastapi_app
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -70,6 +70,28 @@ def test_environment_credentials_are_used_only_when_nothing_is_stored(engine, ke
     assert store.masked_credentials("telegram")["source"] == "environment"
 
 
+def test_first_run_state_does_not_hide_environment_credentials(engine, key):
+    store = ChannelStore(
+        engine,
+        key,
+        env={"TELEGRAM_BOT_TOKEN": "environment-token-1234"},
+    )
+
+    store.initialize("telegram", enabled=True)
+
+    assert store.get("telegram").enabled is True
+    assert store.load_credentials("telegram").source == "environment"
+
+
+def test_initialize_never_overwrites_a_saved_enabled_choice(engine, key):
+    store = ChannelStore(engine, key)
+    store.set_enabled("telegram", False)
+
+    store.initialize("telegram", enabled=True)
+
+    assert store.get("telegram").enabled is False
+
+
 def test_clearing_credentials_disables_and_disconnects_the_channel(engine, key):
     store = ChannelStore(engine, key)
     store.save_credentials("telegram", {"token": "secret"})

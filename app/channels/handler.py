@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -88,7 +89,7 @@ class ChannelHandler:
             self._store.record_error(message.channel, str(exc))
 
         try:
-            outcome = self._pipeline(text, adapter.profile)
+            outcome = await asyncio.to_thread(self._pipeline, text, adapter.profile)
         except Exception as exc:
             return await self._pipeline_failure(message, adapter, start, exc)
 
