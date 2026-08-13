@@ -35,30 +35,20 @@ def verify_citations(answer: str, bundle: ContextBundle) -> tuple[str, list[Cita
 
     Returns `(cleaned_answer, citations)`:
     - `cleaned_answer` is `answer` with every unresolvable marker removed
-      (resolvable markers are left in place, verbatim).
+      and verified markers renumbered to match the displayed source list.
     - `citations` lists each *document* that contributed a resolvable
       marker, once, in the order it was first cited in `answer` — a
       second marker pointing at an already-cited document adds nothing.
     """
     sources_by_marker = {source.marker: source for source in bundle.sources}
 
-    def _strip_unresolvable(match: re.Match[str]) -> str:
-        marker = match.group(0)
-        return marker if marker in sources_by_marker else ""
-
-    cleaned = _MARKER_RE.sub(_strip_unresolvable, answer)
-    # Only tidy the artifact of removal itself (a run of literal spaces
-    # left where a marker used to sit) — never touch newlines or other
-    # whitespace the model wrote deliberately.
-    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
-
     citations: list[Citation] = []
-    seen_document_ids: set[int] = set()
+    display_number_by_document: dict[int, int] = {}
     for match in _MARKER_RE.finditer(answer):
         source = sources_by_marker.get(match.group(0))
-        if source is None or source.document_id in seen_document_ids:
+        if source is None or source.document_id in display_number_by_document:
             continue
-        seen_document_ids.add(source.document_id)
+        display_number_by_document[source.document_id] = len(citations) + 1
         citations.append(
             Citation(
                 document_id=source.document_id,
@@ -66,5 +56,17 @@ def verify_citations(answer: str, bundle: ContextBundle) -> tuple[str, list[Cita
                 source_ref=source.source_ref,
             )
         )
+
+    def _normalize_marker(match: re.Match[str]) -> str:
+        source = sources_by_marker.get(match.group(0))
+        if source is None:
+            return ""
+        return f"[{display_number_by_document[source.document_id]}]"
+
+    cleaned = _MARKER_RE.sub(_normalize_marker, answer)
+    # Only tidy the artifact of removal itself (a run of literal spaces
+    # left where a marker used to sit) — never touch newlines or other
+    # whitespace the model wrote deliberately.
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
 
     return cleaned, citations

@@ -69,6 +69,22 @@ def test_7_3_valid_marker_survives_alongside_a_stripped_one():
     assert citations == [Citation(document_id=1, document_title="policy.pdf", source_ref="p. 2")]
 
 
+def test_verified_markers_are_renumbered_to_match_the_displayed_source_list():
+    bundle = _bundle(
+        _source("[3]", 2, "expenses.docx", "p. 4"),
+        _source("[4]", 2, "expenses.docx", "p. 5"),
+    )
+
+    cleaned, citations = verify_citations(
+        "Use the travel form [3]; approval is also covered [4].", bundle
+    )
+
+    assert cleaned == "Use the travel form [1]; approval is also covered [1]."
+    assert citations == [
+        Citation(document_id=2, document_title="expenses.docx", source_ref="p. 4")
+    ]
+
+
 # --- 7.4 Multiple documents, first-cited order, no duplicates -----------------
 
 
