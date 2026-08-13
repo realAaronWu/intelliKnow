@@ -69,24 +69,25 @@ No `TEAMS_APP_ID` or `TEAMS_APP_PASSWORD` is needed for the local Emulator demo.
 
 ## 3. Start IntelliKnow
 
-Port `8000` is often used by another local model service in this workspace, so this demo uses `8011`:
+Use the laptop deployment helper from the repository root:
 
 ```bash
-KMP_DUPLICATE_LIB_OK=TRUE uv run uvicorn app.main:app --host 127.0.0.1 --port 8011
+./scripts/laptop-demo start
 ```
 
 Wait for:
 
 ```text
-Application startup complete.
-Uvicorn running on http://127.0.0.1:8011
+IntelliKnow is ready.
+Admin console: http://127.0.0.1:8501
+API docs:     http://127.0.0.1:8000/docs
 ```
 
-Leave this Terminal window open during the demo.
+The helper runs provider checks, starts exactly one API worker and the admin console, verifies both processes, and writes logs under `.run/laptop-demo/`.
 
 Verify that the running build contains the Teams endpoint by opening:
 
-[http://127.0.0.1:8011/docs](http://127.0.0.1:8011/docs)
+[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
 The page should list `POST /api/messages`.
 
@@ -97,7 +98,7 @@ The page should list `POST /api/messages`.
 3. Enter this bot URL:
 
    ```text
-   http://localhost:8011/api/messages
+   http://localhost:8000/api/messages
    ```
 
 4. Leave **Microsoft App ID** empty.
@@ -133,17 +134,21 @@ For the annual-leave question, the answer should say that full-time employees re
 
 ## 6. Finish the demo
 
-Stop IntelliKnow in Terminal with **Control-C**. The Emulator can then be closed normally.
+Stop IntelliKnow and then close the Emulator:
+
+```bash
+./scripts/laptop-demo stop
+```
 
 ## Troubleshooting
 
 ### The Emulator cannot connect
 
 - Confirm IntelliKnow is still running.
-- Use `http://localhost:8011/api/messages`, including `/api/messages`.
+- Use `http://localhost:8000/api/messages`, including `/api/messages`.
 - Confirm the App ID and password fields are empty.
-- Open `http://127.0.0.1:8011/docs` and verify `POST /api/messages` is listed.
-- If port `8011` is occupied, start IntelliKnow on another port and use the same port in the Emulator URL.
+- Open `http://127.0.0.1:8000/docs` and verify `POST /api/messages` is listed.
+- If port `8000` is occupied, start IntelliKnow with `INTELLIKNOW_API_PORT=8011 ./scripts/laptop-demo start` and use `http://localhost:8011/api/messages` in the Emulator.
 
 ### `Teams is disabled`
 

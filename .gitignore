@@ -6,6 +6,8 @@
 # Runtime state (SQLite database, FAISS indexes, uploaded documents)
 data/
 uploads/
+.run/
+backups/
 
 # Python
 __pycache__/

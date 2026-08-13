@@ -1,0 +1,311 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUN_DIR="${INTELLIKNOW_RUN_DIR:-$ROOT_DIR/.run/laptop-demo}"
+SETTINGS_FILE="$RUN_DIR/runtime.env"
+if [[ "${1:-}" != "start" && -f "$SETTINGS_FILE" ]]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+      INTELLIKNOW_API_HOST) [[ -n "${INTELLIKNOW_API_HOST+x}" ]] || INTELLIKNOW_API_HOST="$value" ;;
+      INTELLIKNOW_API_PORT) [[ -n "${INTELLIKNOW_API_PORT+x}" ]] || INTELLIKNOW_API_PORT="$value" ;;
+      INTELLIKNOW_UI_HOST) [[ -n "${INTELLIKNOW_UI_HOST+x}" ]] || INTELLIKNOW_UI_HOST="$value" ;;
+      INTELLIKNOW_UI_PORT) [[ -n "${INTELLIKNOW_UI_PORT+x}" ]] || INTELLIKNOW_UI_PORT="$value" ;;
+    esac
+  done <"$SETTINGS_FILE"
+fi
+API_HOST="${INTELLIKNOW_API_HOST:-127.0.0.1}"
+API_PORT="${INTELLIKNOW_API_PORT:-8000}"
+UI_HOST="${INTELLIKNOW_UI_HOST:-127.0.0.1}"
+UI_PORT="${INTELLIKNOW_UI_PORT:-8501}"
+API_URL="http://${API_HOST}:${API_PORT}"
+UI_URL="http://${UI_HOST}:${UI_PORT}"
+API_PID_FILE="$RUN_DIR/api.pid"
+UI_PID_FILE="$RUN_DIR/ui.pid"
+API_LOG="$RUN_DIR/api.log"
+UI_LOG="$RUN_DIR/ui.log"
+
+cd "$ROOT_DIR"
+
+say() {
+  printf '%s\n' "$*"
+}
+
+die() {
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+pid_is_running() {
+  local pid_file="$1"
+  local marker="$2"
+  [[ -f "$pid_file" ]] || return 1
+  local pid
+  pid="$(cat "$pid_file")"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  ps -p "$pid" -o command= 2>/dev/null | grep -F -- "$marker" >/dev/null
+}
+
+port_is_listening() {
+  "$ROOT_DIR/.venv/bin/python" - "$1" "$2" <<'PY'
+import socket
+import sys
+
+host, port = sys.argv[1], int(sys.argv[2])
+with socket.socket() as sock:
+    sock.settimeout(0.25)
+    raise SystemExit(0 if sock.connect_ex((host, port)) == 0 else 1)
+PY
+}
+
+check_files_and_secrets() {
+  command -v uv >/dev/null 2>&1 || die "uv is not installed or not on PATH."
+  [[ -f pyproject.toml ]] || die "Run this command from the IntelliKnow repository."
+  [[ -f .env ]] || die ".env is missing. Run: cp .env.example .env"
+  [[ -f config.yaml ]] || die "config.yaml is missing."
+  [[ -x .venv/bin/python ]] || die "Dependencies are not installed. Run: ./scripts/laptop-demo install"
+
+  "$ROOT_DIR/.venv/bin/python" <<'PY'
+from pathlib import Path
+import os
+
+import yaml
+from cryptography.fernet import Fernet
+from dotenv import dotenv_values
+
+values = {**dotenv_values(".env"), **os.environ}
+required = ["ADMIN_PASSWORD", "CREDENTIAL_ENCRYPTION_KEY"]
+provider = (yaml.safe_load(Path("config.yaml").read_text()) or {}).get("llm", {}).get("provider")
+if provider == "anthropic":
+    required.append("ANTHROPIC_API_KEY")
+elif provider == "openai":
+    required.append("OPENAI_API_KEY")
+
+missing = [name for name in required if not values.get(name)]
+if missing:
+    raise SystemExit("Missing required .env value(s): " + ", ".join(missing))
+
+try:
+    Fernet(str(values["CREDENTIAL_ENCRYPTION_KEY"]).encode("ascii"))
+except Exception as exc:
+    raise SystemExit("CREDENTIAL_ENCRYPTION_KEY is not a valid Fernet key") from exc
+
+if len(str(values["ADMIN_PASSWORD"])) < 12:
+    raise SystemExit("ADMIN_PASSWORD must contain at least 12 characters for the demo")
+
+print(f"Configuration and required secrets: OK ({provider} LLM)")
+PY
+}
+
+validate_bindings() {
+  [[ "$API_HOST" =~ ^[a-zA-Z0-9.:_-]+$ ]] || die "Invalid API host: $API_HOST"
+  [[ "$UI_HOST" =~ ^[a-zA-Z0-9.:_-]+$ ]] || die "Invalid console host: $UI_HOST"
+  [[ "$API_PORT" =~ ^[0-9]+$ ]] && ((API_PORT >= 1 && API_PORT <= 65535)) \
+    || die "INTELLIKNOW_API_PORT must be between 1 and 65535."
+  [[ "$UI_PORT" =~ ^[0-9]+$ ]] && ((UI_PORT >= 1 && UI_PORT <= 65535)) \
+    || die "INTELLIKNOW_UI_PORT must be between 1 and 65535."
+}
+
+install() {
+  command -v uv >/dev/null 2>&1 || die "Install uv first, then rerun this command."
+  say "Installing the locked Python environment..."
+  uv sync --frozen
+  say "Install complete."
+}
+
+preflight() {
+  check_files_and_secrets
+  say "Checking the configured LLM and embedding provider..."
+  uv run python scripts/smoke_provider.py
+  say "Preflight passed."
+}
+
+wait_for_api() {
+  local attempt
+  for attempt in $(seq 1 90); do
+    if ! pid_is_running "$API_PID_FILE" "uvicorn app.main:app"; then
+      tail -n 30 "$API_LOG" >&2 || true
+      return 1
+    fi
+    if "$ROOT_DIR/.venv/bin/python" - "$API_URL" >/dev/null 2>&1 <<'PY'
+import os
+import sys
+
+import httpx
+from dotenv import dotenv_values
+
+values = {**dotenv_values(".env"), **os.environ}
+response = httpx.get(
+    sys.argv[1] + "/admin/session",
+    headers={"Authorization": "Bearer " + str(values["ADMIN_PASSWORD"])},
+    timeout=2,
+)
+raise SystemExit(0 if response.status_code == 200 else 1)
+PY
+    then
+      return 0
+    fi
+    sleep 1
+  done
+  tail -n 30 "$API_LOG" >&2 || true
+  return 1
+}
+
+wait_for_ui() {
+  local attempt
+  for attempt in $(seq 1 30); do
+    if ! pid_is_running "$UI_PID_FILE" "streamlit run streamlit_app.py"; then
+      tail -n 30 "$UI_LOG" >&2 || true
+      return 1
+    fi
+    if port_is_listening "$UI_HOST" "$UI_PORT"; then
+      return 0
+    fi
+    sleep 1
+  done
+  tail -n 30 "$UI_LOG" >&2 || true
+  return 1
+}
+
+start() {
+  check_files_and_secrets
+  validate_bindings
+  mkdir -p "$RUN_DIR"
+
+  if pid_is_running "$API_PID_FILE" "uvicorn app.main:app" \
+    || pid_is_running "$UI_PID_FILE" "streamlit run streamlit_app.py"; then
+    die "IntelliKnow is already managed by this script. Run: ./scripts/laptop-demo status"
+  fi
+  rm -f "$API_PID_FILE" "$UI_PID_FILE"
+
+  if port_is_listening "$API_HOST" "$API_PORT"; then
+    die "Port $API_PORT is already in use. Stop the existing API or set INTELLIKNOW_API_PORT."
+  fi
+  if port_is_listening "$UI_HOST" "$UI_PORT"; then
+    die "Port $UI_PORT is already in use. Stop the existing console or set INTELLIKNOW_UI_PORT."
+  fi
+
+  say "Running provider preflight before startup..."
+  preflight
+
+  cat >"$SETTINGS_FILE" <<EOF
+INTELLIKNOW_API_HOST=$API_HOST
+INTELLIKNOW_API_PORT=$API_PORT
+INTELLIKNOW_UI_HOST=$UI_HOST
+INTELLIKNOW_UI_PORT=$UI_PORT
+EOF
+
+  say "Starting the API on $API_URL..."
+  nohup "$ROOT_DIR/.venv/bin/python" -m uvicorn app.main:app \
+    --host "$API_HOST" --port "$API_PORT" >"$API_LOG" 2>&1 &
+  echo "$!" >"$API_PID_FILE"
+  trap 'stop >/dev/null 2>&1 || true' ERR INT TERM
+  if ! wait_for_api; then
+    stop
+    die "API did not become ready within 90 seconds. See $API_LOG"
+  fi
+
+  say "Starting the admin console on $UI_URL..."
+  nohup env INTELLIKNOW_API_URL="$API_URL" \
+    "$ROOT_DIR/.venv/bin/python" -m streamlit run streamlit_app.py \
+    --server.address "$UI_HOST" --server.port "$UI_PORT" \
+    --server.headless true --browser.gatherUsageStats false >"$UI_LOG" 2>&1 &
+  echo "$!" >"$UI_PID_FILE"
+  if ! wait_for_ui; then
+    stop
+    die "Console did not become ready within 30 seconds. See $UI_LOG"
+  fi
+  trap - ERR INT TERM
+
+  say ""
+  say "IntelliKnow is ready."
+  say "Admin console: $UI_URL"
+  say "API docs:     $API_URL/docs"
+  say "Logs:         $RUN_DIR"
+}
+
+stop_one() {
+  local name="$1"
+  local pid_file="$2"
+  local marker="$3"
+  if ! pid_is_running "$pid_file" "$marker"; then
+    rm -f "$pid_file"
+    say "$name is not running."
+    return
+  fi
+
+  local pid
+  pid="$(cat "$pid_file")"
+  kill "$pid"
+  for _ in $(seq 1 15); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      rm -f "$pid_file"
+      say "$name stopped."
+      return
+    fi
+    sleep 1
+  done
+  kill -9 "$pid" 2>/dev/null || true
+  rm -f "$pid_file"
+  say "$name was force-stopped after waiting 15 seconds."
+}
+
+stop() {
+  stop_one "Admin console" "$UI_PID_FILE" "streamlit run streamlit_app.py"
+  stop_one "API" "$API_PID_FILE" "uvicorn app.main:app"
+}
+
+status() {
+  local failed=0
+  if pid_is_running "$API_PID_FILE" "uvicorn app.main:app"; then
+    say "API:     running (PID $(cat "$API_PID_FILE"), $API_URL)"
+  else
+    say "API:     stopped"
+    failed=1
+  fi
+  if pid_is_running "$UI_PID_FILE" "streamlit run streamlit_app.py"; then
+    say "Console: running (PID $(cat "$UI_PID_FILE"), $UI_URL)"
+  else
+    say "Console: stopped"
+    failed=1
+  fi
+  return "$failed"
+}
+
+logs() {
+  mkdir -p "$RUN_DIR"
+  touch "$API_LOG" "$UI_LOG"
+  say "Following API and console logs. Press Control-C to stop following logs."
+  tail -n 80 -F "$API_LOG" "$UI_LOG"
+}
+
+usage() {
+  cat <<EOF
+Usage: ./scripts/laptop-demo COMMAND
+
+Commands:
+  install     Install exact dependencies from uv.lock
+  preflight   Validate secrets and make real LLM/embedding checks
+  start       Preflight, then start the API and admin console
+  status      Show managed process status and URLs
+  logs        Follow API and console logs
+  stop        Stop the console and API cleanly
+  restart     Stop, then preflight and start both components
+
+Optional port overrides:
+  INTELLIKNOW_API_PORT=8012 INTELLIKNOW_UI_PORT=8502 ./scripts/laptop-demo start
+EOF
+}
+
+case "${1:-}" in
+  install) install ;;
+  preflight) preflight ;;
+  start) start ;;
+  stop) stop ;;
+  restart) stop; start ;;
+  status) status ;;
+  logs) logs ;;
+  *) usage; [[ -z "${1:-}" ]] || exit 1 ;;
+esac
