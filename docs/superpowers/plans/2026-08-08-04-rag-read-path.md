@@ -264,6 +264,8 @@ The exact-equality row is the boundary case most likely to be implemented wrong;
 - Sweep `relevance_floor` against the negative question set; report the no-match rate on negatives and the false-no-match rate on unambiguous questions.
 - Choose values, write them to config, and record the sweep as evidence.
 
+**Scope note from the project owner:** increment 02's labelled question set was deferred, and a corpus of six synthetic fixtures cannot support a meaningful accuracy figure. Do **not** manufacture one. Perform a bounded sanity check instead — confirm that clearly-HR questions score high centroid confidence, that a deliberately ambiguous question falls below threshold and escalates, and that a question about content absent from the corpus is rejected by the gate. Record the values used and state explicitly in the report that real calibration is pending the corpus.
+
 **Why this is a task and not tuning.** Both numbers ship as guesses on scales that did not exist before this increment — temperature governs what "0.70 confidence" even means, and the floor now applies to a normalized cross-encoder score rather than cosine, so the old 0.35 does not carry over. **The L3 gates cannot be trusted until this runs.**
 
 - [ ] Run the temperature sweep · [ ] Run the floor sweep · [ ] Write values and evidence · [ ] Commit
@@ -283,6 +285,25 @@ The exact-equality row is the boundary case most likely to be implemented wrong;
 - Reports latency so an operator can verify the 3s budget on their own hardware.
 
 - [ ] Write failing tests · [ ] Confirm fail · [ ] Implement · [ ] Confirm green · [ ] Commit
+
+---
+
+### Task 13: Read-path demo CLI
+
+**Files:** Create `scripts/ask.py`
+
+**Behaviour:** the project owner needs the read path runnable and inspectable. Takes a question, runs the full pipeline, and prints the whole trace so each stage is visible rather than only asserted in tests:
+
+- classification: detected space, confidence, `classified_by` (centroid or llm), and the reasoning when escalated
+- routing: which spaces were searched, and whether the fallback fired
+- retrieval: dense hits and keyword hits separately with scores, then the fused order, then the reranked order — so a reader can see the reranker actually reordering and see which retriever found what
+- gate: the best normalized reranker score against the floor, and the pass/fail decision
+- answer with citations resolved to document title and source ref
+- end-to-end latency
+
+Must work against the ingested fixture corpus. `--space` to force a space and bypass classification is useful for isolating retrieval behaviour.
+
+- [ ] Build · [ ] Run against the ingested fixtures · [ ] Commit
 
 ---
 
