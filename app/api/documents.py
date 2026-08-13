@@ -30,6 +30,7 @@ from app.db import documents as documents_table
 from app.ingest.lifecycle import delete_document, reassign_document, reindex_all, reparse_document
 from app.ingest.validate import ValidationError, validate_upload
 from app.ingest.worker import IngestDeps, _utc_now_iso, ingest_document
+from app.rag.fts_query import fts_query as _fts_query
 from app.rag.index_meta import read_reindex_status
 
 
@@ -57,26 +58,6 @@ def _like_pattern(q: str) -> str:
         .replace("_", f"{_LIKE_ESCAPE}_")
     )
     return f"%{escaped}%"
-
-
-def _fts_query(q: str) -> str:
-    """Turn free-typed search text into a safe FTS5 `MATCH` expression.
-
-    FTS5's `MATCH` argument is a query *language*, not a string: `-`
-    introduces a column filter, `AND`/`OR`/`NOT`/`NEAR` are operators, and
-    `"`, `(`, `*`, `^`, `:` are all syntax. Passing raw user input through
-    meant `annual-leave`, `it's`, `foo(` and a bare `"` each raised
-    `OperationalError` — a 500 for input nobody would call malformed.
-
-    Every whitespace-separated term becomes a quoted FTS5 string (with any
-    embedded `"` doubled, its only escape), which turns the whole thing
-    into a literal phrase search. Multiple terms sit side by side, which
-    FTS5 reads as an implicit AND — the behaviour a search box implies.
-    Returns "" when the input holds no terms at all; there is no valid
-    empty `MATCH` expression, so callers skip the FTS clause entirely.
-    """
-    terms = q.split()
-    return " ".join('"' + term.replace('"', '""') + '"' for term in terms)
 
 
 def _upload_path(deps: IngestDeps, doc_id: int, ext: str) -> Path:
@@ -167,7 +148,12 @@ def build_documents_router(deps: IngestDeps) -> APIRouter:
         if q:
             like_clause = f"filename LIKE :q_like ESCAPE '{_LIKE_ESCAPE}'"
             params["q_like"] = _like_pattern(q)
-            match_query = _fts_query(q)
+            # AND, not `_fts_query`'s OR default: this is a user-typed
+            # filter box, not a ranked retrieval feed feeding a reranker —
+            # typing an extra word should narrow the result set, the
+            # behaviour a search box implies. See `app/rag/fts_query.py`
+            # for why keyword retrieval needs the opposite default.
+            match_query = _fts_query(q, op="AND")
             if match_query:
                 clauses.append(
                     f"({like_clause} OR id IN ("

@@ -173,6 +173,30 @@ def test_12_2_search_by_keyword_matches_chunk_text_not_only_the_filename(
     assert filenames == {"expense_policy.docx"}
 
 
+def test_12_2_multi_word_search_still_requires_every_word_and_not_any(
+    client, classify_llm
+):
+    """`app/rag/fts_query.py` was fixed to default to OR (so keyword
+    *retrieval* can rank a natural-language question by term overlap
+    instead of requiring every word), but this admin search box deliberately
+    keeps the old AND behaviour: typing an extra word should narrow the
+    result set, not widen it. "reimbursed" only appears in
+    expense_policy.docx's chunk text; "policy" appears in both documents
+    (`handbook.pdf`'s chunk text starts "Leave Policy", the fixture's own
+    filename literally contains "policy"). Under OR both documents would
+    match on "policy" alone; AND correctly requires both words in the same
+    chunk, which only expense_policy.docx's chunk satisfies.
+    """
+    _upload(client, classify_llm, "handbook.pdf", "hr")
+    _upload(client, classify_llm, "expense_policy.docx", "finance")
+
+    resp = client.get("/documents", params={"q": "reimbursed policy"})
+
+    assert resp.status_code == 200, resp.text
+    filenames = {d["filename"] for d in resp.json()}
+    assert filenames == {"expense_policy.docx"}
+
+
 @pytest.mark.parametrize(
     "query",
     [

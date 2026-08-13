@@ -30,3 +30,15 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# A bare `uv run pytest` (no `-m`) would otherwise collect and run the
+# `slow` tests too, which load a real sentence-transformers/torch model in
+# a process that has already initialized faiss's OpenMP runtime (via
+# earlier VectorStore-backed tests) -- on this platform that combination
+# aborts the interpreter outright (`Fatal Python error: Aborted`, not a
+# catchable exception), not merely fails a test. Defaulting to `not slow`
+# here makes the bare command the safe one; `uv run pytest -m slow` (or any
+# explicit `-m` override) still opts back in deliberately.
+addopts = "-m \"not slow\""
+markers = [
+    "slow: loads a real model or hits real infra (see docs/superpowers/test-plans/04-rag-read-path-tests.md L2); excluded by `-m \"not slow\"`.",
+]
