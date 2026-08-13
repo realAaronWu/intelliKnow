@@ -207,24 +207,32 @@ def _split_table_pieces(rows: list[list[str]], target: int) -> list[str]:
     if not body:
         return [whole]
 
-    # The header line plus the `| --- |` separator line, both repeated in
-    # every piece — charge them against the target up front.
-    header_cost = len(render_table_markdown([header])) + 1
+    # The header line plus the `| --- |` separator line, repeated in every
+    # piece; charged against the target up front. Every body row is
+    # rendered once, here, and the resulting line is what gets grouped —
+    # so a row is an indivisible unit by construction rather than by a
+    # later split happening to land between two of them.
+    header_block = render_table_markdown([header])
+    header_cost = len(header_block) + 1
+    body_lines = [
+        render_table_markdown([header, row])[len(header_block) + 1 :] for row in body
+    ]
+
     pieces: list[str] = []
-    current: list[list[str]] = []
+    current: list[str] = []
     current_len = header_cost
 
     def flush() -> None:
         if current:
-            pieces.append(render_table_markdown([header, *current]))
+            pieces.append("\n".join([header_block, *current]))
 
-    for row in body:
-        row_cost = len(render_table_markdown([header, row])) - header_cost + 1
+    for line in body_lines:
+        row_cost = len(line) + 1
         if current and current_len + row_cost > target:
             flush()
             current = []
             current_len = header_cost
-        current.append(row)
+        current.append(line)
         current_len += row_cost
 
     flush()
