@@ -13,14 +13,10 @@ values to be copied verbatim from design.md. This test therefore asserts
 0.45, not the stale 0.35 in the test-plan table. See task-1-report.md for
 the full note.
 
-NOTE on 1.1 llm.provider/model: the test-plan table (and the original
-design.md draft) lists `claude-opus-5` under `anthropic`. Final review made
-the free local backend (Ollama-compatible, `llm.provider: local`) the
-shipped default so a fresh checkout costs nothing to run; the Anthropic path
-is now the opt-in demo configuration (see the comment block above `llm:` in
-config.yaml and design.md § Configuration). This test asserts the shipped
-`local` / `llama3.1` values, not the stale `anthropic` / `claude-opus-5`
-values in the test-plan table.
+NOTE on 1.1 llm.provider/model: the demo uses Anthropic's fast model for
+classification and generation. The local Ollama-compatible path remains
+available by changing these three config values, but is not the shipped demo
+default because an unavailable local server makes every answer fail.
 """
 
 import copy
@@ -110,9 +106,9 @@ def _valid_config_dict() -> dict:
 
 def test_1_1_load_shipped_config_yaml():
     cfg = load_config(SHIPPED_CONFIG)
-    assert cfg.llm.provider == "local"
-    assert cfg.llm.model_classify == "llama3.1"
-    assert cfg.llm.model_generate == "llama3.1"
+    assert cfg.llm.provider == "anthropic"
+    assert cfg.llm.model_classify == "claude-haiku-4-5"
+    assert cfg.llm.model_generate == "claude-haiku-4-5"
     assert cfg.llm.base_url == "http://localhost:11434/v1"
     assert cfg.embedding.model == "all-MiniLM-L6-v2"
     assert cfg.embedding.dimension == 384

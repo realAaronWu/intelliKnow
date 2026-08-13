@@ -19,7 +19,7 @@ code paths.
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.orchestrator.pipeline import PipelineDeps, answer_question
@@ -60,6 +60,11 @@ def build_query_router(deps: PipelineDeps) -> APIRouter:
     @router.post("/admin/test-query")
     def test_query(body: TestQueryRequest) -> dict:
         outcome = answer_question(body.question, ADMIN_CHANNEL_PROFILE, deps)
+        if outcome.classification_failed:
+            raise HTTPException(
+                status_code=503,
+                detail=outcome.error or "Intent classification is unavailable; please retry.",
+            )
         return {
             "intent_slug": outcome.intent_slug,
             "confidence": outcome.confidence,

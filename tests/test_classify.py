@@ -16,6 +16,7 @@ import pytest
 from app.config import AppConfig
 from app.orchestrator.centroids import CentroidIndex
 from app.orchestrator.classify import Classification, classify
+from app.orchestrator.errors import ClassificationError
 from app.providers.base import ProviderError
 from tests.doubles import FakeEmbeddingProvider, FakeLLMProvider
 
@@ -163,52 +164,41 @@ def test_9_4_keyword_edit_changes_next_escalation_prompt_no_restart():
 # --- 9.5 Escalation disabled ----------------------------------------------------
 
 
-def test_9_5_escalation_disabled_zero_llm_calls():
+def test_9_5_escalation_disabled_fails_closed_with_zero_llm_calls():
     cfg = _cfg(threshold=0.70, escalate=False)
     centroids, _ = _centroids(cfg)
     llm = FakeLLMProvider()
 
-    result = classify("ambiguous", _AMBIGUOUS_QUERY, cfg, centroids, llm)
+    with pytest.raises(ClassificationError, match="escalation is disabled"):
+        classify("ambiguous", _AMBIGUOUS_QUERY, cfg, centroids, llm)
 
     assert len(llm.calls) == 0
-    assert result.classified_by == "centroid"
-    assert result.confidence < cfg.orchestrator.confidence_threshold
-    assert result.failed is False
 
 
 # --- 9.6 Escalated result also below threshold ---------------------------------
 
 
-def test_9_6_escalated_result_also_below_threshold():
+def test_9_6_escalated_result_below_threshold_fails_closed():
     cfg = _cfg(threshold=0.70)
     centroids, _ = _centroids(cfg)
     llm = FakeLLMProvider()
     llm.expect_schema({"slug": "hr", "confidence": 0.40, "reasoning": "not sure"})
 
-    result = classify("ambiguous", _AMBIGUOUS_QUERY, cfg, centroids, llm)
-
-    assert result.classified_by == "llm"
-    assert result.confidence == 0.40
-    assert result.confidence < cfg.orchestrator.confidence_threshold
-    assert result.failed is False
+    with pytest.raises(ClassificationError, match="below the required"):
+        classify("ambiguous", _AMBIGUOUS_QUERY, cfg, centroids, llm)
 
 
 # --- 9.7 Unknown slug from LLM --------------------------------------------------
 
 
-def test_9_7_unknown_slug_treated_as_below_threshold_anomaly_logged(caplog):
+def test_9_7_unknown_slug_fails_closed():
     cfg = _cfg(threshold=0.70)
     centroids, _ = _centroids(cfg)
     llm = FakeLLMProvider()
     llm.expect_schema({"slug": "not-a-real-space", "confidence": 0.95, "reasoning": "??"})
 
-    with caplog.at_level("WARNING"):
-        result = classify("ambiguous", _AMBIGUOUS_QUERY, cfg, centroids, llm)
-
-    assert result.classified_by == "llm"
-    assert result.confidence < cfg.orchestrator.confidence_threshold
-    assert result.failed is False
-    assert any("not-a-real-space" in record.message for record in caplog.records)
+    with pytest.raises(ClassificationError, match="not-a-real-space"):
+        classify("ambiguous", _AMBIGUOUS_QUERY, cfg, centroids, llm)
 
 
 # --- 9.8 / 9.9 Provider failure / timeout during escalation ---------------------
@@ -219,17 +209,14 @@ def test_9_7_unknown_slug_treated_as_below_threshold_anomaly_logged(caplog):
     [ProviderError.backend("boom"), ProviderError.timeout("too slow")],
     ids=["provider_failure", "timeout"],
 )
-def test_9_8_9_9_provider_failure_or_timeout_never_raises(error):
+def test_9_8_9_9_provider_failure_or_timeout_is_retryable(error):
     cfg = _cfg(threshold=0.70)
     centroids, _ = _centroids(cfg)
     llm = FakeLLMProvider()
     llm.fail_next(error)
 
-    result = classify("ambiguous", _AMBIGUOUS_QUERY, cfg, centroids, llm)
-
-    assert result.failed is True
-    assert result.intent_slug == cfg.orchestrator.fallback_space
-    assert result.classified_by == "llm"
+    with pytest.raises(ClassificationError, match="Please retry"):
+        classify("ambiguous", _AMBIGUOUS_QUERY, cfg, centroids, llm)
 
 
 # --- 9.10 Uses classify model ----------------------------------------------------

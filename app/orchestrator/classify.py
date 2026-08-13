@@ -1,4 +1,4 @@
-"""Intent classification: centroid first, LLM escalation only when unsure.
+"""Intent classification: centroid first, strict LLM escalation when unsure.
 
 `classify()` never embeds anything itself — `query_vector` is the same
 vector retrieval will use for dense search, computed exactly once by the
@@ -22,13 +22,9 @@ changes the very next escalation prompt with no restart — the same
 "live config, no restart" property `app/ingest/classify_doc.py::
 suggest_intent` already has for document classification.
 
-A provider failure or timeout, and an LLM response naming a slug that is
-not one of the configured spaces, are both treated as "no usable
-classification" rather than propagated: `failed=True` on the former,
-confidence forced below any real threshold on the latter, either way with
-the anomaly logged rather than raised — `spec: query-orchestration` §
-"Classification failure falls back rather than failing" says a broken
-classifier must never be a broken answer.
+Provider failures, malformed responses, and below-threshold results raise
+`ClassificationError`. Retrieval must never broaden its search merely
+because the classifier is unavailable or unsure.
 """
 
 from __future__ import annotations
@@ -39,6 +35,7 @@ from typing import Literal
 
 from app.config import AppConfig
 from app.orchestrator.centroids import CentroidIndex
+from app.orchestrator.errors import ClassificationError
 from app.providers.base import LLMProvider, ProviderError
 
 logger = logging.getLogger(__name__)
@@ -89,20 +86,10 @@ def _escalate(question: str, cfg: AppConfig, llm: LLMProvider) -> Classification
     try:
         result = llm.complete(system=_SYSTEM_PROMPT, user=user, schema=_CLASSIFY_SCHEMA)
     except ProviderError as exc:
-        logger.warning(
-            "classification escalation failed, falling back to %r: "
-            "provider error (category=%s): %s",
-            cfg.orchestrator.fallback_space,
-            exc.category,
-            exc,
-        )
-        return Classification(
-            intent_slug=cfg.orchestrator.fallback_space,
-            confidence=0.0,
-            classified_by="llm",
-            reasoning=None,
-            failed=True,
-        )
+        logger.error("classification escalation failed (%s): %s", exc.category, exc)
+        raise ClassificationError(
+            f"Intent classification is unavailable ({exc.category}). Please retry."
+        ) from exc
 
     parsed = result.parsed if isinstance(result.parsed, dict) else {}
     slug = parsed.get("slug")
@@ -110,23 +97,26 @@ def _escalate(question: str, cfg: AppConfig, llm: LLMProvider) -> Classification
 
     valid_slugs = {space.slug for space in cfg.intent_spaces}
     if slug not in valid_slugs:
-        logger.warning(
-            "classification escalation returned an unrecognized slug %r; "
-            "treating it as below-threshold",
-            slug,
-        )
-        return Classification(
-            intent_slug=slug or cfg.orchestrator.fallback_space,
-            confidence=0.0,
-            classified_by="llm",
-            reasoning=reasoning,
-            failed=False,
+        raise ClassificationError(
+            f"Intent classification returned an invalid intent {slug!r}. Please retry."
         )
 
     try:
         confidence = float(parsed.get("confidence"))
-    except (TypeError, ValueError):
-        confidence = 0.0
+    except (TypeError, ValueError) as exc:
+        raise ClassificationError(
+            "Intent classification returned invalid confidence. Please retry."
+        ) from exc
+    if not 0.0 <= confidence <= 1.0:
+        raise ClassificationError(
+            "Intent classification returned confidence outside 0 to 1. Please retry."
+        )
+    if confidence < cfg.orchestrator.confidence_threshold:
+        raise ClassificationError(
+            f"Intent classification confidence {confidence:.0%} is below the required "
+            f"{cfg.orchestrator.confidence_threshold:.0%}. Please clarify the question "
+            "or retry."
+        )
 
     return Classification(
         intent_slug=slug,
@@ -151,10 +141,8 @@ def classify(
     enforcement in `app/orchestrator/route.py`) returns immediately with
     `classified_by="centroid"` and no LLM call. Below it, this escalates
     to `llm` only when `cfg.orchestrator.escalate_to_llm` is true;
-    otherwise the centroid result is returned as-is, below threshold, and
-    `app/orchestrator/route.py::decide_spaces` is what turns that into a
-    fallback-space routing decision — this function only classifies, it
-    never decides which spaces get searched.
+    otherwise classification fails closed because no accepted routing
+    decision can be made without guessing.
     """
     slug, confidence = centroids.top(query_vector)
     threshold = cfg.orchestrator.confidence_threshold
@@ -169,12 +157,10 @@ def classify(
         )
 
     if not cfg.orchestrator.escalate_to_llm:
-        return Classification(
-            intent_slug=slug,
-            confidence=confidence,
-            classified_by="centroid",
-            reasoning=None,
-            failed=False,
+        raise ClassificationError(
+            f"Intent classification confidence {confidence:.0%} is below the required "
+            f"{threshold:.0%}, and LLM escalation is disabled. Please clarify the "
+            "question or enable escalation."
         )
 
     return _escalate(question, cfg, llm)

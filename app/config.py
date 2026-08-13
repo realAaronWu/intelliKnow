@@ -182,7 +182,7 @@ def _default_intent_spaces() -> list[IntentSpace]:
         IntentSpace(
             slug="general",
             name="General",
-            description="Fallback — searches every space.",
+            description="Cross-functional topics that do not belong to one specialist domain.",
             keywords=[],
         ),
     ]

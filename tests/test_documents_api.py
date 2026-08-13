@@ -14,12 +14,13 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import insert
+from sqlalchemy import func, insert, select
 
 from app.config import AppConfig
 from app.db import create_engine_for, documents, init_schema
 from app.ingest.worker import IngestDeps
 from app.main import create_app
+from app.orchestrator.errors import ClassificationError
 from app.rag.index_writer import IndexWriter
 from app.rag.vector_store import VectorStore
 from tests.doubles import FakeEmbeddingProvider, FakeLLMProvider
@@ -106,7 +107,7 @@ def test_admin_routes_require_the_configured_bearer_token(deps):
 
 
 def _upload(client: TestClient, classify_llm: FakeLLMProvider, filename: str, slug: str) -> int:
-    classify_llm.expect_schema({"slug": slug})
+    classify_llm.expect_schema({"slug": slug, "confidence": 0.95, "reasoning": "clear match"})
     content = (FIXTURES / filename).read_bytes()
     resp = client.post(
         "/documents", files={"file": (filename, content, "application/octet-stream")}
@@ -146,7 +147,7 @@ def _insert_document_directly(
 
 
 def test_12_1_upload_returns_202_with_id_and_pending_status(client, classify_llm):
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
     content = (FIXTURES / "handbook.pdf").read_bytes()
 
     resp = client.post(
@@ -157,6 +158,26 @@ def test_12_1_upload_returns_202_with_id_and_pending_status(client, classify_llm
     body = resp.json()
     assert body["status"] == "pending"
     assert isinstance(body["id"], int)
+
+
+def test_upload_classifier_preflight_failure_returns_503_without_creating_a_document(
+    deps, engine
+):
+    def unavailable(_cfg):
+        raise ClassificationError("Classification service is unavailable; please retry.")
+
+    deps.classification_preflight = unavailable
+    client = TestClient(create_app(deps))
+    content = (FIXTURES / "handbook.pdf").read_bytes()
+
+    response = client.post(
+        "/documents", files={"file": ("handbook.pdf", content, "application/pdf")}
+    )
+
+    assert response.status_code == 503
+    assert "retry" in response.json()["detail"].lower()
+    with engine.connect() as conn:
+        assert conn.execute(select(func.count(documents.c.id))).scalar_one() == 0
 
 
 # --- 12.2 Search by name -------------------------------------------------------------

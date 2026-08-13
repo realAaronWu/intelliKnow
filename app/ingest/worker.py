@@ -6,12 +6,9 @@ Drives a document's status through the full pipeline —
 handling": load, repair any ragged table regions, chunk, suggest an
 intent space, embed, and index.
 
-Table repair (`app/rag/tables.py`) and intent suggestion
-(`app/ingest/classify_doc.py`) are both built to degrade to a fallback
-rather than raise on provider failure, so the only failures this module
-actually has to recover from are a loader that cannot parse the file at
-all and an embedding/indexing failure partway through
-`IndexWriter.write_document`. Either way, cleanup is identical:
+Table repair may degrade safely, but intent classification is fail-closed:
+an unavailable provider, malformed result, or below-threshold result stops
+the document before indexing. Cleanup is identical for every failure:
 `IndexWriter.remove_document` deletes whatever chunk rows (and, via the
 FTS5 triggers wired in `app/db.py`, chunk_fts rows) made it into the
 database, and removes whatever vectors made it into FAISS — safe to call
@@ -76,6 +73,7 @@ class IngestDeps:
     index_writer: IndexWriter
     loaders: Mapping[str, DocumentLoader] = field(default_factory=lambda: DEFAULT_LOADERS)
     get_cfg: Callable[[], AppConfig] | None = None
+    classification_preflight: Callable[[AppConfig], None] | None = None
 
     def current_cfg(self) -> AppConfig:
         return self.get_cfg() if self.get_cfg is not None else self.cfg
@@ -94,12 +92,17 @@ def _set_status(engine: Engine, doc_id: int, status: str) -> None:
         )
 
 
-def _mark_failed(engine: Engine, doc_id: int, message: str) -> None:
+def _mark_failed(
+    engine: Engine, doc_id: int, message: str, *, clear_intent: bool = False
+) -> None:
+    values: dict = {"status": "failed", "error_message": message, "chunk_count": 0}
+    if clear_intent:
+        values.update(intent_slug="unclassified", intent_assigned_by="unclassified")
     with engine.begin() as conn:
         conn.execute(
             update(documents_table)
             .where(documents_table.c.id == doc_id)
-            .values(status="failed", error_message=message, chunk_count=0)
+            .values(**values)
         )
 
 
@@ -220,7 +223,7 @@ def ingest_document(doc_id: int, path: Path, deps: IngestDeps) -> None:
         deps.index_writer.write_document(doc_id, suggestion.slug, chunk_list)
     except Exception as exc:
         deps.index_writer.remove_document(doc_id)
-        _mark_failed(deps.engine, doc_id, str(exc))
+        _mark_failed(deps.engine, doc_id, str(exc), clear_intent=True)
         return
 
     # `spec: document-ingestion` § "Embedding model recorded at first

@@ -361,14 +361,9 @@ def test_c3_success_outcome_carries_classification_reasoning_through(
     assert outcome.classification_failed is False
 
 
-def test_c3_no_match_outcome_carries_classification_reasoning_through(
+def test_c3_low_confidence_outcome_fails_before_retrieval(
     engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids
 ):
-    """Even a fallback-routed no_match (confidence below threshold) still
-    carries whatever reasoning the LLM gave for its (below-threshold) pick
-    -- the field is populated whenever `classify()` returned one, not only
-    on the success path.
-    """
     _seed_matching_chunk(engine, vector_store)
     embedder.set_vector(_AMBIGUOUS_QUESTION, _AMBIGUOUS_VEC)
     classify_llm.expect_schema(
@@ -379,18 +374,15 @@ def test_c3_no_match_outcome_carries_classification_reasoning_through(
 
     outcome = answer_question(_AMBIGUOUS_QUESTION, _CHANNEL, deps)
 
-    assert outcome.status == "no_match"
-    assert outcome.reasoning == "weak signal, low confidence"
-    assert outcome.classification_failed is False
+    assert outcome.status == "failed"
+    assert outcome.intent_slug == "unclassified"
+    assert outcome.classification_failed is True
+    assert outcome.retrieved_doc_ids == []
 
 
-def test_c3_classification_failure_outcome_records_classification_failed(
+def test_c3_classifier_outage_returns_failed_without_retrieval(
     engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids
 ):
-    """Classification failure (`spec: query-orchestration` § "Classification
-    failure falls back rather than failing") must be visible on the
-    `QueryOutcome` it produces, not just swallowed into a generic no_match.
-    """
     _seed_matching_chunk(engine, vector_store)
     embedder.set_vector(_AMBIGUOUS_QUESTION, _AMBIGUOUS_VEC)
     classify_llm.fail_next(ProviderError.backend("classifier down"))
@@ -399,9 +391,12 @@ def test_c3_classification_failure_outcome_records_classification_failed(
 
     outcome = answer_question(_AMBIGUOUS_QUESTION, _CHANNEL, deps)
 
-    assert outcome.status == "no_match"
+    assert outcome.status == "failed"
     assert outcome.classification_failed is True
     assert outcome.reasoning is None
+    assert outcome.intent_slug == "unclassified"
+    assert outcome.fallback_used is False
+    assert outcome.retrieved_doc_ids == []
 
 
 def test_c2_relevance_floor_change_takes_effect_on_next_query_no_restart(

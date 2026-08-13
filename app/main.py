@@ -38,6 +38,7 @@ from app.channels.teams import TeamsEndpoint, build_teams_router
 from app.channels.tester import ChannelTestService
 from app.db import create_engine_for, init_schema, recover_interrupted_documents
 from app.ingest.worker import IngestDeps
+from app.ingest.classify_doc import preflight_classifier
 from app.orchestrator.centroids import CentroidIndex
 from app.orchestrator.pipeline import PipelineDeps, answer_question
 from app.rag.index_writer import IndexWriter
@@ -140,6 +141,9 @@ def _build_default_deps(
         vector_store=vector_store,
         index_writer=index_writer,
         get_cfg=lambda: application.config,
+        classification_preflight=lambda current_cfg: preflight_classifier(
+            current_cfg, application.classify_llm
+        ),
     )
 
 

@@ -28,9 +28,9 @@ at any nesting depth — omits `additionalProperties: false`, which the real
 Anthropic API rejects with a 400. The check itself lives in the
 provider-independent module, not here, for two reasons: it raises
 `InvalidSchemaError` rather than `ProviderError`, so a malformed schema
-cannot be absorbed by the `except ProviderError` fallbacks in
-`suggest_intent` and `repair_table` (which would file every document
-under the fallback space, the very defect this guards); and being
+cannot be absorbed by provider-error handling in `suggest_intent` and
+`repair_table` (document classification fails closed, while table repair
+may preserve raw extraction); and being
 provider-independent lets `tests/test_schema_shapes.py` apply it to every
 schema in `app/` at test time, whichever provider happens to be
 configured. Calling it here as well keeps the failure immediate and

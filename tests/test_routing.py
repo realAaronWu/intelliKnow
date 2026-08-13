@@ -13,7 +13,9 @@ from __future__ import annotations
 
 from app.config import AppConfig
 from app.orchestrator.classify import Classification
+from app.orchestrator.errors import ClassificationError
 from app.orchestrator.route import decide_spaces
+import pytest
 
 
 def _cfg(*, threshold: float = 0.70, fallback: str = "general") -> AppConfig:
@@ -62,13 +64,10 @@ def test_10_1_confidence_above_threshold_routes_to_single_space():
 # --- 10.2 Below threshold -------------------------------------------------------
 
 
-def test_10_2_confidence_below_threshold_routes_to_all_spaces():
+def test_10_2_confidence_below_threshold_fails_closed():
     cfg = _cfg(threshold=0.70)
-    decision = decide_spaces(_classification("finance", 0.42), cfg)
-
-    assert set(decision.spaces) == {"hr", "finance", "legal", "general"}
-    assert decision.fallback_used is True
-    assert decision.logged_slug == "general"
+    with pytest.raises(ClassificationError, match="below the required"):
+        decide_spaces(_classification("finance", 0.42), cfg)
 
 
 # --- 10.3 Confidence exactly at the threshold -----------------------------------
@@ -88,37 +87,31 @@ def test_10_3_confidence_exactly_at_threshold_uses_classified_space():
 # --- 10.4 Classified General, high confidence -----------------------------------
 
 
-def test_10_4_classified_as_fallback_space_always_searches_all_spaces():
+def test_10_4_confident_general_searches_only_general():
     cfg = _cfg(threshold=0.70, fallback="general")
     decision = decide_spaces(_classification("general", 0.99), cfg)
 
-    assert set(decision.spaces) == {"hr", "finance", "legal", "general"}
-    assert decision.fallback_used is True
+    assert decision.spaces == ["general"]
+    assert decision.fallback_used is False
     assert decision.logged_slug == "general"
 
 
 # --- 10.5 Unknown slug -----------------------------------------------------------
 
 
-def test_10_5_unknown_slug_routes_to_all_spaces_even_with_high_confidence():
+def test_10_5_unknown_slug_fails_closed_even_with_high_confidence():
     cfg = _cfg(threshold=0.70)
-    decision = decide_spaces(_classification("not-a-real-space", 0.99), cfg)
-
-    assert set(decision.spaces) == {"hr", "finance", "legal", "general"}
-    assert decision.fallback_used is True
-    assert decision.logged_slug == "general"
+    with pytest.raises(ClassificationError, match="invalid intent"):
+        decide_spaces(_classification("not-a-real-space", 0.99), cfg)
 
 
 # --- 10.6 Classification failed ---------------------------------------------------
 
 
-def test_10_6_classification_failed_routes_to_all_spaces():
+def test_10_6_classification_failed_stops_routing():
     cfg = _cfg(threshold=0.70)
-    decision = decide_spaces(_classification("general", 0.0, failed=True), cfg)
-
-    assert set(decision.spaces) == {"hr", "finance", "legal", "general"}
-    assert decision.fallback_used is True
-    assert decision.logged_slug == "general"
+    with pytest.raises(ClassificationError, match="failed"):
+        decide_spaces(_classification("general", 0.0, failed=True), cfg)
 
 
 # --- 10.7 Threshold raised at runtime ----------------------------------------------
@@ -131,6 +124,5 @@ def test_10_7_threshold_change_takes_effect_on_next_decision():
     assert decide_spaces(classification, low_threshold_cfg).fallback_used is False
 
     high_threshold_cfg = _cfg(threshold=0.90)
-    decision = decide_spaces(classification, high_threshold_cfg)
-    assert decision.fallback_used is True
-    assert set(decision.spaces) == {"hr", "finance", "legal", "general"}
+    with pytest.raises(ClassificationError, match="below the required"):
+        decide_spaces(classification, high_threshold_cfg)

@@ -39,6 +39,7 @@ from sqlalchemy.engine import Engine
 from app.config import AppConfig
 from app.orchestrator.centroids import CentroidIndex
 from app.orchestrator.classify import Classification, classify
+from app.orchestrator.errors import ClassificationError
 from app.orchestrator.route import RoutingDecision, decide_spaces
 from app.providers.base import EmbeddingProvider, LLMProvider, ProviderError
 from app.rag.citations import Citation, verify_citations
@@ -54,6 +55,10 @@ from app.rag.vector_store import VectorStore
 
 _FAILURE_MESSAGE = (
     "Sorry, I couldn't generate an answer just now. Please try again in a moment."
+)
+_CLASSIFICATION_FAILURE_MESSAGE = (
+    "I couldn't classify that question reliably, so I did not search the knowledge "
+    "base. Please clarify the question or retry in a moment."
 )
 
 
@@ -98,7 +103,7 @@ class QueryOutcome:
     citations: list[Citation]
     intent_slug: str
     confidence: float
-    classified_by: Literal["centroid", "llm"]
+    classified_by: Literal["centroid", "llm"] | None
     reasoning: str | None
     classification_failed: bool
     fallback_used: bool
@@ -145,12 +150,7 @@ def _elapsed_ms(start: float) -> int:
 
 
 def _domain_label(spaces: list[str], cfg: AppConfig) -> str:
-    """A human-readable name for the domain(s) retrieval searched, for the
-    no-match message. A single routed space names itself; the fallback's
-    "every space" case is named generically rather than as a list, since
-    a comma-joined list of every configured space is not, in fact, a
-    domain a user would recognise.
-    """
+    """A human-readable name for the domain(s) retrieval searched."""
     if len(spaces) == 1:
         [slug] = spaces
         for space in cfg.intent_spaces:
@@ -195,6 +195,29 @@ def _no_match_outcome(
     )
 
 
+def _classification_failure_outcome(
+    channel: ChannelProfile,
+    start: float,
+    error: Exception,
+    *,
+    classified_by: Literal["centroid", "llm"] | None = None,
+) -> QueryOutcome:
+    return QueryOutcome(
+        answer=format_for_channel(_CLASSIFICATION_FAILURE_MESSAGE, [], channel),
+        citations=[],
+        intent_slug="unclassified",
+        confidence=0.0,
+        classified_by=classified_by,
+        reasoning=None,
+        classification_failed=True,
+        fallback_used=False,
+        status="failed",
+        retrieved_doc_ids=[],
+        latency_ms=_elapsed_ms(start),
+        error=str(error),
+    )
+
+
 def answer_question(
     question: str,
     channel: ChannelProfile,
@@ -229,7 +252,10 @@ def answer_question(
     # this is a call, not a stored value.
     cfg = deps.get_cfg()
 
-    [query_vector] = deps.embedding.embed([question])
+    try:
+        [query_vector] = deps.embedding.embed([question])
+    except ProviderError as exc:
+        return _classification_failure_outcome(channel, start, exc)
     if trace is not None:
         trace.query_vector = query_vector
 
@@ -248,9 +274,16 @@ def answer_question(
         # edited config. Either way `deps.centroids` now reflects the
         # current `centroid_temperature` too. See `CentroidIndex.sync`'s
         # docstring.
-        deps.centroids.sync(cfg)
-        classification = classify(question, query_vector, cfg, deps.centroids, deps.classify_llm)
-        routing = decide_spaces(classification, cfg)
+        try:
+            deps.centroids.sync(cfg)
+            classification = classify(
+                question, query_vector, cfg, deps.centroids, deps.classify_llm
+            )
+            routing = decide_spaces(classification, cfg)
+        except (ClassificationError, ProviderError) as exc:
+            return _classification_failure_outcome(
+                channel, start, exc, classified_by="llm"
+            )
     if trace is not None:
         trace.classification = classification
         trace.routing = routing

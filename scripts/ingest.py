@@ -5,15 +5,11 @@ Usage:
 
     uv run python scripts/ingest.py tests/fixtures/docs/handbook.pdf [FILE ...]
 
-Works with the shipped local-default `config.yaml` and no API key: both
-the LLM and embedding providers default to backends that need no
-credential (a local Ollama server for `llm.provider: local`, a locally
-cached `sentence-transformers` model for `embedding.provider: local`). If
-no local LLM server is reachable, intent suggestion and ragged-table
-repair both fall back rather than raise — `spec: document-ingestion` §
-"Suggestion unavailable" and § "Restructuring failure falls back to raw
-text" — so the demo still completes end to end; that fallback is the
-specified behaviour, not an error.
+Uses the providers configured in `config.yaml`. If document intent
+classification is unavailable, invalid, or below threshold, ingestion
+fails closed and leaves the document unclassified and retryable. Ragged
+table repair may still preserve raw extracted text when only that optional
+repair call fails.
 
 Prints, per document: status, assigned intent space, chunk count, and the
 first few chunks with their heading path and source ref. Then reports all
@@ -56,22 +52,8 @@ from app.rag.vector_store import VectorStore  # noqa: E402
 _CHUNK_PREVIEW_COUNT = 3
 _CHUNK_PREVIEW_CHARS = 100
 
-# Human-readable reasons for `documents.intent_assigned_by` values other
-# than "model" — see `app/ingest/classify_doc.py::IntentSuggestion`. An
-# operator must be able to tell a model-assigned space from a fallback one
-# at a glance, per Task 9's fallback-visibility fix.
-_ASSIGNED_BY_LABELS = {
-    "provider_error": "provider error",
-    "invalid_slug": "invalid slug suggested",
-}
-
-
 def _intent_space_label(row) -> str:
-    assigned_by = row.intent_assigned_by
-    if assigned_by == "model":
-        return row.intent_slug
-    reason = _ASSIGNED_BY_LABELS.get(assigned_by, assigned_by)
-    return f"{row.intent_slug} (fallback: {reason})"
+    return row.intent_slug
 
 
 def _build_deps() -> IngestDeps:
@@ -111,7 +93,8 @@ def _insert_pending(deps: IngestDeps, validated) -> int:
                 ext=validated.ext,
                 size_bytes=validated.size_bytes,
                 sha256=validated.sha256,
-                intent_slug=deps.cfg.orchestrator.fallback_space,
+                intent_slug="unclassified",
+                intent_assigned_by="unclassified",
                 status="pending",
                 error_message=None,
                 chunk_count=0,

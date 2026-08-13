@@ -162,7 +162,7 @@ def test_10_1_happy_path_sets_indexed_with_chunk_count_and_timestamp(
     engine, deps, classify_llm
 ):
     doc_id = _insert_pending_document(engine, "handbook.pdf")
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
 
     ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
 
@@ -196,7 +196,7 @@ def test_first_ingest_records_the_embedding_model_and_dimension(
     faiss_dir = Path(cfg.storage.faiss_dir)
     assert read_meta(faiss_dir) is None
     doc_id = _insert_pending_document(engine, "handbook.pdf")
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
 
     ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
 
@@ -216,7 +216,7 @@ def test_a_later_ingest_does_not_rewrite_an_existing_record(engine, deps, classi
     faiss_dir = Path(cfg.storage.faiss_dir)
     write_meta(faiss_dir, model="the-model-that-built-it", dimension=DIMENSION)
     doc_id = _insert_pending_document(engine, "handbook.pdf")
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
 
     ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
 
@@ -272,7 +272,7 @@ def test_10_3_embedding_failure_leaves_no_partial_chunks_fts_or_vectors(
         index_writer=failing_writer,
     )
     doc_id = _insert_pending_document(engine, "handbook.pdf")
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
 
     ingest_document(doc_id, FIXTURES / "handbook.pdf", failing_deps)
 
@@ -302,7 +302,7 @@ def test_10_4_provider_outage_leaves_other_indexed_documents_searchable(
         index_writer=healthy_writer,
     )
     other_doc_id = _insert_pending_document(engine, "salary_bands.pdf", sha256="b" * 64)
-    classify_llm.expect_schema({"slug": "finance"})
+    classify_llm.expect_schema({"slug": "finance", "confidence": 0.95, "reasoning": "clear match"})
     ingest_document(other_doc_id, FIXTURES / "salary_bands.pdf", healthy_deps)
     assert _get_document(engine, other_doc_id).status == "indexed"
     other_vector_count_before = _vector_count(store, "finance")
@@ -320,7 +320,7 @@ def test_10_4_provider_outage_leaves_other_indexed_documents_searchable(
         index_writer=failing_writer,
     )
     doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="c" * 64)
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
 
     ingest_document(doc_id, FIXTURES / "handbook.pdf", failing_deps)
 
@@ -361,7 +361,7 @@ def test_ragged_table_document_triggers_repair_and_still_indexes(engine, store, 
             ]
         }
     )
-    llm.expect_schema({"slug": "finance"})
+    llm.expect_schema({"slug": "finance", "confidence": 0.95, "reasoning": "clear match"})
     embedder = FakeEmbeddingProvider(dimension=DIMENSION)
     writer = IndexWriter(engine, store, embedder)
     deps = IngestDeps(
@@ -382,11 +382,10 @@ def test_ragged_table_document_triggers_repair_and_still_indexes(engine, store, 
     repair_call, intent_call = llm.calls
     assert repair_call["schema"] is not None
     assert "rows" in repair_call["schema"].get("properties", {})
-    assert intent_call["schema"] == {
-        "type": "object",
-        "properties": {"slug": {"type": "string"}},
-        "required": ["slug"],
-        "additionalProperties": False,
+    assert set(intent_call["schema"]["required"]) == {
+        "slug",
+        "confidence",
+        "reasoning",
     }
 
 
@@ -403,7 +402,7 @@ def test_table_with_wrapped_multi_line_cells_is_not_treated_as_ragged(engine, st
     only ever saw single-line cells — kept passing.
     """
     llm = FakeLLMProvider()
-    llm.expect_schema({"slug": "hr"})  # intent suggestion only; no repair call
+    llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})  # intent suggestion only; no repair call
     embedder = FakeEmbeddingProvider(dimension=DIMENSION)
     writer = IndexWriter(engine, store, embedder)
     deps = IngestDeps(
@@ -424,7 +423,7 @@ def test_table_with_wrapped_multi_line_cells_is_not_treated_as_ragged(engine, st
 
 def test_clean_table_document_is_not_sent_to_the_model_for_repair(engine, store, cfg):
     llm = FakeLLMProvider()
-    llm.expect_schema({"slug": "finance"})  # only the intent-suggestion call
+    llm.expect_schema({"slug": "finance", "confidence": 0.95, "reasoning": "clear match"})  # only the intent-suggestion call
     embedder = FakeEmbeddingProvider(dimension=DIMENSION)
     writer = IndexWriter(engine, store, embedder)
     deps = IngestDeps(
@@ -444,41 +443,18 @@ def test_clean_table_document_is_not_sent_to_the_model_for_repair(engine, store,
     assert len(llm.calls) == 1
 
 
-# --- Fallback visibility (DEFECT 2) -------------------------------------------------
-#
-# `suggest_intent` catching a `ProviderError` and returning the fallback
-# space with no log, no record, nothing left every document in a live
-# provider outage looking exactly like a document the model genuinely
-# judged "general" — an operator had no way to tell the two apart. Falling
-# back so ingestion completes is correct; falling back silently is not.
-
-
-def test_provider_failure_still_completes_ingestion_via_fallback_space(engine, deps, classify_llm):
-    """The fix is about visibility, not about making the fallback fatal —
-    ingestion must still reach `indexed` when the provider fails.
-    """
+def test_provider_failure_marks_document_failed_and_unclassified(engine, deps, classify_llm):
     doc_id = _insert_pending_document(engine, "handbook.pdf")
     classify_llm.fail_next(ProviderError.backend("provider is down"))
 
     ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
 
     row = _get_document(engine, doc_id)
-    assert row.status == "indexed"
-    assert row.intent_slug == AppConfig().orchestrator.fallback_space
-
-
-def test_provider_failure_marks_the_document_as_fallback_assigned(engine, deps, classify_llm):
-    """The document row itself must record that its intent space came from
-    a fallback rather than the model, since the slug alone is ambiguous —
-    "general" can be the model's genuine judgement or the fallback space.
-    """
-    doc_id = _insert_pending_document(engine, "handbook.pdf")
-    classify_llm.fail_next(ProviderError.backend("provider is down"))
-
-    ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
-
-    row = _get_document(engine, doc_id)
-    assert row.intent_assigned_by == "provider_error"
+    assert row.status == "failed"
+    assert row.intent_slug == "unclassified"
+    assert row.intent_assigned_by == "unclassified"
+    assert row.chunk_count == 0
+    assert "please retry" in row.error_message.lower()
 
 
 def test_model_assigned_intent_is_marked_as_such(engine, deps, classify_llm):
@@ -486,7 +462,7 @@ def test_model_assigned_intent_is_marked_as_such(engine, deps, classify_llm):
     marker only ever appears when a fallback actually happened.
     """
     doc_id = _insert_pending_document(engine, "handbook.pdf")
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
 
     ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
 
@@ -494,17 +470,16 @@ def test_model_assigned_intent_is_marked_as_such(engine, deps, classify_llm):
     assert row.intent_assigned_by == "model"
 
 
-def test_provider_failure_during_intent_suggestion_logs_a_warning_naming_the_document(
+def test_provider_failure_during_intent_suggestion_logs_an_error_naming_the_document(
     engine, deps, classify_llm, caplog
 ):
     doc_id = _insert_pending_document(engine, "handbook.pdf")
     classify_llm.fail_next(ProviderError.backend("provider is down"))
 
-    with caplog.at_level(logging.WARNING, logger="app.ingest.classify_doc"):
+    with caplog.at_level(logging.ERROR, logger="app.ingest.classify_doc"):
         ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
 
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert len(warnings) == 1
-    message = warnings[0].getMessage()
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == 1
+    message = errors[0].getMessage()
     assert str(doc_id) in message
-    assert "backend" in message

@@ -41,11 +41,10 @@ class InvalidSchemaError(ValueError):
     Deliberately **not** a `ProviderError`. Nothing about a bad schema is
     a backend condition — it is a bug in this codebase, identical on every
     request and every provider — and the application's `ProviderError`
-    fallback paths (`suggest_intent` files the document under the fallback
-    space; `repair_table` keeps the raw extraction) exist to absorb
-    transient backend trouble. Letting a schema bug take those paths is
-    how "every document filed under `general`" happened once already, and
-    a `ProviderError`-typed schema guard would have quietly recreated it.
+    recovery paths must distinguish transient backend trouble from caller
+    bugs. `repair_table` may preserve raw extraction, while document intent
+    classification now fails closed. Treating a schema bug as a provider
+    outage is how "every document filed under `general`" happened once.
     """
 
 

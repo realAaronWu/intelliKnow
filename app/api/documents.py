@@ -30,6 +30,7 @@ from app.db import documents as documents_table
 from app.ingest.lifecycle import delete_document, reassign_document, reindex_all, reparse_document
 from app.ingest.validate import ValidationError, validate_upload
 from app.ingest.worker import IngestDeps, _utc_now_iso, ingest_document
+from app.orchestrator.errors import ClassificationError
 from app.rag.fts_query import fts_query as _fts_query
 from app.rag.index_meta import read_reindex_status
 
@@ -108,6 +109,11 @@ def build_documents_router(deps: IngestDeps) -> APIRouter:
             validated = validate_upload(file.filename, content, cfg, deps.engine)
         except ValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if deps.classification_preflight is not None:
+            try:
+                deps.classification_preflight(cfg)
+            except ClassificationError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
 
         uploaded_at = _utc_now_iso()
         with deps.engine.begin() as conn:
@@ -117,7 +123,8 @@ def build_documents_router(deps: IngestDeps) -> APIRouter:
                     ext=validated.ext,
                     size_bytes=validated.size_bytes,
                     sha256=validated.sha256,
-                    intent_slug=cfg.orchestrator.fallback_space,
+                    intent_slug="unclassified",
+                    intent_assigned_by="unclassified",
                     status="pending",
                     error_message=None,
                     chunk_count=0,

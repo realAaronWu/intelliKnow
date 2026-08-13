@@ -119,6 +119,7 @@ def application(tmp_path: Path) -> Application:
 
 def _upload(client: TestClient, classify_llm: FakeLLMProvider, filename: str) -> int:
     classify_llm.expect_schema({"slug": _SPACE_SLUG})
+    classify_llm.expect_schema({"slug": _SPACE_SLUG, "confidence": 0.95, "reasoning": "clear match"})
     content = (FIXTURES / filename).read_bytes()
     resp = client.post(
         "/documents", files={"file": (filename, content, "application/octet-stream")}

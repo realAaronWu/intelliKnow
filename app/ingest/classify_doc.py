@@ -1,25 +1,4 @@
-"""Intent space suggestion at ingest.
-
-`spec: document-ingestion` § "Intent space assignment at ingest": every
-uploaded document is offered to the LLM alongside the configured intent
-spaces (name, description, and keywords) and a sample of its own content,
-and the model's suggestion becomes the document's initial space — subject
-to the admin overriding it later via reassignment (`app/ingest/lifecycle.py`).
-
-A provider failure — or a response naming a slug that is not one of the
-configured spaces — falls back to `cfg.orchestrator.fallback_space` rather
-than raising, so a flaky or misconfigured LLM never blocks ingestion; per
-spec, the admin can always reassign by hand afterward.
-
-Falling back so ingestion completes is correct; falling back *silently* is
-not — the fallback slug can equal a space the model would have genuinely
-chosen anyway, so a caller cannot tell "the LLM judged this general" from
-"the LLM call failed" just by looking at the slug. `suggest_intent` returns
-an `IntentSuggestion` naming which one happened, logs a warning (with the
-document identity and the error category) on a provider failure so it
-shows up in service output, and the ingestion worker records
-`assigned_by` on the document row so an operator can see it later too.
-"""
+"""Strict document intent classification used by the ingestion path."""
 
 from __future__ import annotations
 
@@ -28,6 +7,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.config import AppConfig
+from app.orchestrator.errors import ClassificationError
 from app.providers.base import LLMProvider, ProviderError
 
 logger = logging.getLogger(__name__)
@@ -37,30 +17,26 @@ logger = logging.getLogger(__name__)
 # figure explicitly.
 _SAMPLE_CHARS = 2000
 
-# `"model"` when the LLM's own suggestion was used; otherwise names why a
-# fallback was used instead. Kept distinct from a bare bool so the reason
-# survives as far as `scripts/ingest.py`'s per-document output.
-AssignedBy = Literal["model", "provider_error", "invalid_slug"]
+AssignedBy = Literal["model"]
 
 
 @dataclass(frozen=True)
 class IntentSuggestion:
-    """`suggest_intent`'s result: the assigned slug, and whether it came
-    from the model or a fallback. Needed because the slug alone is
-    ambiguous — the fallback space can equal what the model would have
-    genuinely chosen, so `assigned_by` is the only thing that lets a
-    caller tell "the model judged this general" from "the model call
-    failed and defaulted to general" (see module docstring).
-    """
+    """A validated, above-threshold model assignment."""
 
     slug: str
+    confidence: float
     assigned_by: AssignedBy
 
 
 _SUGGEST_SCHEMA = {
     "type": "object",
-    "properties": {"slug": {"type": "string"}},
-    "required": ["slug"],
+    "properties": {
+        "slug": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "reasoning": {"type": "string"},
+    },
+    "required": ["slug", "confidence", "reasoning"],
     "additionalProperties": False,
 }
 
@@ -68,8 +44,16 @@ _SYSTEM_PROMPT = (
     "You assign an uploaded document to the single best-matching intent "
     "space, based on the space descriptions and keywords provided and a "
     "sample of the document's own content. Respond using the schema with "
-    "the slug of the single best-matching space."
+    "the slug of the single best-matching space, confidence from 0 to 1, "
+    "and a short reason. Do not guess when the document is ambiguous."
 )
+
+_PREFLIGHT_SCHEMA = {
+    "type": "object",
+    "properties": {"slug": {"type": "string"}},
+    "required": ["slug"],
+    "additionalProperties": False,
+}
 
 
 def _spaces_block(cfg: AppConfig) -> str:
@@ -86,18 +70,7 @@ def _spaces_block(cfg: AppConfig) -> str:
 def suggest_intent(
     text: str, cfg: AppConfig, llm: LLMProvider, *, doc_id: int | None = None
 ) -> IntentSuggestion:
-    """Suggest an intent space slug for a document whose content starts
-    with `text`, using `llm` and the spaces configured in `cfg`.
-
-    Falls back to `cfg.orchestrator.fallback_space` if the provider call
-    fails, or if it succeeds but names a slug that is not one of the
-    configured intent spaces — either way the fallback is visible in the
-    returned `IntentSuggestion.assigned_by`, and a provider failure is
-    additionally logged at warning level naming `doc_id` and the error's
-    category, so a fallback never happens invisibly (see module docstring).
-    `doc_id` is optional only so this can be called without one; every
-    real caller (`app/ingest/worker.py`) passes it.
-    """
+    """Return an above-threshold assignment or raise a retryable error."""
     sample = text[:_SAMPLE_CHARS]
     user = (
         f"Intent spaces:\n{_spaces_block(cfg)}\n\n"
@@ -107,18 +80,57 @@ def suggest_intent(
     try:
         result = llm.complete(system=_SYSTEM_PROMPT, user=user, schema=_SUGGEST_SCHEMA)
     except ProviderError as exc:
-        logger.warning(
-            "intent suggestion for document %s fell back to %r: provider "
-            "error (category=%s): %s",
-            doc_id,
-            cfg.orchestrator.fallback_space,
-            exc.category,
-            exc,
+        message = (
+            "Document classification is unavailable "
+            f"({exc.category}). The document was not indexed; please retry."
         )
-        return IntentSuggestion(cfg.orchestrator.fallback_space, "provider_error")
+        logger.error("intent classification failed for document %s: %s", doc_id, exc)
+        raise ClassificationError(message) from exc
 
-    slug = result.parsed.get("slug") if isinstance(result.parsed, dict) else None
+    parsed = result.parsed if isinstance(result.parsed, dict) else {}
+    slug = parsed.get("slug")
     valid_slugs = {space.slug for space in cfg.intent_spaces}
     if slug not in valid_slugs:
-        return IntentSuggestion(cfg.orchestrator.fallback_space, "invalid_slug")
-    return IntentSuggestion(slug, "model")
+        raise ClassificationError(
+            "The document classifier returned an invalid intent. "
+            "The document was not indexed; please retry."
+        )
+    try:
+        confidence = float(parsed.get("confidence"))
+    except (TypeError, ValueError) as exc:
+        raise ClassificationError(
+            "The document classifier returned invalid confidence. "
+            "The document was not indexed; please retry."
+        ) from exc
+    if not 0.0 <= confidence <= 1.0 or confidence < cfg.orchestrator.confidence_threshold:
+        raise ClassificationError(
+            f"Document classification confidence {confidence:.0%} is below the required "
+            f"{cfg.orchestrator.confidence_threshold:.0%}. The document was not indexed; "
+            "review its content or intent definitions, then retry."
+        )
+    return IntentSuggestion(slug, confidence, "model")
+
+
+def preflight_classifier(cfg: AppConfig, llm: LLMProvider) -> None:
+    """Make one structured call so offline classifiers fail before a write."""
+    probe_slug = cfg.intent_spaces[0].slug
+    try:
+        result = llm.complete(
+            system=(
+                "This is an availability check for an intent classifier. "
+                "Return exactly the requested slug using the schema."
+            ),
+            user=f"Return this slug exactly: {probe_slug}",
+            schema=_PREFLIGHT_SCHEMA,
+        )
+    except ProviderError as exc:
+        raise ClassificationError(
+            f"Classification service is unavailable ({exc.category}); nothing was saved. "
+            "Please retry when the model is available."
+        ) from exc
+    parsed = result.parsed if isinstance(result.parsed, dict) else {}
+    if parsed.get("slug") != probe_slug:
+        raise ClassificationError(
+            "Classification service failed its response check; nothing was saved. "
+            "Please retry."
+        )

@@ -22,6 +22,7 @@ from app.ingest.worker import IngestDeps
 from app.main import create_app
 from app.orchestrator.centroids import CentroidIndex
 from app.orchestrator.pipeline import PipelineDeps
+from app.providers.base import ProviderError
 from app.rag.index_writer import IndexWriter
 from app.rag.retrieve.rerank import Reranker
 from app.rag.vector_store import VectorStore
@@ -281,4 +282,30 @@ def test_12_3_empty_knowledge_base_is_no_match_not_an_error(
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "no_match"
+    assert len(generate_llm.calls) == 0
+
+
+def test_classifier_outage_returns_retryable_503_without_generation(
+    engine, cfg, embedder, classify_llm, generate_llm, store, ingest_deps
+):
+    ambiguous = [0.0] * DIMENSION
+    embedder.set_vector("ambiguous question", ambiguous)
+    classify_llm.fail_next(ProviderError.backend("classifier offline"))
+    pipeline_deps = _pipeline_deps(
+        engine,
+        cfg,
+        embedder,
+        classify_llm,
+        generate_llm,
+        store,
+        _reranker({}),
+    )
+    client = TestClient(create_app(ingest_deps, pipeline_deps))
+
+    response = client.post(
+        "/admin/test-query", json={"question": "ambiguous question"}
+    )
+
+    assert response.status_code == 503
+    assert "retry" in response.json()["detail"].lower()
     assert len(generate_llm.calls) == 0

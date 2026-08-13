@@ -46,12 +46,8 @@ documents = Table(
     Column("size_bytes", Integer, nullable=False),
     Column("sha256", String, nullable=False, unique=True),
     Column("intent_slug", String, nullable=False),
-    # "model" when `intent_slug` came from the LLM's own suggestion;
-    # otherwise names why a fallback was used instead ("provider_error" /
-    # "invalid_slug" — see `app/ingest/classify_doc.py::IntentSuggestion`).
-    # Defaults to "model" so a row that never reaches a real assignment
-    # (e.g. ingestion fails before intent suggestion runs) renders with no
-    # fallback annotation in `scripts/ingest.py`, matching prior behaviour.
+    # "model" after a successful classifier assignment, "unclassified"
+    # while pending or after fail-closed classification.
     Column("intent_assigned_by", String, nullable=False, default="model"),
     Column("status", String, nullable=False),
     Column("error_message", Text, nullable=True),

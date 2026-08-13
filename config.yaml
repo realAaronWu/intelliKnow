@@ -1,17 +1,14 @@
-# Local (Ollama) is the development default: it costs nothing to run and
-# exercises the same OpenAI-compatible HTTP path the remote backends use.
-# For the Anthropic demo path, change:
-#   llm.provider: anthropic
-#   llm.model_generate: claude-opus-5
-#   llm.model_classify: claude-haiku-4-5
-# and export ANTHROPIC_API_KEY (see .env.example). `effort` is supported on
+# The demo configuration uses Anthropic's fast model; set ANTHROPIC_API_KEY
+# in .env. For a zero-cost local path, change provider to local, set both
+# model names to one served by Ollama (for example llama3.1), and start its
+# OpenAI-compatible endpoint at base_url. `effort` is supported on
 # Opus 4.5 and later, Opus 5, Sonnet 5, and Sonnet 4.6, but is rejected by
 # claude-haiku-4-5 and Sonnet 4.5 — leave it null unless the model in use
 # accepts it.
 llm:
-  provider: local                  # anthropic | openai | local
-  model_classify: llama3.1
-  model_generate: llama3.1
+  provider: anthropic              # anthropic | openai | local
+  model_classify: claude-haiku-4-5
+  model_generate: claude-haiku-4-5
   timeout_seconds: 20
   max_retries: 2
   effort: null                     # low | medium | high | xhigh | max | null
@@ -66,7 +63,7 @@ intent_spaces:
     keywords: [access, laptop, VPN, ticket, facilities, process]
   - slug: general
     name: General
-    description: "Fallback — searches every space."
+    description: "Cross-functional topics that do not belong to one specialist domain."
     keywords: []
 
 channels:

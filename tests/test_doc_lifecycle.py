@@ -166,7 +166,7 @@ def _chunk_texts_for(engine, doc_id: int) -> list[str]:
 
 def test_11_1_reparse_replaces_chunks_preserving_id_and_intent_space(engine, deps, classify_llm):
     doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="a" * 64)
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
     ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
     before = _get_document(engine, doc_id)
     assert before.status == "indexed"
@@ -213,7 +213,7 @@ def test_11_2_reparse_failure_sets_failed_with_no_orphaned_vectors(
         index_writer=healthy_writer,
     )
     doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="a" * 64)
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
     ingest_document(doc_id, FIXTURES / "handbook.pdf", healthy_deps)
     assert _get_document(engine, doc_id).status == "indexed"
 
@@ -240,7 +240,7 @@ def test_11_2_reparse_failure_sets_failed_with_no_orphaned_vectors(
 
 def test_11_2_reparse_of_unparseable_file_leaves_old_chunks_untouched(engine, deps, classify_llm):
     doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="a" * 64)
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
     ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
     old_chunk_ids = _chunk_ids_for(engine, doc_id)
     assert old_chunk_ids
@@ -263,7 +263,7 @@ def test_11_2_reparse_of_unknown_document_is_a_no_op(engine, deps):
 
 def test_11_3_delete_clears_chunks_and_both_indexes(engine, deps, classify_llm, store):
     doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="a" * 64)
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
     ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
     chunk_count = len(_chunk_ids_for(engine, doc_id))
     assert chunk_count > 0
@@ -286,7 +286,7 @@ def test_11_3_delete_clears_chunks_and_both_indexes(engine, deps, classify_llm, 
 
 def test_11_3_delete_preserves_query_log_history(engine, deps, classify_llm):
     doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="a" * 64)
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
     ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
 
     with engine.begin() as conn:
@@ -323,7 +323,7 @@ def test_11_3_delete_preserves_query_log_history(engine, deps, classify_llm):
 
 def test_reassign_moves_vectors_with_zero_embed_calls(engine, deps, classify_llm, embedder, store):
     doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="a" * 64)
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
     ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
     embedder.calls.clear()
 
@@ -337,7 +337,7 @@ def test_reassign_moves_vectors_with_zero_embed_calls(engine, deps, classify_llm
 
 def test_reassign_rejects_an_unconfigured_intent_space(engine, deps, classify_llm):
     doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="a" * 64)
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
     ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
 
     with pytest.raises(ValueError, match="not-a-real-space"):
@@ -353,11 +353,11 @@ def test_11_4_reindex_reembeds_every_document_and_updates_index_meta(
     engine, deps, classify_llm, embedder, store, cfg
 ):
     hr_doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="a" * 64)
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
     ingest_document(hr_doc_id, FIXTURES / "handbook.pdf", deps)
 
     finance_doc_id = _insert_pending_document(engine, "salary_bands.pdf", sha256="b" * 64)
-    classify_llm.expect_schema({"slug": "finance"})
+    classify_llm.expect_schema({"slug": "finance", "confidence": 0.95, "reasoning": "clear match"})
     ingest_document(finance_doc_id, FIXTURES / "salary_bands.pdf", deps)
 
     hr_chunk_count_before = len(_chunk_ids_for(engine, hr_doc_id))
@@ -405,10 +405,10 @@ def test_reindex_deletes_the_index_file_of_a_space_with_no_chunks(
     engine, deps, classify_llm, faiss_dir
 ):
     hr_doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="a" * 64)
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
     ingest_document(hr_doc_id, FIXTURES / "handbook.pdf", deps)
     finance_doc_id = _insert_pending_document(engine, "salary_bands.pdf", sha256="b" * 64)
-    classify_llm.expect_schema({"slug": "finance"})
+    classify_llm.expect_schema({"slug": "finance", "confidence": 0.95, "reasoning": "clear match"})
     ingest_document(finance_doc_id, FIXTURES / "salary_bands.pdf", deps)
     delete_document(finance_doc_id, deps)
     assert (faiss_dir / "finance.index").exists(), "precondition: the stale file is there"
@@ -432,7 +432,7 @@ def test_a_failed_reindex_leaves_the_existing_indexes_and_record_untouched(
         index_writer=IndexWriter(engine, store, healthy_embedder),
     )
     doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="a" * 64)
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
     ingest_document(doc_id, FIXTURES / "handbook.pdf", healthy_deps)
     vectors_before = _vector_count(store, "hr")
     assert vectors_before > 0
@@ -467,7 +467,7 @@ def test_a_failed_reindex_is_recorded_where_an_admin_can_see_it(
 ):
     failing_embedder = _FailingEmbeddingProvider(dimension=DIMENSION)
     doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="a" * 64)
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
     healthy_embedder = FakeEmbeddingProvider(dimension=DIMENSION)
     ingest_document(
         doc_id,
@@ -501,7 +501,7 @@ def test_a_failed_reindex_is_recorded_where_an_admin_can_see_it(
 
 def test_a_successful_reindex_records_success(engine, deps, classify_llm, faiss_dir, cfg):
     doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="a" * 64)
-    classify_llm.expect_schema({"slug": "hr"})
+    classify_llm.expect_schema({"slug": "hr", "confidence": 0.95, "reasoning": "clear match"})
     ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
 
     reindex_all(deps)
