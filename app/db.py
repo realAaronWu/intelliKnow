@@ -181,6 +181,25 @@ def create_engine_for(path: Path) -> Engine:
     return engine
 
 
+def check_fts_integrity(engine: Engine) -> None:
+    """Raise if `chunk_fts` has drifted out of step with `chunks`.
+
+    FTS5's own `integrity-check` command, with `rank = 1` — the argument
+    that makes it compare the index against the *content table* rather
+    than only checking the index's internal consistency. It raises
+    `DatabaseError: database disk image is malformed` when they disagree.
+
+    This exists because the obvious check does not work. `chunk_fts` is an
+    external-content table, so `SELECT count(*) FROM chunk_fts` full-scans
+    `chunks` and returns the chunks count whether or not the index is
+    synced — verified by deleting the sync triggers and watching it still
+    report the right number. Any "the three stores agree" assertion built
+    on that shape passes unconditionally.
+    """
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO chunk_fts(chunk_fts, rank) VALUES('integrity-check', 1)"))
+
+
 def init_schema(engine: Engine) -> None:
     """Create every table, the `chunk_fts` FTS5 index, and its sync triggers.
 

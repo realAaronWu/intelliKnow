@@ -22,6 +22,7 @@ from app.rag.chunker import Chunk
 from app.rag.index_writer import IndexWriter
 from app.rag.vector_store import VectorStore
 from tests.doubles import FakeEmbeddingProvider
+from tests.fts_helpers import assert_keyword_index_in_sync, fts_indexed_chunk_count
 
 DIMENSION = 4
 _PROBE = [1.0, 0.0, 0.0, 0.0]
@@ -97,15 +98,14 @@ def _insert_chunk_directly(engine, doc_id: int, slug: str, ordinal: int, body: s
 
 
 def _chunk_fts_count_for(engine, doc_id: int) -> int:
-    with engine.connect() as conn:
-        return conn.execute(
-            text(
-                "SELECT count(*) FROM chunk_fts "
-                "JOIN chunks ON chunk_fts.rowid = chunks.id "
-                "WHERE chunks.document_id = :doc_id"
-            ),
-            {"doc_id": doc_id},
-        ).scalar_one()
+    """How many of `doc_id`'s chunks the keyword index can actually find.
+
+    This used to be a `count(*)` over a join with no `MATCH`. On an
+    external-content FTS5 table that full-scans `chunks` and returns the
+    chunks count whether or not the index is in step, so the assertion
+    held even with the sync triggers deleted — see `tests/fts_helpers.py`.
+    """
+    return fts_indexed_chunk_count(engine, doc_id)
 
 
 def _vector_count(store: VectorStore, slug: str) -> int:
@@ -128,6 +128,7 @@ def test_8_1_three_stores_agree_after_write(engine, store, embedder):
     assert len(chunk_row_count) == 3
     assert _chunk_fts_count_for(engine, doc_id) == 3
     assert _vector_count(store, "hr") == 3
+    assert_keyword_index_in_sync(engine)
 
 
 # --- 8.2 Removal clears all three ---------------------------------------------
@@ -147,6 +148,7 @@ def test_8_2_removal_clears_all_three_stores(engine, store, embedder):
     assert remaining_chunks == []
     assert _chunk_fts_count_for(engine, doc_id) == 0
     assert _vector_count(store, "hr") == 0
+    assert_keyword_index_in_sync(engine)
 
 
 # --- 8.3 Removal preserves history ---------------------------------------------

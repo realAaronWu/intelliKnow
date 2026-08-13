@@ -23,6 +23,7 @@ from app.rag.index_meta import read_meta
 from app.rag.index_writer import IndexWriter
 from app.rag.vector_store import VectorStore
 from tests.doubles import FakeEmbeddingProvider, FakeLLMProvider
+from tests.fts_helpers import assert_keyword_index_in_sync, fts_indexed_chunk_count
 
 FIXTURES = Path(__file__).parent / "fixtures" / "docs"
 DIMENSION = 8
@@ -136,15 +137,14 @@ def _chunk_ids_for(engine, doc_id: int) -> set[int]:
 
 
 def _chunk_fts_count_for(engine, doc_id: int) -> int:
-    with engine.connect() as conn:
-        return conn.execute(
-            text(
-                "SELECT count(*) FROM chunk_fts "
-                "JOIN chunks ON chunk_fts.rowid = chunks.id "
-                "WHERE chunks.document_id = :doc_id"
-            ),
-            {"doc_id": doc_id},
-        ).scalar_one()
+    """How many of `doc_id`'s chunks the keyword index can actually find.
+
+    This used to be a `count(*)` over a join with no `MATCH`. On an
+    external-content FTS5 table that full-scans `chunks` and returns the
+    chunks count whether or not the index is in step, so the assertion
+    held even with the sync triggers deleted — see `tests/fts_helpers.py`.
+    """
+    return fts_indexed_chunk_count(engine, doc_id)
 
 
 def _vector_count(store: VectorStore, slug: str) -> int:
@@ -187,6 +187,10 @@ def test_11_1_reparse_replaces_chunks_preserving_id_and_intent_space(engine, dep
     assert "annual leave" not in new_texts
     assert "reimbursed" in new_texts
     assert len(_chunk_ids_for(engine, doc_id)) == after.chunk_count
+    # The keyword index was rebuilt alongside the chunks, not left holding
+    # the replaced ones.
+    assert _chunk_fts_count_for(engine, doc_id) == after.chunk_count
+    assert_keyword_index_in_sync(engine)
     # No LLM call for intent suggestion on re-parse — the space is
     # preserved, not re-suggested.
     assert len(classify_llm.calls) == 1
@@ -261,7 +265,12 @@ def test_11_3_delete_clears_chunks_and_both_indexes(engine, deps, classify_llm, 
     doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="a" * 64)
     classify_llm.expect_schema({"slug": "hr"})
     ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
-    assert _chunk_ids_for(engine, doc_id)
+    chunk_count = len(_chunk_ids_for(engine, doc_id))
+    assert chunk_count > 0
+    # The positive half matters as much as the negative one: without it,
+    # "0 after delete" would pass against a keyword index that never held
+    # the document in the first place.
+    assert _chunk_fts_count_for(engine, doc_id) == chunk_count
     assert _vector_count(store, "hr") > 0
 
     delete_document(doc_id, deps)
@@ -269,6 +278,7 @@ def test_11_3_delete_clears_chunks_and_both_indexes(engine, deps, classify_llm, 
     assert _chunk_ids_for(engine, doc_id) == set()
     assert _chunk_fts_count_for(engine, doc_id) == 0
     assert _vector_count(store, "hr") == 0
+    assert_keyword_index_in_sync(engine)
     with engine.connect() as conn:
         remaining = conn.execute(select(documents.c.id)).fetchall()
     assert doc_id not in {row.id for row in remaining}

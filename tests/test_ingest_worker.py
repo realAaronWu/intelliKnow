@@ -22,6 +22,7 @@ from app.rag.index_meta import read_meta, write_meta
 from app.rag.index_writer import IndexWriter
 from app.rag.vector_store import VectorStore
 from tests.doubles import FakeEmbeddingProvider, FakeLLMProvider
+from tests.fts_helpers import assert_keyword_index_in_sync, fts_indexed_chunk_count
 
 FIXTURES = Path(__file__).parent / "fixtures" / "docs"
 DIMENSION = 8
@@ -137,15 +138,14 @@ def _chunk_count_for(engine, doc_id: int) -> int:
 
 
 def _chunk_fts_count_for(engine, doc_id: int) -> int:
-    with engine.connect() as conn:
-        return conn.execute(
-            text(
-                "SELECT count(*) FROM chunk_fts "
-                "JOIN chunks ON chunk_fts.rowid = chunks.id "
-                "WHERE chunks.document_id = :doc_id"
-            ),
-            {"doc_id": doc_id},
-        ).scalar_one()
+    """How many of `doc_id`'s chunks the keyword index can actually find.
+
+    This used to be a `count(*)` over a join with no `MATCH`. On an
+    external-content FTS5 table that full-scans `chunks` and returns the
+    chunks count whether or not the index is in step, so the assertion
+    held even with the sync triggers deleted — see `tests/fts_helpers.py`.
+    """
+    return fts_indexed_chunk_count(engine, doc_id)
 
 
 _PROBE = [1.0] + [0.0] * (DIMENSION - 1)
@@ -173,6 +173,11 @@ def test_10_1_happy_path_sets_indexed_with_chunk_count_and_timestamp(
     assert row.intent_slug == "hr"
     assert row.error_message is None
     assert _chunk_count_for(engine, doc_id) == row.chunk_count
+    # All three stores, not just the chunks table: every chunk is findable
+    # through the keyword index, and its vectors are in the space's index.
+    assert _chunk_fts_count_for(engine, doc_id) == row.chunk_count
+    assert _vector_count(deps.vector_store, "hr") == row.chunk_count
+    assert_keyword_index_in_sync(engine)
 
 
 # --- Embedding model recorded at first ingest -----------------------------------

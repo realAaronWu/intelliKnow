@@ -11,9 +11,19 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import insert, inspect, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DatabaseError, IntegrityError
 
-from app.db import chunk_fts, chunks, create_engine_for, documents, init_schema, integrations, query_log
+from app.db import (
+    check_fts_integrity,
+    chunk_fts,
+    chunks,
+    create_engine_for,
+    documents,
+    init_schema,
+    integrations,
+    query_log,
+)
+from tests.fts_helpers import fts_indexed_chunk_count
 
 
 @pytest.fixture
@@ -228,3 +238,96 @@ def test_duplicate_sha256_rejected(engine):
     with pytest.raises(IntegrityError):
         with engine.begin() as conn:
             _insert_document(conn, sha256="b" * 64)
+
+
+# --- The three-stores invariant is actually detectable -------------------------------
+#
+# `chunk_fts` is an *external content* table, so `SELECT count(*) FROM
+# chunk_fts` (and any join over it with no MATCH) full-scans `chunks` and
+# reports the chunks count whether or not the index is in step. Every
+# "three stores agree" assertion in the suite was built on that shape, and
+# `scripts/ingest.py` printed it as the invariant made visible. The tests
+# below break the sync deliberately and prove that the replacement
+# assertions — `tests/fts_helpers.py` and `app/db.py::check_fts_integrity`
+# — notice, and that the old shape does not.
+
+
+def _drop_insert_trigger(engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(text("DROP TRIGGER chunks_after_insert"))
+
+
+def test_the_old_count_shape_cannot_detect_a_broken_index(engine):
+    """The premise of the fix, pinned: this is why the assertion changed."""
+    with engine.begin() as conn:
+        doc_id = _insert_document(conn)
+    _drop_insert_trigger(engine)
+    with engine.begin() as conn:
+        _insert_chunk(conn, doc_id, "Employees accrue vacation days monthly.")
+
+    with engine.connect() as conn:
+        counted = conn.execute(text("SELECT count(*) FROM chunk_fts")).scalar_one()
+
+    # The row never reached the index, and the count reports it anyway.
+    assert counted == 1
+    assert _fts_rowids(engine, "vacation") == []
+
+    init_schema(engine)  # restore the trigger
+
+
+def test_the_match_based_count_detects_a_broken_index(engine):
+    with engine.begin() as conn:
+        doc_id = _insert_document(conn)
+        _insert_chunk(conn, doc_id, "Employees accrue vacation days monthly.")
+    assert fts_indexed_chunk_count(engine, doc_id) == 1
+
+    _drop_insert_trigger(engine)
+    with engine.begin() as conn:
+        _insert_chunk(conn, doc_id, "Expenses are reimbursed within thirty days.", ordinal=1)
+
+    # Two chunk rows, one of which the keyword index never learned about.
+    assert _chunk_row_count(engine, doc_id) == 2
+    assert fts_indexed_chunk_count(engine, doc_id) == 1
+
+    init_schema(engine)  # restore the trigger
+
+
+def test_the_integrity_check_detects_a_broken_index(engine):
+    with engine.begin() as conn:
+        doc_id = _insert_document(conn)
+        _insert_chunk(conn, doc_id, "Employees accrue vacation days monthly.")
+    check_fts_integrity(engine)  # in sync: must not raise
+
+    _drop_insert_trigger(engine)
+    with engine.begin() as conn:
+        _insert_chunk(conn, doc_id, "Expenses are reimbursed within thirty days.", ordinal=1)
+
+    with pytest.raises(DatabaseError):
+        check_fts_integrity(engine)
+
+    init_schema(engine)  # restore the trigger
+
+
+def test_a_restored_trigger_leaves_the_index_checkable_again(engine):
+    """The teardown half of the demonstration: recreating the trigger and
+    reindexing puts the two stores back in step, so a later assertion is
+    meaningful again rather than permanently poisoned.
+    """
+    with engine.begin() as conn:
+        doc_id = _insert_document(conn)
+    _drop_insert_trigger(engine)
+    with engine.begin() as conn:
+        _insert_chunk(conn, doc_id, "Employees accrue vacation days monthly.")
+
+    init_schema(engine)
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO chunk_fts(chunk_fts) VALUES('rebuild')"))
+
+    check_fts_integrity(engine)
+    assert fts_indexed_chunk_count(engine, doc_id) == 1
+
+
+def _chunk_row_count(engine, doc_id: int) -> int:
+    with engine.connect() as conn:
+        rows = conn.execute(select(chunks.c.id).where(chunks.c.document_id == doc_id)).fetchall()
+    return len(rows)

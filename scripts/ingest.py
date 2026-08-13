@@ -16,11 +16,11 @@ text" — so the demo still completes end to end; that fallback is the
 specified behaviour, not an error.
 
 Prints, per document: status, assigned intent space, chunk count, and the
-first few chunks with their heading path and source ref. Then prints
-totals across all three stores (`chunks` rows, `chunk_fts` rows, FAISS
-vectors per intent space) so the three-stores-agree invariant
-`app/rag/index_writer.py` exists to guarantee is visible here, not only
-asserted in tests.
+first few chunks with their heading path and source ref. Then reports all
+three stores — `chunks` rows, whether the `chunk_fts` keyword index is
+verifiably in step with them, and FAISS vectors per intent space — so the
+three-stores-agree invariant `app/rag/index_writer.py` exists to
+guarantee is visible here, not only asserted in tests.
 
 Uses the same `data/` paths `config.yaml` names (SQLite database, FAISS
 directory) — running this against the shipped config populates the real
@@ -41,10 +41,11 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from sqlalchemy import insert, select, text  # noqa: E402
+from sqlalchemy.exc import DatabaseError  # noqa: E402
 
 from app.bootstrap import bootstrap  # noqa: E402
 from app.db import chunks as chunks_table  # noqa: E402
-from app.db import create_engine_for  # noqa: E402
+from app.db import check_fts_integrity, create_engine_for  # noqa: E402
 from app.db import documents as documents_table  # noqa: E402
 from app.db import init_schema  # noqa: E402
 from app.ingest.validate import ValidationError, validate_upload  # noqa: E402
@@ -152,11 +153,22 @@ def _print_document_result(deps: IngestDeps, doc_id: int, path: Path) -> None:
 def _print_totals(deps: IngestDeps) -> None:
     with deps.engine.connect() as conn:
         chunk_row_count = conn.execute(text("SELECT count(*) FROM chunks")).scalar_one()
-        fts_row_count = conn.execute(text("SELECT count(*) FROM chunk_fts")).scalar_one()
 
     print("\n--- Totals across all three stores ---")
     print(f"  chunk rows (SQLite 'chunks'):   {chunk_row_count}")
-    print(f"  keyword rows (SQLite 'chunk_fts'): {fts_row_count}")
+
+    # `SELECT count(*) FROM chunk_fts` used to be printed here as the
+    # keyword-index total. On an external-content FTS5 table that
+    # full-scans `chunks` and reports the chunks count whether or not the
+    # index is in step — so the number always agreed, by construction,
+    # and made the invariant look verified when nothing had been checked.
+    # FTS5's own index-vs-content check is the honest answer.
+    try:
+        check_fts_integrity(deps.engine)
+    except DatabaseError as exc:
+        print(f"  keyword index (SQLite 'chunk_fts'): OUT OF SYNC with chunks — {exc.orig}")
+    else:
+        print("  keyword index (SQLite 'chunk_fts'): in sync with chunks (integrity-check)")
 
     dimension = deps.cfg.embedding.dimension
     probe = [1.0] + [0.0] * (dimension - 1)
