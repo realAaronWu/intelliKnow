@@ -119,7 +119,13 @@ class Reranker:
 
         chunk_ids = [hit.chunk_id for hit in hits]
         texts_by_id = _load_chunk_texts(engine, chunk_ids)
-        chunk_texts = [texts_by_id[chunk_id] for chunk_id in chunk_ids]
+        # A chunk id retrieved earlier may no longer resolve (e.g. deleted
+        # between retrieval and this rerank call) -- skip it rather than
+        # failing the whole answer over one stale id, matching
+        # `app/rag/context.py::_select_chunks`'s identical defensive
+        # handling of the same race one stage later in the pipeline.
+        resolvable_hits = [hit for hit in hits if hit.chunk_id in texts_by_id]
+        chunk_texts = [texts_by_id[hit.chunk_id] for hit in resolvable_hits]
 
         raw_scores = self.score(question, chunk_texts)
 
@@ -132,7 +138,7 @@ class Reranker:
                 rerank_score=raw_score,
                 relevance=_sigmoid(raw_score),
             )
-            for hit, raw_score in zip(hits, raw_scores)
+            for hit, raw_score in zip(resolvable_hits, raw_scores)
         ]
         ranked.sort(key=lambda hit: hit.rerank_score, reverse=True)
         return ranked[:top_k]

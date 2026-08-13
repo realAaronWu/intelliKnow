@@ -178,6 +178,35 @@ def test_3a_5_relevance_normalized_to_0_1_raw_score_retained(engine):
     assert by_id[ids[2]].relevance > by_id[ids[1]].relevance > by_id[ids[0]].relevance
 
 
+# --- I1: unresolvable chunk id is skipped, not a KeyError -----------------------
+#
+# `build_context` (`app/rag/context.py::_select_chunks`) already handles a
+# chunk id that no longer resolves -- deleted between retrieval and this
+# later stage -- defensively, with `.get()` and a comment explaining why:
+# "Chunk retrieved earlier no longer resolves (e.g. deleted between
+# retrieval and context assembly) -- skip, don't fail the whole answer over
+# one stale id." `Reranker.rerank` sits one stage *earlier* in the same
+# pipeline and faces the identical hazard (a delete racing this query
+# between fusion and rerank), but indexed `texts_by_id[chunk_id]` directly,
+# raising `KeyError` and turning a delete race into an unhandled 500. This
+# test seeds a `FusedHit` for a chunk id that was never inserted at all --
+# the simplest reproduction of "retrieved earlier, gone by the time this
+# stage reads it" -- and asserts it is skipped rather than raising.
+
+
+def test_i1_unresolvable_chunk_id_is_skipped_not_a_keyerror(engine):
+    doc_id = _insert_document(engine)
+    real_id = _insert_chunk(engine, doc_id, "hr", 0, "the exact answer to the question")
+    missing_id = real_id + 999  # never inserted -- stands in for a deleted chunk
+    hits = [_fused(missing_id, fused_score=0.9), _fused(real_id, fused_score=0.1)]
+    fake = _FakeCrossEncoder(score_by_chunk={"the exact answer to the question": 5.0})
+    reranker = Reranker("cross-encoder/ms-marco-MiniLM-L-6-v2", client=fake)
+
+    result = reranker.rerank("a question", hits, engine, top_k=5)
+
+    assert [hit.chunk_id for hit in result] == [real_id]
+
+
 # --- 3a.6 Model loads once ----------------------------------------------------------
 
 
