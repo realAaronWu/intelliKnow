@@ -92,8 +92,12 @@ query_log = Table(
     Column("answer", Text, nullable=True),
     Column("citations_json", Text, nullable=True),
     Column("retrieved_doc_ids_json", Text, nullable=True),
+    Column("retrieved_documents_json", Text, nullable=True),
     Column("latency_ms", Integer, nullable=True),
     Column("error", Text, nullable=True),
+    Column("expected_intent_slug", String, nullable=True),
+    Column("reviewed_correct", Boolean, nullable=True),
+    Column("reviewed_at", String, nullable=True),
 )
 
 integrations = Table(
@@ -109,6 +113,15 @@ integrations = Table(
     Column("last_error_at", String, nullable=True),
     Column("last_reply_ref", Text, nullable=True),
     Column("updated_at", String, nullable=False),
+)
+
+integration_errors = Table(
+    "integration_errors",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("channel", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("reason", Text, nullable=False),
 )
 
 # FTS5 virtual tables are not representable as a SQLAlchemy `Table` (SQLite's
@@ -218,6 +231,18 @@ def init_schema(engine: Engine) -> None:
             conn.execute(text("ALTER TABLE integrations ADD COLUMN last_error_at TEXT"))
         if "last_reply_ref" not in integration_columns:
             conn.execute(text("ALTER TABLE integrations ADD COLUMN last_reply_ref TEXT"))
+        query_columns = {
+            row.name
+            for row in conn.execute(text("PRAGMA table_info(query_log)")).mappings()
+        }
+        for name, sql_type in (
+            ("retrieved_documents_json", "TEXT"),
+            ("expected_intent_slug", "TEXT"),
+            ("reviewed_correct", "BOOLEAN"),
+            ("reviewed_at", "TEXT"),
+        ):
+            if name not in query_columns:
+                conn.execute(text(f"ALTER TABLE query_log ADD COLUMN {name} {sql_type}"))
 
 
 def recover_interrupted_documents(engine: Engine) -> int:

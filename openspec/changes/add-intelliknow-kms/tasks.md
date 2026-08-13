@@ -38,6 +38,8 @@ The implementation is organized by delivered increments, followed by a stabiliza
 - [x] 0.6 Preserve at least one compact verified source when channel output is truncated
 - [x] 0.7 Mark documents stranded in `pending` or `parsing` as failed and retryable at startup
 - [x] 0.8 Run focused tests, the full suite, and strict OpenSpec validation
+- [x] 0.9 Remove automatic General/all-space fallback; fail closed on unavailable, invalid, or below-threshold classification
+- [x] 0.10 Preflight document uploads and intent-space mutations before persistence
 
 ## 5. Channels
 
@@ -52,11 +54,11 @@ The implementation is organized by delivered increments, followed by a stabiliza
 
 ## 6. Admin console and delivery
 
-- [ ] 6.1 Implement one authenticated admin router for intents, safe config, analytics, feedback, and dashboard summaries
-- [ ] 6.2 Implement one Streamlit app with five sidebar-selected views
-- [ ] 6.3 Complete Dashboard and Frontend Integration workflows
-- [ ] 6.4 Complete Knowledge Base Management workflows
-- [ ] 6.5 Complete Intent Space Configuration, reviewed feedback, and honest accuracy reporting
-- [ ] 6.6 Complete Analytics, query detail, filters, and CSV export
+- [x] 6.1 Implement one authenticated admin router for intents, safe config, analytics, feedback, and dashboard summaries
+- [x] 6.2 Implement one Streamlit app with five sidebar-selected views
+- [x] 6.3 Complete Dashboard and Frontend Integration workflows
+- [x] 6.4 Complete Knowledge Base Management workflows
+- [x] 6.5 Complete Intent Space Configuration, reviewed feedback, and honest accuracy reporting
+- [x] 6.6 Complete Analytics, query detail, filters, and CSV export
 - [ ] 6.7 Run full demo, labelled quality checks, latency checks, and five-view acceptance
-- [ ] 6.8 Complete README, integration/setup guides, troubleshooting, and AI usage notes
+- [x] 6.8 Complete README, integration/setup guides, troubleshooting, and AI usage notes

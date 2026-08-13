@@ -1,6 +1,6 @@
 ## Purpose
 
-Decides which knowledge domain answers each incoming question by classifying it into exactly one intent space with a confidence score, then enforcing the configured threshold to either hard-filter retrieval to that space or fall back to searching everything.
+Decides which knowledge domain answers each incoming question by classifying it into exactly one intent space with a confidence score, then enforcing the configured threshold before retrieval. Unavailable or uncertain classification stops the query with a retryable error instead of broadening retrieval.
 
 ## ADDED Requirements
 
@@ -75,12 +75,13 @@ The system SHALL escalate to an LLM classification call when centroid confidence
 #### Scenario: Escalated result also below threshold
 
 - **WHEN** the LLM's returned confidence is also below the threshold
-- **THEN** the query is routed to the fallback space
+- **THEN** the query fails closed with a retryable classification error
+- **AND** retrieval and answer generation are not called
 
 #### Scenario: Escalation disabled
 
 - **WHEN** escalation is disabled in configuration and centroid confidence is below the threshold
-- **THEN** the query is routed to the fallback space
+- **THEN** the query fails closed with a classification error
 - **AND** no LLM call is made
 
 #### Scenario: Escalation uses the classification model
@@ -101,8 +102,8 @@ The system SHALL compare the classification confidence against the configured th
 #### Scenario: Confidence below threshold after escalation
 
 - **WHEN** both centroid and escalated confidence fall below the threshold
-- **THEN** retrieval searches every intent space
-- **AND** the query is logged against the fallback space with the fallback flag true
+- **THEN** retrieval searches no intent space
+- **AND** the query is logged as failed and unclassified with the fallback flag false
 
 #### Scenario: Confidence exactly at the threshold
 
@@ -114,45 +115,45 @@ The system SHALL compare the classification confidence against the configured th
 - **WHEN** an admin raises the threshold and a new query arrives
 - **THEN** the new query is evaluated against the updated threshold
 
-### Requirement: Fallback space searches all spaces
+### Requirement: General is an ordinary explicit classification target
 
-The system SHALL treat a classification result of the fallback space as a request to search every intent space, regardless of the confidence value.
+The system SHALL search General only when the classifier explicitly returns General at or above the confidence threshold. It SHALL NOT use General or an all-space search as an automatic substitute for failed or uncertain classification.
 
 #### Scenario: Confidently classified as General
 
 - **WHEN** classification returns the General space with high confidence
-- **THEN** retrieval searches every intent space
-- **AND** the query is logged against General with the fallback flag true
+- **THEN** retrieval searches only the General space
+- **AND** the query is logged against General with the fallback flag false
 
-### Requirement: Classification failure falls back rather than failing
+### Requirement: Classification failure stops before retrieval
 
-The system SHALL route a query to the fallback space when an escalation call fails or times out, rather than returning an error to the user.
+The system SHALL fail closed when classification fails, times out, returns an invalid intent, or remains below the confidence threshold, and SHALL return a retryable error without retrieval or generation.
 
 #### Scenario: Provider error during escalation
 
 - **WHEN** the LLM provider raises an error during escalation
-- **THEN** the query is routed to the fallback space and answered
-- **AND** the query log records the classification failure
+- **THEN** the query returns a retryable classification error
+- **AND** the query log records the failure as unclassified
 
 #### Scenario: Escalation timeout
 
 - **WHEN** the escalation call exceeds its configured timeout
-- **THEN** the query proceeds through the fallback
-- **AND** the user still receives an answer
+- **THEN** the query stops before retrieval and generation
+- **AND** the user receives a retryable error
 
 ### Requirement: Routing hand-off to retrieval
 
-The system SHALL pass retrieval an explicit list of intent spaces to search — a single space when the threshold is met, or all spaces on fallback — so that retrieval never makes the routing decision itself.
+The system SHALL pass retrieval an explicit one-item list only after classification meets the threshold, so retrieval never makes or broadens the routing decision itself.
 
 #### Scenario: Single-space routing
 
 - **WHEN** the confidence threshold is met for the HR space
 - **THEN** retrieval receives a list containing only the HR space
 
-#### Scenario: Fallback routing
+#### Scenario: No routing on classification failure
 
-- **WHEN** the fallback is triggered
-- **THEN** retrieval receives a list containing every configured intent space
+- **WHEN** classification fails or remains below threshold
+- **THEN** retrieval is not invoked
 
 ### Requirement: Per-query routing record
 

@@ -60,6 +60,7 @@ def _summary(store: ChannelStore, channel: str) -> dict:
         "last_ok_at": state.last_ok_at,
         "last_error": state.last_error,
         "last_error_at": state.last_error_at,
+        "recent_errors": store.recent_errors(channel),
         "credential_error": credential_error,
     }
 

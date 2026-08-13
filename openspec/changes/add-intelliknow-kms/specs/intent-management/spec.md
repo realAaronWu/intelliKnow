@@ -1,6 +1,6 @@
 ## Purpose
 
-Defines the named knowledge domains that queries are routed into and documents are filed under — their declaration in configuration, the classification keywords that let an admin improve routing accuracy without code changes, the protected General fallback, and the per-space vector index lifecycle.
+Defines the named knowledge domains that queries are routed into and documents are filed under — their declaration in configuration, the classification keywords that let an admin improve routing accuracy without code changes, protected General, and the per-space vector index lifecycle.
 
 ## ADDED Requirements
 
@@ -45,14 +45,14 @@ The system SHALL store a list of admin-editable keywords on each intent space an
 - **WHEN** an intent space has an empty keyword list
 - **THEN** classification still functions using its name and description
 
-### Requirement: General is a protected fallback space
+### Requirement: General is a protected intent space
 
 The system SHALL mark the General space as protected, SHALL prevent its removal, and SHALL prevent its slug from changing.
 
 #### Scenario: Removing General is refused
 
 - **WHEN** an admin attempts to delete the General space
-- **THEN** the request is rejected with an error explaining that General is the required fallback space
+- **THEN** the request is rejected with an error explaining that General is a required protected space
 - **AND** the space remains
 
 #### Scenario: General may still be renamed and described
@@ -81,6 +81,21 @@ The system SHALL allow an admin to create, edit, and delete custom intent spaces
 
 - **WHEN** an admin edits an intent space
 - **THEN** the name, description, and keyword list are all editable in one form
+
+### Requirement: Intent changes are validated before persistence
+
+The system SHALL build the proposed centroid set and preflight the classification provider before creating, editing, or deleting an intent space, and SHALL persist no part of the change when validation fails.
+
+#### Scenario: Classification provider unavailable during intent save
+
+- **WHEN** an admin saves an intent change while the classification provider is unavailable
+- **THEN** the API returns a retryable service-unavailable error
+- **AND** the configuration file, in-memory configuration, and vector indexes remain unchanged
+
+#### Scenario: Proposed centroids cannot be built
+
+- **WHEN** the embedding provider cannot build centroids for the proposed intent definitions
+- **THEN** the change is rejected before the configuration file is written
 
 ### Requirement: Deleting a space requires reassigning its documents
 

@@ -158,7 +158,7 @@ The system SHALL record a source reference on every chunk identifying where in t
 
 ### Requirement: Intent space assignment at ingest
 
-The system SHALL suggest an intent space for each uploaded document using the LLM provider, presenting the configured spaces with their descriptions and a sample of the document's content, and SHALL allow the admin to override the suggestion.
+The system SHALL classify each uploaded document using the LLM provider, presenting the configured spaces with their descriptions and a sample of the document's content, SHALL accept only a configured slug at or above the classification confidence threshold, and SHALL allow the admin to override an accepted assignment.
 
 #### Scenario: Space suggested at upload
 
@@ -175,8 +175,20 @@ The system SHALL suggest an intent space for each uploaded document using the LL
 #### Scenario: Suggestion unavailable
 
 - **WHEN** the LLM provider fails during intent suggestion
-- **THEN** the document is assigned to the fallback space
-- **AND** ingestion completes so the admin can reassign it manually
+- **THEN** the document is not assigned to General or indexed
+- **AND** it is marked `failed` and `unclassified` with a retryable error
+
+#### Scenario: Suggestion is below the confidence threshold
+
+- **WHEN** the provider returns a configured intent with confidence below the threshold
+- **THEN** the document is not indexed
+- **AND** the error reports the returned and required confidence so the admin can review and retry
+
+#### Scenario: Upload preflight fails before persistence
+
+- **WHEN** the classification provider is unavailable when an upload is submitted
+- **THEN** the upload request returns a retryable service-unavailable error
+- **AND** no document row or uploaded file is created
 
 ### Requirement: Dual index writes
 

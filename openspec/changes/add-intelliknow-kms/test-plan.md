@@ -96,10 +96,10 @@ Deterministic, no I/O beyond a temp SQLite file. Grouped by the component bounda
 - CitationVerifier: `[S2]` resolves; `[S9]` when only 5 supplied is stripped; multi-document answers list each document once.
 
 ### 4.5 Orchestration (`spec: query-orchestration`)
-- Threshold: above → single space; below → all spaces, fallback flag true; **exactly at threshold → single space** (the boundary case).
-- Classified General with high confidence → all spaces, fallback true.
-- Unknown slug → fallback, anomaly recorded.
-- Classification error and timeout → fallback, user still answered, failure logged.
+- Threshold: above → single space; below → retryable failure with no retrieval; **exactly at threshold → single space** (the boundary case).
+- Classified General with high confidence → General only, fallback flag false.
+- Unknown slug → retryable failure, anomaly recorded.
+- Classification error and timeout → retryable failure, no retrieval or generation, failure logged.
 - Classification prompt contains each space's name, description, **and keywords**; editing keywords changes the next prompt with no restart.
 - Retrieval receives an explicit space list and never computes it itself.
 
@@ -140,7 +140,7 @@ The invariant: `chunk` rows, FTS5 rows, and FAISS vectors always agree.
 - **Semantic**: "how much time off do I get" retrieves the annual-leave clause that shares no keywords.
 - **Lexical**: "Band L4" retrieves the salary-grid row — and the same query with `keyword_top_n: 0` does *not*. This pair is the empirical justification for hybrid retrieval; if it ever passes in both configurations, the BM25 half is dead weight and should be reconsidered.
 - **Isolation**: a Finance-routed query cannot return HR chunks, via either retriever.
-- **Fallback**: an all-spaces query returns results from more than one space, merged by score.
+- **Isolation**: an uncertain or failed classification invokes no retrieval function.
 - **Empty**: query against a space with no chunks → no-match, no error.
 - Cross-space scores are comparable (same embedding model, normalized vectors).
 
@@ -194,7 +194,7 @@ Manual, scripted, run before delivery. This is the graded path.
 
 **7.3 Ingestion.** Upload all sample documents by drag-and-drop. Each reaches Processed. `corrupt.pdf` and `scanned.pdf` reach Error with readable messages. `duplicate.pdf` rejected naming the original. Progress indicator visible throughout. Search and each filter return correct subsets.
 
-**7.4 Routing.** Ask the golden set from Telegram. Spot-check the classification log: detected space, confidence, and status correct. Ask an ambiguous question; confirm fallback fires and is visible in the log.
+**7.4 Routing.** Ask the golden set from Telegram. Spot-check the classification log: detected space, confidence, and status correct. Ask an ambiguous question; confirm it fails as unclassified without retrieval and is visible in the log.
 
 **7.5 Answers.** Verify citations on both channels; verify Telegram truncation on a deliberately long answer; verify Teams bullet rendering; verify the no-match message names the searched domain.
 

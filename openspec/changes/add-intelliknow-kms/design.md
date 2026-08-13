@@ -139,6 +139,12 @@ Final delivery additionally requires:
 - all five admin views exercised;
 - README, setup guides, and AI-usage notes.
 
+### 12. Fail closed when classification cannot be trusted
+
+General remains a real intent space, but it is no longer an operational fallback. A provider outage, malformed model response, unknown slug, or confidence below the configured threshold produces an explicit `unclassified` failure. Query retrieval and generation do not run, and document ingestion writes no chunks or vectors.
+
+Uploads perform one cheap structured-output preflight before the document row and file are created. Intent-space mutations first validate a complete candidate config, build its centroids in isolation, and preflight the classification provider; only then is the config written and the vector-index lifecycle changed. These probes improve failure visibility but do not claim perfect model accuracy. Semantic accuracy still requires the labelled evaluation set and human review described above.
+
 ## Delivery Plan
 
 ### Task 0: Stabilization

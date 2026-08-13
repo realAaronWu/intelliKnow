@@ -22,6 +22,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app.analytics.log import QueryLogger
 from app.orchestrator.pipeline import PipelineDeps, answer_question
 from app.rag.generate import ChannelProfile
 
@@ -47,7 +48,9 @@ def _source_dict(citation) -> dict:
     }
 
 
-def build_query_router(deps: PipelineDeps) -> APIRouter:
+def build_query_router(
+    deps: PipelineDeps, query_logger: QueryLogger | None = None
+) -> APIRouter:
     """Build the `/admin/test-query` router bound to `deps`.
 
     A pure function of `deps`, matching `app/api/documents.py::
@@ -60,6 +63,8 @@ def build_query_router(deps: PipelineDeps) -> APIRouter:
     @router.post("/admin/test-query")
     def test_query(body: TestQueryRequest) -> dict:
         outcome = answer_question(body.question, ADMIN_CHANNEL_PROFILE, deps)
+        if query_logger is not None:
+            query_logger.record_admin(body.question, outcome)
         if outcome.classification_failed:
             raise HTTPException(
                 status_code=503,

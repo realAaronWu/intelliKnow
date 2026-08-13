@@ -14,12 +14,6 @@ The system SHALL embed the question with the configured embedding provider and S
 - **THEN** only that space's vector index is searched
 - **AND** chunks belonging to other spaces cannot appear in the vector results
 
-#### Scenario: Multi-space vector search
-
-- **WHEN** retrieval receives every intent space on fallback
-- **THEN** each space's index is searched
-- **AND** the per-space results are merged into one ranked list by similarity
-
 #### Scenario: Vectors are comparable across spaces
 
 - **WHEN** results from different space indexes are merged

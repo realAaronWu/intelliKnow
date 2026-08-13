@@ -26,6 +26,8 @@ from fastapi import Depends, FastAPI
 from sqlalchemy.engine import Engine
 
 from app.analytics.log import QueryLogger
+from app.admin.service import AdminService
+from app.api.admin import build_admin_router
 from app.api.auth import build_admin_auth
 from app.api.documents import build_documents_router
 from app.api.integrations import build_integrations_router
@@ -41,6 +43,8 @@ from app.ingest.worker import IngestDeps
 from app.ingest.classify_doc import preflight_classifier
 from app.orchestrator.centroids import CentroidIndex
 from app.orchestrator.pipeline import PipelineDeps, answer_question
+from app.orchestrator.errors import ClassificationError
+from app.providers.base import ProviderError
 from app.rag.index_writer import IndexWriter
 from app.rag.retrieve.rerank import Reranker
 from app.rag.vector_store import VectorStore
@@ -55,6 +59,8 @@ def create_app(
     teams_endpoint: TeamsEndpoint | None = None,
     integration_store: ChannelStore | None = None,
     channel_tester: ChannelTestService | None = None,
+    admin_service: AdminService | None = None,
+    query_logger: QueryLogger | None = None,
 ) -> FastAPI:
     """Build the FastAPI app bound to `deps` (and, when supplied,
     `pipeline_deps`). Pure: no I/O beyond constructing the
@@ -74,7 +80,7 @@ def create_app(
     )
     if pipeline_deps is not None:
         fastapi_app.include_router(
-            build_query_router(pipeline_deps), dependencies=admin_dependencies
+            build_query_router(pipeline_deps, query_logger), dependencies=admin_dependencies
         )
     if teams_endpoint is not None:
         fastapi_app.include_router(build_teams_router(teams_endpoint))
@@ -82,6 +88,10 @@ def create_app(
         fastapi_app.include_router(
             build_integrations_router(integration_store, channel_tester),
             dependencies=admin_dependencies,
+        )
+    if admin_service is not None:
+        fastapi_app.include_router(
+            build_admin_router(admin_service), dependencies=admin_dependencies
         )
     return fastapi_app
 
@@ -268,6 +278,26 @@ def __getattr__(name: str):
             telegram_max_chars=cfg.channels.telegram.max_message_chars,
             teams_max_chars=cfg.channels.teams.max_message_chars,
         )
+
+        def validate_intents(proposed_config) -> None:
+            # Build proposed centroids without mutating the live index, then
+            # verify the classification LLM can return structured output.
+            try:
+                CentroidIndex(application.embedding, proposed_config)
+            except ProviderError as exc:
+                raise ClassificationError(
+                    f"Classification embeddings are unavailable ({exc.category}); "
+                    "nothing was saved. Please retry."
+                ) from exc
+            preflight_classifier(proposed_config, application.classify_llm)
+
+        admin_service = AdminService(
+            engine,
+            application.config_service,
+            vector_store,
+            channel_store,
+            intent_validator=validate_intents,
+        )
         fastapi_app = create_app(
             deps,
             pipeline_deps,
@@ -276,6 +306,8 @@ def __getattr__(name: str):
             teams_endpoint=teams_endpoint,
             integration_store=channel_store,
             channel_tester=channel_tester,
+            admin_service=admin_service,
+            query_logger=query_logger,
         )
         fastapi_app.state.channel_store = channel_store
         fastapi_app.state.query_logger = query_logger
@@ -283,5 +315,6 @@ def __getattr__(name: str):
         fastapi_app.state.telegram_poller = telegram_poller
         fastapi_app.state.teams_endpoint = teams_endpoint
         fastapi_app.state.channel_tester = channel_tester
+        fastapi_app.state.admin_service = admin_service
         return fastapi_app
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

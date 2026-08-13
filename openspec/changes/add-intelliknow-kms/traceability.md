@@ -71,7 +71,7 @@ Every clause of the source document is listed below with where it is covered. `s
 | Basic error handling | spec: document-ingestion — Ingestion error handling |
 | **Orchestrator** — 3 default spaces (HR, Legal, Finance) + custom add/edit/delete | spec: intent-management — 5 defaults incl. Operations and General; custom CRUD |
 | AI-powered classification, ≥70% configurable confidence | spec: query-orchestration — embedding-centroid classification with softmax confidence, escalating to an LLM below threshold; spec: intent-management — threshold default 0.70. Confidence is a real probability distribution rather than a model self-report. |
-| Fallback to "General" space | spec: query-orchestration — General fallback |
+| Fallback to "General" space | Deliberate safety deviation: General is used only for an explicit above-threshold classification; failed or uncertain classification returns a retryable error before retrieval. See design decision 12. |
 | Admin-guided accuracy improvement | spec: intent-management — Classification keywords; design § Decision 13 |
 | Route queries to relevant KB domains post-classification | spec: query-orchestration — Routing hand-off |
 | **Knowledge Retrieval & Response** — concise, cited responses from KB | spec: knowledge-retrieval — Grounded answer generation, Citation verification |

@@ -173,14 +173,29 @@ class ConfigService:
         self._current = new_config
         return self._current
 
-    def update_runtime(self, patch: dict[str, Any]) -> AppConfig:
-        """Apply only settings whose existing consumers read live."""
+    def preview_runtime(self, patch: dict[str, Any]) -> AppConfig:
+        """Validate a live patch without changing memory or disk.
+
+        Intent administration uses this to build and probe the proposed
+        classifier before committing the configuration.
+        """
+        self._validate_runtime_paths(patch)
+        raw = yaml.safe_load(self._path.read_bytes()) or {}
+        new_config = AppConfig.model_validate(_deep_merge(raw, patch))
+        for guard in self._guards:
+            guard(self._current, new_config)
+        return new_config
+
+    @staticmethod
+    def _validate_runtime_paths(patch: dict[str, Any]) -> None:
         unsupported = [
             path for path in _patch_leaf_paths(patch) if path not in _RUNTIME_PATHS
         ]
         if unsupported:
             names = ", ".join(".".join(path) for path in unsupported)
-            raise ValueError(
-                f"runtime update for {names} requires a service restart"
-            )
+            raise ValueError(f"runtime update for {names} requires a service restart")
+
+    def update_runtime(self, patch: dict[str, Any]) -> AppConfig:
+        """Apply only settings whose existing consumers read live."""
+        self._validate_runtime_paths(patch)
         return self.update(patch)

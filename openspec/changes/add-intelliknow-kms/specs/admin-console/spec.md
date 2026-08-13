@@ -247,7 +247,7 @@ The system SHALL provide an Intent Space Configuration screen presenting each in
 
 - **WHEN** an admin views the General space card
 - **THEN** no delete action is offered
-- **AND** the card states that General is the required fallback space
+- **AND** the card states that General is a required protected space
 
 #### Scenario: Thresholds adjustable
 

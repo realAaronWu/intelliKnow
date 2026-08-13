@@ -10,7 +10,7 @@ from typing import Callable, Literal, Mapping
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import Engine, insert, select
 
-from app.db import integrations
+from app.db import integration_errors, integrations
 
 CredentialSource = Literal["stored", "environment"]
 
@@ -208,15 +208,37 @@ class ChannelStore:
         )
 
     def record_error(self, channel: str, error: str) -> None:
+        self._validate_channel(channel)
+        reason = str(error)
+        occurred_at = _iso(self._clock())
+        with self._engine.begin() as conn:
+            conn.execute(
+                insert(integration_errors).values(
+                    channel=channel,
+                    created_at=occurred_at,
+                    reason=reason,
+                )
+            )
         self._upsert(
             channel,
             status="disconnected",
-            last_error=str(error),
-            last_error_at=_iso(self._clock()),
+            last_error=reason,
+            last_error_at=occurred_at,
         )
 
     def mark_disconnected(self, channel: str, error: str) -> None:
         self.record_error(channel, error)
+
+    def recent_errors(self, channel: str, *, limit: int = 5) -> list[dict[str, object]]:
+        self._validate_channel(channel)
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(integration_errors)
+                .where(integration_errors.c.channel == channel)
+                .order_by(integration_errors.c.id.desc())
+                .limit(max(0, limit))
+            ).mappings().all()
+        return [dict(row) for row in rows]
 
     def get(self, channel: str) -> ChannelState:
         self._validate_channel(channel)
