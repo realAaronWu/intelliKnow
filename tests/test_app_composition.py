@@ -110,6 +110,7 @@ def application(tmp_path: Path) -> Application:
         classify_llm=FakeLLMProvider(),
         generate_llm=FakeLLMProvider(),
         embedding=FakeEmbeddingProvider(dimension=DIMENSION),
+        admin_password="test-admin-password",
     )
 
 
@@ -124,7 +125,7 @@ def _upload(client: TestClient, classify_llm: FakeLLMProvider, filename: str) ->
 
 
 def _query(client: TestClient, generate_llm: FakeLLMProvider, question: str) -> dict:
-    generate_llm.expect_text("Here is the answer.")
+    generate_llm.expect_text("Here is the answer. [1]")
     resp = client.post("/admin/test-query", json={"question": question})
     assert resp.status_code == 200, resp.text
     return resp.json()
@@ -142,7 +143,10 @@ def test_c1_second_document_visible_to_dense_retrieval_without_restart(
     monkeypatch.setattr(app.main, "Reranker", _fake_reranker)
 
     fastapi_app = app.main.app  # triggers the real composition root exactly once
-    client = TestClient(fastapi_app)
+    client = TestClient(
+        fastapi_app,
+        headers={"Authorization": "Bearer test-admin-password"},
+    )
 
     doc1_id = _upload(client, application.classify_llm, "handbook.pdf")
     body1 = _query(client, application.generate_llm, "tell me about document one")

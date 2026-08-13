@@ -106,24 +106,30 @@ The system SHALL report the number of documents currently assigned to each inten
 - **WHEN** an admin views the intent spaces
 - **THEN** each shows how many documents are assigned to it
 
-### Requirement: Per-space classification accuracy rate
+### Requirement: Per-space reviewed classification accuracy
 
-The system SHALL report a classification accuracy rate for each intent space, computed as the proportion of queries classified into that space whose confidence met or exceeded the configured threshold, over a period, and SHALL state how the figure is derived so it is not mistaken for human-verified accuracy.
+The system SHALL let an admin record the expected intent and whether a logged classification was correct, and SHALL report accuracy for each intent space as the proportion of reviewed classifications marked correct over a selected period.
 
-#### Scenario: Accuracy rate reported per space
+#### Scenario: Reviewed accuracy reported per space
 
 - **WHEN** an admin views the intent spaces
-- **THEN** each shows its classification accuracy rate over the reporting period
+- **THEN** each shows correct reviewed classifications divided by all reviewed classifications over the reporting period
 
-#### Scenario: Derivation is stated
+#### Scenario: Confidence is not labelled accuracy
 
-- **WHEN** the accuracy rate is displayed
-- **THEN** the interface states that it is the share of queries classified into that space at or above the confidence threshold
+- **WHEN** the interface shows the share of classifications at or above the confidence threshold
+- **THEN** it labels that figure as a confidence metric rather than accuracy
 
-#### Scenario: No queries yet
+#### Scenario: No reviewed queries yet
 
-- **WHEN** a space has had no queries classified into it
-- **THEN** the accuracy rate is shown as not yet available rather than as zero
+- **WHEN** a space has no reviewed classifications in the selected period
+- **THEN** accuracy is shown as `Not enough reviewed data` rather than zero
+
+#### Scenario: Admin records correction
+
+- **WHEN** an admin reviews a logged query and records its expected intent
+- **THEN** the feedback is retained with that query
+- **AND** subsequent accuracy calculations include the reviewed outcome
 
 ### Requirement: Keywords drive both centroid and prompt
 

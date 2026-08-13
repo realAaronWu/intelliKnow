@@ -64,12 +64,13 @@ def reparse_document(doc_id: int, path: Path, deps: IngestDeps) -> None:
     if row is None:
         return
     intent_slug = row.intent_slug
+    cfg = deps.current_cfg()
 
     _set_status(deps.engine, doc_id, "parsing")
 
     try:
         _blocks, chunk_list = load_and_chunk(
-            path, deps.cfg, deps.classify_llm, deps.loaders, doc_id=doc_id
+            path, cfg, deps.classify_llm, deps.loaders, doc_id=doc_id
         )
     except Exception as exc:
         _mark_failed(deps.engine, doc_id, str(exc))
@@ -95,7 +96,8 @@ def reassign_document(doc_id: int, new_slug: str, deps: IngestDeps) -> None:
     space — `IndexWriter.reassign_document` has no reason to know about
     `cfg.intent_spaces`, so that validation belongs here.
     """
-    valid_slugs = {space.slug for space in deps.cfg.intent_spaces}
+    cfg = deps.current_cfg()
+    valid_slugs = {space.slug for space in cfg.intent_spaces}
     if new_slug not in valid_slugs:
         raise ValueError(
             f"{new_slug!r} is not a configured intent space; configured "
@@ -144,8 +146,9 @@ def reindex_all(deps: IngestDeps) -> None:
     behind a 202, that failure was also invisible; the outcome is now
     recorded for `GET /documents/reindex/status`.
     """
-    faiss_dir = Path(deps.cfg.storage.faiss_dir)
-    model = deps.cfg.embedding.model
+    cfg = deps.current_cfg()
+    faiss_dir = Path(cfg.storage.faiss_dir)
+    model = cfg.embedding.model
 
     try:
         with deps.engine.connect() as conn:
@@ -157,7 +160,7 @@ def reindex_all(deps: IngestDeps) -> None:
         for row in rows:
             by_slug[row.intent_slug].append((row.id, row.text))
 
-        batch_size = deps.cfg.embedding.batch_size
+        batch_size = cfg.embedding.batch_size
         entries: dict[str, tuple[list[int], list[list[float]]]] = {}
         for slug, slug_entries in by_slug.items():
             ids = [entry[0] for entry in slug_entries]
@@ -170,7 +173,7 @@ def reindex_all(deps: IngestDeps) -> None:
         write_reindex_status(faiss_dir, status="failed", model=model, error=str(exc))
         raise
 
-    write_meta(faiss_dir, model=model, dimension=deps.cfg.embedding.dimension)
+    write_meta(faiss_dir, model=model, dimension=cfg.embedding.dimension)
     write_reindex_status(faiss_dir, status="ok", model=model)
 
 

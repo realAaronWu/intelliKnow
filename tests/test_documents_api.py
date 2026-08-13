@@ -87,6 +87,24 @@ def client(deps) -> TestClient:
     return TestClient(app)
 
 
+def test_admin_routes_require_the_configured_bearer_token(deps):
+    protected = TestClient(create_app(deps, admin_password="correct-secret"))
+
+    assert protected.get("/documents").status_code == 401
+    assert (
+        protected.get(
+            "/documents", headers={"Authorization": "Bearer wrong-secret"}
+        ).status_code
+        == 401
+    )
+    assert (
+        protected.get(
+            "/documents", headers={"Authorization": "Bearer correct-secret"}
+        ).status_code
+        == 200
+    )
+
+
 def _upload(client: TestClient, classify_llm: FakeLLMProvider, filename: str, slug: str) -> int:
     classify_llm.expect_schema({"slug": slug})
     content = (FIXTURES / filename).read_bytes()

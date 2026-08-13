@@ -38,6 +38,7 @@ class Application:
     classify_llm: LLMProvider
     generate_llm: LLMProvider
     embedding: EmbeddingProvider
+    admin_password: str | None = None
 
     @property
     def config(self) -> AppConfig:
@@ -101,4 +102,5 @@ def bootstrap(
         classify_llm=build_llm_provider(cfg, role="classify", env=env),
         generate_llm=build_llm_provider(cfg, role="generate", env=env),
         embedding=build_embedding_provider(cfg, env=env),
+        admin_password=env.get("ADMIN_PASSWORD"),
     )

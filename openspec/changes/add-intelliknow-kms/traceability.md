@@ -25,7 +25,7 @@ Every clause of the source document is listed below with where it is covered. `s
 | 3 | Define and manage intent spaces | spec: intent-management — create/edit/delete |
 | 4 | Submit queries via frontends, categorised into the correct space | spec: query-orchestration |
 | 5 | Receive accurate, context-aware responses from the KB | spec: knowledge-retrieval — hybrid retrieval, grounded generation |
-| 6 | View query history, classification accuracy, KB analytics (most accessed docs, common intent spaces) | spec: analytics-and-history — log, distribution, most accessed; spec: intent-management — per-space accuracy rate |
+| 6 | View query history, classification accuracy, KB analytics (most accessed docs, common intent spaces) | spec: analytics-and-history — log, feedback, distribution, most accessed; spec: intent-management — per-space reviewed accuracy |
 
 ## §1 Constraints
 
@@ -49,7 +49,7 @@ Every clause of the source document is listed below with where it is covered. `s
 | KB: actions View / Delete / Update | spec: admin-console — row actions, view detail, update re-parses |
 | KB: drag-and-drop upload zone, supported formats stated, progress indicator | spec: admin-console — Document upload area |
 | KB: search by name/keyword; filter by format, date, intent space | spec: admin-console — Document search and filter |
-| Intent: card view with name, description, #documents, classification accuracy rate | spec: admin-console — Intent Space Configuration; spec: intent-management — count + accuracy rate |
+| Intent: name, description, #documents, classification accuracy | spec: admin-console — Intent Space Configuration; spec: intent-management — count + reviewed accuracy or unavailable state |
 | Intent: query classification log (recent queries, detected space, confidence, status) | spec: analytics-and-history — Query classification log; placed on the Intent screen per spec: admin-console |
 | Intent: editor form (name, description, keywords) | spec: intent-management — Classification keywords; spec: admin-console — editor form |
 | Frontend: card per tool, Connected/Disconnected, API key last 4 digits, test button | spec: frontend-integration; spec: admin-console — Frontend Integration screen |

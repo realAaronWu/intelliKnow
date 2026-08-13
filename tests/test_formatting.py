@@ -112,3 +112,20 @@ def test_8_6_no_citations_produces_no_sources_section():
     result = format_for_channel("Some answer.", [], TELEGRAM)
 
     assert "Sources" not in result
+
+
+def test_truncation_preserves_at_least_one_compact_verified_source():
+    profile = ChannelProfile(name="small", max_chars=55, markup="plain", supports_lists=False)
+    citations = [
+        Citation(
+            document_id=1,
+            document_title="employee-handbook.pdf",
+            source_ref="page 123",
+        )
+    ]
+
+    result = format_for_channel("A very long grounded answer " * 10, citations, profile)
+
+    assert len(result) <= profile.max_chars
+    assert "Source" in result
+    assert "employee-handbook.pdf" in result

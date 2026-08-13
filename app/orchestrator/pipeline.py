@@ -311,6 +311,19 @@ def answer_question(
         )
 
     cleaned_answer, citations = verify_citations(raw_answer, bundle)
+    if not citations:
+        return _no_match_outcome(
+            routing.spaces,
+            cfg,
+            channel,
+            intent_slug=routing.logged_slug,
+            confidence=classification.confidence,
+            classified_by=classification.classified_by,
+            reasoning=classification.reasoning,
+            classification_failed=classification.failed,
+            fallback_used=routing.fallback_used,
+            latency_ms=_elapsed_ms(start),
+        )
     formatted_answer = format_for_channel(cleaned_answer, citations, channel)
     retrieved_doc_ids = list(dict.fromkeys(source.document_id for source in bundle.sources))
 

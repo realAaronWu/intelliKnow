@@ -1,7 +1,8 @@
 """FastAPI application entrypoint.
 
-`design.md` § "Running the system is not a goal": `uv run uvicorn
-app.main:app --port 8000` is the supported way to run the admin API.
+`uv run uvicorn app.main:app --port 8000` is the supported way to run the
+API. Production composition requires `ADMIN_PASSWORD` and mounts every
+administrative route behind the shared bearer-token dependency.
 
 `app` is exposed lazily, via `__getattr__` (PEP 562), rather than built
 eagerly at module scope. `uvicorn app.main:app` resolves `app` through
@@ -18,14 +19,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 from sqlalchemy.engine import Engine
 
+from app.api.auth import build_admin_auth
 from app.api.documents import build_documents_router
 from app.api.query import build_query_router
 from app.bootstrap import Application, bootstrap
-from app.db import create_engine_for, init_schema
+from app.db import create_engine_for, init_schema, recover_interrupted_documents
 from app.ingest.worker import IngestDeps
 from app.orchestrator.centroids import CentroidIndex
 from app.orchestrator.pipeline import PipelineDeps
@@ -34,7 +36,12 @@ from app.rag.retrieve.rerank import Reranker
 from app.rag.vector_store import VectorStore
 
 
-def create_app(deps: IngestDeps, pipeline_deps: PipelineDeps | None = None) -> FastAPI:
+def create_app(
+    deps: IngestDeps,
+    pipeline_deps: PipelineDeps | None = None,
+    *,
+    admin_password: str | None = None,
+) -> FastAPI:
     """Build the FastAPI app bound to `deps` (and, when supplied,
     `pipeline_deps`). Pure: no I/O beyond constructing the
     `FastAPI`/`APIRouter` objects themselves.
@@ -45,9 +52,16 @@ def create_app(deps: IngestDeps, pipeline_deps: PipelineDeps | None = None) -> F
     is simply absent when it is not supplied.
     """
     fastapi_app = FastAPI(title="IntelliKnow KMS")
-    fastapi_app.include_router(build_documents_router(deps))
+    admin_dependencies = (
+        [Depends(build_admin_auth(admin_password))] if admin_password is not None else []
+    )
+    fastapi_app.include_router(
+        build_documents_router(deps), dependencies=admin_dependencies
+    )
     if pipeline_deps is not None:
-        fastapi_app.include_router(build_query_router(pipeline_deps))
+        fastapi_app.include_router(
+            build_query_router(pipeline_deps), dependencies=admin_dependencies
+        )
     return fastapi_app
 
 
@@ -90,6 +104,7 @@ def _build_default_deps(
         embedding=application.embedding,
         vector_store=vector_store,
         index_writer=index_writer,
+        get_cfg=lambda: application.config,
     )
 
 
@@ -157,6 +172,7 @@ def __getattr__(name: str):
         cfg = application.config
         engine = create_engine_for(Path(cfg.storage.sqlite_path))
         init_schema(engine)
+        recover_interrupted_documents(engine)
         vector_store = VectorStore(Path(cfg.storage.faiss_dir), cfg.embedding.dimension)
 
         deps = _build_default_deps(application, engine, vector_store)
@@ -174,5 +190,9 @@ def __getattr__(name: str):
         # exactly this: construct `Reranker` and call `.score()` once
         # during wiring for callers that want it loaded at startup.
         pipeline_deps.reranker.score("warm-up", ["warm-up"])
-        return create_app(deps, pipeline_deps)
+        if not application.admin_password:
+            raise RuntimeError("ADMIN_PASSWORD must be set before starting the API")
+        return create_app(
+            deps, pipeline_deps, admin_password=application.admin_password
+        )
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

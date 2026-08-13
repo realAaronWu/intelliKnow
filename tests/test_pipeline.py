@@ -278,6 +278,22 @@ def test_11_5_success_returns_verified_citations_and_retrieved_doc_ids(
     assert outcome.classified_by == "centroid"
 
 
+def test_generated_answer_with_no_verified_citation_is_a_no_match(
+    engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids
+):
+    _seed_matching_chunk(engine, vector_store)
+    reranker = Reranker("fake-model", client=_FakeCrossEncoder({_CHUNK_TEXT: 5.0}))
+    generate_llm.expect_text("This answer cites a source that was never supplied. [99]")
+    deps = _deps(engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids, reranker)
+
+    outcome = answer_question(_QUESTION, _CHANNEL, deps)
+
+    assert outcome.status == "no_match"
+    assert outcome.citations == []
+    assert outcome.retrieved_doc_ids == []
+    assert "knowledge base" in outcome.answer.lower()
+
+
 # --- 11.6 Latency recorded ----------------------------------------------------------
 
 

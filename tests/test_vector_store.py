@@ -11,6 +11,7 @@ store itself must never re-normalize.
 from __future__ import annotations
 
 import math
+from threading import Event, Thread
 
 import pytest
 
@@ -263,3 +264,38 @@ def test_rebuild_all_with_no_entries_clears_every_space(tmp_path):
     store.rebuild_all({})
 
     assert not (tmp_path / "hr.index").exists()
+
+
+def test_search_waits_while_an_index_persist_is_in_progress(tmp_path, monkeypatch):
+    store = VectorStore(tmp_path, DIMENSION)
+    store.add("hr", [1], [_E1])
+    persist_entered = Event()
+    release_persist = Event()
+    search_started = Event()
+    search_finished = Event()
+    original_write = __import__("faiss").write_index
+
+    def blocking_write(index, path):
+        persist_entered.set()
+        assert release_persist.wait(2)
+        original_write(index, path)
+
+    monkeypatch.setattr("app.rag.vector_store.faiss.write_index", blocking_write)
+    persist_thread = Thread(target=store.persist, args=("hr",))
+    persist_thread.start()
+    assert persist_entered.wait(1)
+
+    def run_search():
+        search_started.set()
+        store.search("hr", _E1, top_n=1)
+        search_finished.set()
+
+    search_thread = Thread(target=run_search)
+    search_thread.start()
+    assert search_started.wait(1)
+    assert not search_finished.wait(0.1)
+
+    release_persist.set()
+    persist_thread.join(2)
+    search_thread.join(2)
+    assert search_finished.is_set()

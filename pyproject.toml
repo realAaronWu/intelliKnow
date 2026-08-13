@@ -4,7 +4,10 @@ version = "0.1.0"
 description = "IntelliKnow KMS — RAG-based knowledge management system"
 requires-python = ">=3.12"
 dependencies = [
+    "aiohttp>=3.14.3",
     "anthropic>=0.121.0",
+    "botbuilder-core>=4.17.1",
+    "cryptography>=50.0.0",
     "faiss-cpu>=1.15.0",
     "fastapi>=0.141.1",
     "jsonschema>=4.26.0",
@@ -20,6 +23,8 @@ dependencies = [
     "reportlab>=5.0.0",
     "sentence-transformers>=5.7.0",
     "sqlalchemy>=2.0.51",
+    "streamlit>=1.61.1",
+    "uvicorn>=0.52.1",
 ]
 
 [dependency-groups]

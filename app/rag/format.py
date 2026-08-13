@@ -87,6 +87,10 @@ def _render_citations(citations: list[Citation], profile: ChannelProfile) -> str
     return "Sources:\n" + "\n".join(lines)
 
 
+def _render_compact_source(citation: Citation, profile: ChannelProfile) -> str:
+    return f"Source: {_escape(citation.document_title, profile.markup)}"
+
+
 def _truncate_at_word_boundary(text: str, limit: int) -> str:
     """Cut `text` to at most `limit` characters, preferring the last word
     boundary within budget, and append the truncation marker.
@@ -131,6 +135,13 @@ def format_for_channel(answer: str, citations: list[Citation], profile: ChannelP
         if len(combined) <= profile.max_chars:
             return combined
 
-    # Citations don't fit even alongside a fully-truncated answer (or
-    # there are none) — drop them and give the whole budget to the answer.
+    if citations:
+        compact_source = _render_compact_source(citations[0], profile)
+        if len(compact_source) <= profile.max_chars:
+            available = profile.max_chars - len(compact_source) - separator_cost
+            if available > 0:
+                truncated_answer = _truncate_at_word_boundary(escaped_answer, available)
+                return f"{truncated_answer}\n\n{compact_source}"
+            return compact_source
+
     return _truncate_at_word_boundary(escaped_answer, profile.max_chars)

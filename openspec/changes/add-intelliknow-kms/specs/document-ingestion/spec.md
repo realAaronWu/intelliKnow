@@ -59,6 +59,12 @@ The system SHALL accept an upload and return immediately, SHALL process it in th
 - **THEN** the status becomes `indexed`
 - **AND** the document reports its chunk count and indexed timestamp
 
+#### Scenario: Interrupted work is made retryable on startup
+
+- **WHEN** the service starts and a document is still marked `pending` or `parsing` from an earlier process
+- **THEN** the document is marked `failed`
+- **AND** its error message explains that processing was interrupted and may be retried
+
 ### Requirement: Structured document loading
 
 The system SHALL extract each document into an ordered sequence of typed blocks — heading, paragraph, and table — each carrying a source reference identifying its page, paragraph, or sheet range of origin.

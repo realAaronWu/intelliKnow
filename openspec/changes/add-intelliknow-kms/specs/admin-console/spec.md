@@ -54,6 +54,18 @@ The system SHALL require a password before any screen is shown and SHALL keep th
 - **WHEN** an admin signs out
 - **THEN** the password is required again
 
+#### Scenario: Backend rejects a missing admin token
+
+- **WHEN** a request reaches any administrative API route without the configured bearer token
+- **THEN** the request is rejected before the route handler runs
+- **AND** no administrative data is returned
+
+#### Scenario: Public channel endpoint remains separate
+
+- **WHEN** a Bot Framework activity reaches the public Teams messaging endpoint
+- **THEN** admin bearer authentication is not required
+- **AND** Bot Framework authentication still applies
+
 ### Requirement: Console accesses data only through the backend API
 
 The system SHALL have the console read and write all state through the backend HTTP API, and SHALL NOT have it access the database, the indexes, the configuration file, or the filesystem directly.
@@ -214,12 +226,12 @@ The system SHALL allow documents to be found by name or keyword and filtered by 
 
 ### Requirement: Intent Space Configuration screen
 
-The system SHALL provide an Intent Space Configuration screen presenting each intent space as a card showing its name, description, number of associated documents, and classification accuracy rate, together with the query classification log and an editor form.
+The system SHALL provide an Intent Space Configuration screen presenting each intent space with its name, description, number of associated documents, and reviewed classification accuracy when enough reviewed data exists, together with the query classification log and an editor form.
 
 #### Scenario: Intent spaces shown as cards
 
 - **WHEN** an admin opens Intent Space Configuration
-- **THEN** each space appears as a card with its name, description, associated document count, and classification accuracy rate
+- **THEN** each space appears with its name, description, associated document count, and reviewed classification accuracy or an unavailable state
 
 #### Scenario: Editor form covers name, description, and keywords
 

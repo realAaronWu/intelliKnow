@@ -275,3 +275,48 @@ def test_no_guards_is_the_default(config_path):
     updated = service.update({"orchestrator": {"confidence_threshold": 0.85}})
 
     assert updated.orchestrator.confidence_threshold == 0.85
+
+
+def test_runtime_update_accepts_only_live_classifier_and_gate_settings(config_path):
+    service = ConfigService.load(config_path)
+
+    updated = service.update_runtime(
+        {
+            "orchestrator": {"confidence_threshold": 0.82},
+            "rag": {"relevance_floor": 0.51},
+        }
+    )
+
+    assert updated.orchestrator.confidence_threshold == 0.82
+    assert updated.rag.relevance_floor == 0.51
+
+
+def test_runtime_update_accepts_intent_spaces_as_one_live_setting(config_path):
+    service = ConfigService.load(config_path)
+    spaces = service.current.model_dump(mode="json")["intent_spaces"]
+    spaces[0]["keywords"].append("parental leave")
+
+    updated = service.update_runtime({"intent_spaces": spaces})
+
+    assert "parental leave" in updated.intent_spaces[0].keywords
+
+
+@pytest.mark.parametrize(
+    "patch, field",
+    [
+        ({"llm": {"model_generate": "another-model"}}, "llm.model_generate"),
+        ({"embedding": {"model": "another-embedding"}}, "embedding.model"),
+        ({"rag": {"final_top_k": 3}}, "rag.final_top_k"),
+        ({"storage": {"faiss_dir": "/tmp/other"}}, "storage.faiss_dir"),
+    ],
+)
+def test_runtime_update_rejects_restart_required_fields_without_side_effects(
+    config_path, patch, field
+):
+    service = ConfigService.load(config_path)
+    before = config_path.read_bytes()
+
+    with pytest.raises(ValueError, match=field):
+        service.update_runtime(patch)
+
+    assert config_path.read_bytes() == before

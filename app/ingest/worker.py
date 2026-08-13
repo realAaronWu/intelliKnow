@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping
+from typing import Callable, Mapping
 
 from sqlalchemy import Engine, update
 
@@ -75,6 +75,10 @@ class IngestDeps:
     vector_store: VectorStore
     index_writer: IndexWriter
     loaders: Mapping[str, DocumentLoader] = field(default_factory=lambda: DEFAULT_LOADERS)
+    get_cfg: Callable[[], AppConfig] | None = None
+
+    def current_cfg(self) -> AppConfig:
+        return self.get_cfg() if self.get_cfg is not None else self.cfg
 
 
 def _utc_now_iso() -> str:
@@ -204,13 +208,14 @@ def ingest_document(doc_id: int, path: Path, deps: IngestDeps) -> None:
     touched beyond its status columns, so it stays listed and retryable.
     """
     _set_status(deps.engine, doc_id, "parsing")
+    cfg = deps.current_cfg()
 
     try:
         blocks, chunk_list = load_and_chunk(
-            path, deps.cfg, deps.classify_llm, deps.loaders, doc_id=doc_id
+            path, cfg, deps.classify_llm, deps.loaders, doc_id=doc_id
         )
         suggestion = suggest_intent(
-            _sample_text(blocks), deps.cfg, deps.classify_llm, doc_id=doc_id
+            _sample_text(blocks), cfg, deps.classify_llm, doc_id=doc_id
         )
         deps.index_writer.write_document(doc_id, suggestion.slug, chunk_list)
     except Exception as exc:
@@ -222,9 +227,9 @@ def ingest_document(doc_id: int, path: Path, deps: IngestDeps) -> None:
     # ingest". A no-op after the first document; see
     # `app/rag/index_meta.py::record_meta_if_absent`.
     record_meta_if_absent(
-        Path(deps.cfg.storage.faiss_dir),
-        model=deps.cfg.embedding.model,
-        dimension=deps.cfg.embedding.dimension,
+        Path(cfg.storage.faiss_dir),
+        model=cfg.embedding.model,
+        dimension=cfg.embedding.dimension,
     )
 
     _mark_indexed(

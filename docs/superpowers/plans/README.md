@@ -12,32 +12,23 @@ Source of truth for *what* to build: `openspec/changes/add-intelliknow-kms/` (pr
 
 **No implementation or test code appears in these plans, by project decision.** Plans state behaviour and contracts; test plans state expectations. The implementer writes both test and code. This keeps the plan reviewable and stops the implementer from transcribing pre-written code instead of reasoning about the requirement.
 
-## Why six plans, not one
+## Plan status
 
-The spec covers 92 requirements across 9 capabilities. A single plan would be unreviewable and would force accept-or-reject on everything at once. Each plan below produces working, independently testable software and ends at a state you could stop at.
+Plans 01-04 are implemented on `main`. The remaining path starts with a small stabilization gate, then implements channels and the console. OpenSpec is the behavioral source of truth; these files describe implementation order and boundaries.
 
 | # | Plan | Produces | Depends on |
 |---|---|---|---|
-| 01 | [Foundation](2026-08-08-01-foundation.md) | Config service, provider layer, test doubles, DB schema | — |
-| 02 | [Test corpus](2026-08-08-02-test-corpus.md) | Synthetic fixtures, real-world corpus fetcher, golden question set | 01 (partial) |
-| 03 | [RAG write path](2026-08-08-03-rag-write-path.md) | Loaders, chunker, vector store, dual-index writer, ingestion | 01, 02 |
-| 04 | [RAG read path](2026-08-08-04-rag-read-path.md) | Hybrid retrieval, fusion, gate, context, generation, citations, classification, routing | 01–03 |
-| 05 | [Channels](2026-08-08-05-channels.md) | Credential storage, Telegram, Teams, status, logging | 01, 04 |
-| 06 | [Admin console](2026-08-08-06-admin-console.md) | Five screens, remaining admin API | 01–05 |
+| 01 | [Foundation](2026-08-08-01-foundation.md) | Config service, provider layer, test doubles, DB schema | Complete |
+| 02 | [Test corpus](2026-08-08-02-test-corpus.md) | Synthetic fixtures; labelled question set remains | Partial |
+| 03 | [RAG write path](2026-08-08-03-rag-write-path.md) | Loaders, chunker, vector store, ingestion | Complete |
+| 04 | [RAG read path](2026-08-08-04-rag-read-path.md) | Retrieval, generation, citations, classification | Complete |
+| 00 | [Stabilization](2026-08-11-00-stabilization.md) | Auth, concurrency, config boundaries, recovery, grounding fixes | Next |
+| 05 | [Channels](2026-08-08-05-channels.md) | Encrypted credentials, Telegram polling, Teams, delivery logging | 00 |
+| 06 | [Admin and delivery](2026-08-08-06-admin-console.md) | One admin router, five views, feedback, acceptance evidence | 05 |
 
 ## Execution order
 
-01 → 02 can overlap (02 only needs plan 01's config schema and provider factory). 03 → 04 → 05 are sequential. 06 needs the API surfaces from 03–05.
-
-| Day | Plan |
-|---|---|
-| 1 | 01 Foundation |
-| 2 | 02 Test corpus, then 03 begins |
-| 3 | 03 RAG write path |
-| 4 | 04 RAG read path + orchestrator |
-| 5 | 05 Channels |
-| 6 | 06 Admin console |
-| 7 | L3 model-quality run, L4 demo script, README, AI usage reflection |
+`00 -> 05 -> 06 -> final delivery`. The labelled question set from plan 02 must be completed before model-quality accuracy is reported, but it does not block deterministic channel or console development.
 
 ## The loop, per increment
 

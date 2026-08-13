@@ -66,7 +66,7 @@ Deterministic, no I/O beyond a temp SQLite file. Grouped by the component bounda
 - Out-of-range threshold, unknown field, malformed YAML → startup refused, error names the field.
 - Missing file → defaults written and service starts.
 - Atomic write: kill between temp-write and rename → original intact; backup file created.
-- Runtime update applies without restart; rejected update leaves both disk and memory unchanged.
+- Runtime updates accept intent spaces, confidence threshold, and relevance floor only; restart-required and invalid updates leave both disk and memory unchanged.
 - Embedding model change refused while `index_meta.json` records documents; permitted when empty.
 - Effective-config read contains no secret values.
 
@@ -200,7 +200,7 @@ Manual, scripted, run before delivery. This is the graded path.
 
 **7.6 Latency.** 20 queries per channel; record p50 and p95. **Gate: p95 ≤ 3s.** If missed, switch `model_classify` to a faster model and re-measure — this is the specified remedy, and the measurement is what tells you whether it was needed.
 
-**7.7 Console.** All five screens; card styling (12px radius, 16px padding, accent colours); intent cards show document count and accuracy rate with derivation stated; Analytics shows distribution and most-accessed documents; CSV export opens and matches the log.
+**7.7 Console.** All five screens; restrained module styling; intent views show document count and reviewed accuracy or `Not enough reviewed data`; Analytics shows distribution and most-accessed documents; CSV export opens and matches the log.
 
 **7.8 Traceability.** Walk `traceability.md` end to end; confirm every clause is satisfied or listed as a deviation.
 
@@ -242,7 +242,7 @@ Recorded so the gaps are deliberate and visible.
 | Scenario area | Why | Compensating check |
 | --- | --- | --- |
 | Live Telegram and Teams delivery | Requires real platform accounts and network | L4 § 7.2, 7.4, 7.5 manual; adapters unit-tested against captured payloads |
-| Bot Framework JWT validation | Owned by `botbuilder-core`, not our code | L4 verification via the Emulator |
+| Bot Framework JWT validation | Owned by `botbuilder-core`, not our code | Captured invalid-token test plus emulator diagnostic and real Teams L4 round trip |
 | Visual styling (radius, padding, colours) | Not meaningfully assertable without screenshot testing, which is disproportionate here | L4 § 7.7 visual check |
 | Drag-and-drop interaction | Streamlit widget behaviour | L4 § 7.3 manual |
 | Provider rate-limit behaviour under real load | Cannot be induced reliably or cheaply | L1 fake-injected `rate_limit` category |

@@ -61,7 +61,7 @@ def _like_pattern(q: str) -> str:
 
 
 def _upload_path(deps: IngestDeps, doc_id: int, ext: str) -> Path:
-    return Path(deps.cfg.storage.upload_dir) / f"{doc_id}{ext}"
+    return Path(deps.current_cfg().storage.upload_dir) / f"{doc_id}{ext}"
 
 
 def _document_row_or_404(deps: IngestDeps, doc_id: int):
@@ -102,9 +102,10 @@ def build_documents_router(deps: IngestDeps) -> APIRouter:
     async def upload_document(
         background_tasks: BackgroundTasks, file: UploadFile = File(...)
     ) -> dict:
+        cfg = deps.current_cfg()
         content = await file.read()
         try:
-            validated = validate_upload(file.filename, content, deps.cfg, deps.engine)
+            validated = validate_upload(file.filename, content, cfg, deps.engine)
         except ValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -116,7 +117,7 @@ def build_documents_router(deps: IngestDeps) -> APIRouter:
                     ext=validated.ext,
                     size_bytes=validated.size_bytes,
                     sha256=validated.sha256,
-                    intent_slug=deps.cfg.orchestrator.fallback_space,
+                    intent_slug=cfg.orchestrator.fallback_space,
                     status="pending",
                     error_message=None,
                     chunk_count=0,
@@ -265,7 +266,7 @@ def build_documents_router(deps: IngestDeps) -> APIRouter:
         leave the admin who triggered it with no way to find out that it
         had not, in fact, re-indexed anything.
         """
-        status = read_reindex_status(Path(deps.cfg.storage.faiss_dir))
+        status = read_reindex_status(Path(deps.current_cfg().storage.faiss_dir))
         if status is None:
             return {"status": "never_run", "at": None, "model": None, "error": None}
         return {

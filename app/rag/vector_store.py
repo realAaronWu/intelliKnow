@@ -21,10 +21,25 @@ from __future__ import annotations
 
 import os
 import tempfile
+from functools import wraps
 from pathlib import Path
+from threading import RLock
+from typing import Callable, TypeVar
 
 import faiss
 import numpy as np
+
+_FAISS_LOCK = RLock()
+_Method = TypeVar("_Method", bound=Callable)
+
+
+def _synchronized(method: _Method) -> _Method:
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with _FAISS_LOCK:
+            return method(self, *args, **kwargs)
+
+    return locked  # type: ignore[return-value]
 
 
 class VectorStore:
@@ -48,6 +63,7 @@ class VectorStore:
     def _new_index(self) -> faiss.IndexIDMap2:
         return faiss.IndexIDMap2(faiss.IndexFlatIP(self._dimension))
 
+    @_synchronized
     def _get_or_create(self, slug: str) -> faiss.IndexIDMap2:
         """Return the in-memory index for `slug`, loading it from disk or
         creating it empty if this is the first touch this process has seen.
@@ -68,20 +84,24 @@ class VectorStore:
         self._indexes[slug] = index
         return index
 
+    @_synchronized
     def create_space(self, slug: str) -> None:
         """Ensure an empty in-memory index exists for `slug`. Idempotent."""
         self._get_or_create(slug)
 
+    @_synchronized
     def add(self, slug: str, ids: list[int], vectors: list[list[float]]) -> None:
         index = self._get_or_create(slug)
         vector_array = np.array(vectors, dtype="float32")
         id_array = np.array(ids, dtype="int64")
         index.add_with_ids(vector_array, id_array)
 
+    @_synchronized
     def remove(self, slug: str, ids: list[int]) -> None:
         index = self._get_or_create(slug)
         index.remove_ids(np.array(ids, dtype="int64"))
 
+    @_synchronized
     def move(self, from_slug: str, to_slug: str, ids: list[int]) -> None:
         """Transfer `ids` from `from_slug` to `to_slug` without re-embedding.
 
@@ -101,6 +121,7 @@ class VectorStore:
         to_index = self._get_or_create(to_slug)
         to_index.add_with_ids(vectors, id_array)
 
+    @_synchronized
     def search(self, slug: str, vector: list[float], top_n: int) -> list[tuple[int, float]]:
         index = self._get_or_create(slug)
         if index.ntotal == 0:
@@ -115,12 +136,14 @@ class VectorStore:
             results.append((int(found_id), float(score)))
         return results
 
+    @_synchronized
     def delete_space(self, slug: str) -> None:
         self._indexes.pop(slug, None)
         path = self._index_path(slug)
         if path.exists():
             path.unlink()
 
+    @_synchronized
     def rebuild_all(self, entries: dict[str, tuple[list[int], list[list[float]]]]) -> None:
         """Replace every space's index with one built from `entries`, and
         delete the index of any space `entries` does not mention.
@@ -171,10 +194,12 @@ class VectorStore:
                 index_file.unlink()
                 self._indexes.pop(slug, None)
 
+    @_synchronized
     def persist(self, slug: str) -> None:
         index = self._get_or_create(slug)
         faiss.write_index(index, str(self._index_path(slug)))
 
+    @_synchronized
     def load(self, slug: str) -> None:
         """Force `slug`'s index to be (re)read from disk into memory,
         replacing any in-memory state — used to pick up a fresh `VectorStore`

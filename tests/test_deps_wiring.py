@@ -194,6 +194,18 @@ def test_main_passes_the_configured_embedding_batch_size(application, monkeypatc
     _assert_batches_at(deps, built.embedding)
 
 
+def test_main_ingest_deps_read_the_latest_runtime_configuration(application, monkeypatch):
+    built = application()
+    monkeypatch.setattr(app.main, "bootstrap", lambda: built)
+    deps = app.main._build_default_deps()
+
+    built.config_service.update_runtime(
+        {"orchestrator": {"confidence_threshold": 0.88}}
+    )
+
+    assert deps.current_cfg().orchestrator.confidence_threshold == 0.88
+
+
 def test_ingest_script_passes_the_configured_embedding_batch_size(application, monkeypatch):
     built = application(batch_size=2)
     monkeypatch.setattr(scripts.ingest, "bootstrap", lambda: built)

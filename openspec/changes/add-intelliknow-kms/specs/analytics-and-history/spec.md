@@ -63,6 +63,26 @@ The system SHALL expose recent queries newest first as a table showing the times
 - **WHEN** the log contains more entries than fit on one page
 - **THEN** the admin can page through them
 
+### Requirement: Classification review feedback
+
+The system SHALL allow an admin to review a logged query by recording the expected intent space and whether the detected intent was correct, and SHALL retain that feedback for reviewed-accuracy reporting.
+
+#### Scenario: Correct classification reviewed
+
+- **WHEN** an admin confirms that a query was routed to the expected intent
+- **THEN** the query is marked reviewed and correct
+
+#### Scenario: Incorrect classification corrected
+
+- **WHEN** an admin selects a different expected intent for a logged query
+- **THEN** the query is marked reviewed and incorrect
+- **AND** the expected intent is retained
+
+#### Scenario: Unreviewed query excluded from accuracy
+
+- **WHEN** reviewed accuracy is calculated
+- **THEN** query rows without review feedback are excluded from its numerator and denominator
+
 #### Scenario: Log filtered by intent space and status
 
 - **WHEN** an admin filters by intent space or by status

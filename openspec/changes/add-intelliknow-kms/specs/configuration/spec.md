@@ -1,6 +1,6 @@
 ## Purpose
 
-Puts every tunable in the system — AI models, embedding model, chunking and retrieval parameters, the classification threshold, intent spaces, and channel settings — into a single configuration file that an operator can read and edit in one place, keeping secrets separate and applying changes without a restart.
+Puts every non-secret tunable in one configuration file, keeps secrets separate, and distinguishes settings that are safe to apply to the next request from settings that require service restart or re-indexing.
 
 ## ADDED Requirements
 
@@ -62,7 +62,7 @@ The system SHALL validate `config.yaml` against a typed schema at startup and SH
 
 ### Requirement: Runtime configuration updates
 
-The system SHALL allow configuration to be updated through the admin API, SHALL validate the update before applying it, and SHALL apply accepted changes to subsequent operations without a restart.
+The system SHALL allow only intent spaces, `orchestrator.confidence_threshold`, and `rag.relevance_floor` to be updated through the runtime admin API, SHALL validate a complete candidate configuration before applying it, and SHALL apply accepted changes to subsequent operations without a restart.
 
 #### Scenario: Threshold change applies immediately
 
@@ -75,6 +75,24 @@ The system SHALL allow configuration to be updated through the admin API, SHALL 
 - **WHEN** an admin submits a configuration update that fails validation
 - **THEN** the update is rejected with a message naming the invalid field
 - **AND** the file on disk and the running configuration are both unchanged
+
+#### Scenario: Intent edit applies immediately
+
+- **WHEN** an admin changes an intent-space name, description, or keywords through the console
+- **THEN** the next classification uses the updated intent definition
+- **AND** no restart or document re-index is required
+
+#### Scenario: Relevance floor applies immediately
+
+- **WHEN** an admin changes the relevance floor through the console
+- **THEN** the next query uses the updated value
+- **AND** no restart is required
+
+#### Scenario: Restart-required field rejected by runtime API
+
+- **WHEN** an admin attempts to change a provider, model, storage path, chunking setting, or retrieval-topology setting through the runtime update operation
+- **THEN** the update is rejected without side effects
+- **AND** the error names the field and states that a service restart is required
 
 ### Requirement: Safe configuration writes
 
@@ -104,7 +122,8 @@ The system SHALL reject any change to the embedding model or dimension while ind
 #### Scenario: Change allowed on an empty knowledge base
 
 - **WHEN** the embedding model is changed while no documents are indexed
-- **THEN** the change is accepted
+- **THEN** the configuration file may be changed for the next service start
+- **AND** the runtime update operation still reports that a restart is required
 
 ### Requirement: Effective configuration is readable
 

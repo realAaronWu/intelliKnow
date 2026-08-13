@@ -212,3 +212,15 @@ def init_schema(engine: Engine) -> None:
         conn.execute(text(_CREATE_CHUNK_FTS))
         for trigger_ddl in _CREATE_CHUNK_FTS_TRIGGERS:
             conn.execute(text(trigger_ddl))
+
+
+def recover_interrupted_documents(engine: Engine) -> int:
+    """Make non-durable background work visibly retryable after restart."""
+    message = "Processing was interrupted by a service restart; retry this document."
+    with engine.begin() as conn:
+        result = conn.execute(
+            documents.update()
+            .where(documents.c.status.in_(("pending", "parsing")))
+            .values(status="failed", error_message=message)
+        )
+    return result.rowcount

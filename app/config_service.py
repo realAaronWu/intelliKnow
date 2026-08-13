@@ -41,6 +41,27 @@ def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
 #: the update. Returning `None` accepts it.
 Guard = Callable[[AppConfig, AppConfig], None]
 
+_RUNTIME_PATHS = {
+    ("intent_spaces",),
+    ("orchestrator", "confidence_threshold"),
+    ("rag", "relevance_floor"),
+}
+
+
+def _patch_leaf_paths(
+    patch: dict[str, Any], prefix: tuple[str, ...] = ()
+) -> list[tuple[str, ...]]:
+    paths: list[tuple[str, ...]] = []
+    for key, value in patch.items():
+        path = (*prefix, key)
+        if path == ("intent_spaces",):
+            paths.append(path)
+        elif isinstance(value, dict) and value:
+            paths.extend(_patch_leaf_paths(value, path))
+        else:
+            paths.append(path)
+    return paths
+
 
 class ConfigService:
     """Reads, patches, and atomically rewrites `config.yaml` at runtime.
@@ -151,3 +172,15 @@ class ConfigService:
 
         self._current = new_config
         return self._current
+
+    def update_runtime(self, patch: dict[str, Any]) -> AppConfig:
+        """Apply only settings whose existing consumers read live."""
+        unsupported = [
+            path for path in _patch_leaf_paths(patch) if path not in _RUNTIME_PATHS
+        ]
+        if unsupported:
+            names = ", ".join(".".join(path) for path in unsupported)
+            raise ValueError(
+                f"runtime update for {names} requires a service restart"
+            )
+        return self.update(patch)

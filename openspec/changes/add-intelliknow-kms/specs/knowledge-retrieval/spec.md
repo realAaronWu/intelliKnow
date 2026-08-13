@@ -85,7 +85,7 @@ The system SHALL score the fused candidate pool with a cross-encoder reranker in
 #### Scenario: Reranker model is configurable
 
 - **WHEN** an operator changes the reranker model or candidate count in configuration
-- **THEN** subsequent queries use the new values without a restart
+- **THEN** subsequent queries use the new values after service restart
 
 #### Scenario: Fewer candidates than the pool size
 
@@ -176,6 +176,12 @@ The system SHALL parse the citation markers from the generated answer, SHALL res
 - **THEN** that marker is removed from the delivered answer
 - **AND** the remaining verified citations are retained
 
+#### Scenario: All citations fail verification
+
+- **WHEN** generation returns an answer but none of its citation markers resolves to supplied context
+- **THEN** the response status is `no_match`
+- **AND** the unverified generated answer is not presented as a grounded success
+
 #### Scenario: Multiple documents cited
 
 - **WHEN** the answer draws on chunks from more than one document
@@ -212,6 +218,12 @@ The system SHALL pass the destination channel's formatting profile — maximum l
 - **THEN** the answer is truncated at a word boundary with a visible truncation marker
 - **AND** the delivered message is within the channel limit
 
+#### Scenario: Truncation preserves a verified source
+
+- **WHEN** a cited answer and its citation list exceed the channel limit
+- **THEN** the answer body is shortened before the entire citation list is removed
+- **AND** at least one compact verified source remains in the delivered message
+
 #### Scenario: Markup escaped for the destination
 
 - **WHEN** an answer contains characters reserved in the destination channel's markup
@@ -219,13 +231,13 @@ The system SHALL pass the destination channel's formatting profile — maximum l
 
 ### Requirement: Retrieval parameters are configuration-driven
 
-The system SHALL read the dense result count, keyword result count, fusion constant, reranker model, candidate pool size, final chunk count, context character budget, and relevance floor from configuration, and SHALL apply changes to subsequent queries without a restart.
+The system SHALL read retrieval settings from configuration. The relevance floor SHALL apply to subsequent queries without restart; other retrieval-topology and model settings SHALL apply after service restart.
 
 #### Scenario: Retrieval tuning without code changes
 
 - **WHEN** an operator changes a retrieval parameter in the configuration file
-- **THEN** the next query uses the new value
-- **AND** no code change or restart is required
+- **THEN** no code change is required
+- **AND** a relevance-floor change applies to the next query while other retrieval changes apply after restart
 
 ### Requirement: Generation failure handling
 

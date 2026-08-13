@@ -22,6 +22,7 @@ from app.db import (
     init_schema,
     integrations,
     query_log,
+    recover_interrupted_documents,
 )
 from tests.fts_helpers import fts_indexed_chunk_count
 
@@ -238,6 +239,36 @@ def test_duplicate_sha256_rejected(engine):
     with pytest.raises(IntegrityError):
         with engine.begin() as conn:
             _insert_document(conn, sha256="b" * 64)
+
+
+def test_startup_recovery_marks_only_interrupted_documents_failed(engine):
+    with engine.begin() as conn:
+        pending_id = _insert_document(conn, sha256="c" * 64)
+        parsing_id = _insert_document(conn, sha256="d" * 64)
+        indexed_id = _insert_document(conn, sha256="e" * 64)
+        conn.execute(
+            documents.update().where(documents.c.id == pending_id).values(status="pending")
+        )
+        conn.execute(
+            documents.update().where(documents.c.id == parsing_id).values(status="parsing")
+        )
+
+    recovered = recover_interrupted_documents(engine)
+
+    with engine.connect() as conn:
+        rows = {
+            row.id: row
+            for row in conn.execute(
+                select(documents).where(
+                    documents.c.id.in_([pending_id, parsing_id, indexed_id])
+                )
+            )
+        }
+    assert recovered == 2
+    assert rows[pending_id].status == "failed"
+    assert rows[parsing_id].status == "failed"
+    assert "interrupted" in rows[pending_id].error_message.lower()
+    assert rows[indexed_id].status == "indexed"
 
 
 # --- The three-stores invariant is actually detectable -------------------------------

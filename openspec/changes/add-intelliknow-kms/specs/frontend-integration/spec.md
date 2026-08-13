@@ -55,9 +55,9 @@ The system SHALL translate each platform's inbound payload into a common interna
 - **THEN** the user receives a short message explaining that only text questions are supported
 - **AND** no query pipeline run is started
 
-### Requirement: Telegram long-polling by default
+### Requirement: Telegram long-polling
 
-The system SHALL operate the Telegram integration in long-polling mode by default, requiring no publicly reachable URL, and SHALL support webhook mode as a configurable alternative.
+The system SHALL operate the Telegram integration in long-polling mode, requiring no publicly reachable URL.
 
 #### Scenario: Polling mode needs no public URL
 
@@ -65,20 +65,15 @@ The system SHALL operate the Telegram integration in long-polling mode by defaul
 - **THEN** inbound messages are retrieved and answered
 - **AND** no public base URL or webhook registration is required
 
-#### Scenario: Webhook mode available
+#### Scenario: Polling offset prevents duplicate processing
 
-- **WHEN** an operator sets Telegram to webhook mode and supplies a public base URL
-- **THEN** the webhook is registered with Telegram and inbound messages arrive over it
-
-#### Scenario: Only one mode active
-
-- **WHEN** polling mode is active
-- **THEN** no webhook is registered
-- **AND** messages are not processed twice
+- **WHEN** a Telegram update has been handled
+- **THEN** the next polling request advances beyond that update
+- **AND** the message is not processed twice
 
 ### Requirement: Teams Bot Framework integration
 
-The system SHALL expose a Bot Framework messaging endpoint for Microsoft Teams, SHALL rely on the Bot Framework SDK to authenticate inbound activities, and SHALL be operable against the Bot Framework Emulator without a Microsoft 365 tenant.
+The system SHALL expose a Bot Framework messaging endpoint for Microsoft Teams, SHALL rely on the Bot Framework SDK to authenticate inbound activities, and SHALL support local adapter verification with the Bot Framework Emulator.
 
 #### Scenario: Activity received and answered
 
@@ -89,6 +84,12 @@ The system SHALL expose a Bot Framework messaging endpoint for Microsoft Teams, 
 
 - **WHEN** the Bot Framework Emulator is pointed at the messaging endpoint
 - **THEN** questions can be asked and answered without any Azure or Microsoft 365 tenant
+
+#### Scenario: Real Teams delivery acceptance
+
+- **WHEN** the channel increment is declared complete
+- **THEN** a question and cited answer have completed a round trip in the target Microsoft Teams tenant
+- **AND** emulator-only success is not treated as delivery acceptance
 
 #### Scenario: Unauthenticated activity rejected
 
@@ -163,7 +164,7 @@ The system SHALL store chat platform credentials encrypted at rest using a symme
 
 ### Requirement: Channel-appropriate outbound formatting
 
-The system SHALL format each answer for its destination channel, respecting that channel's message length limit and markup syntax, and SHALL escape characters reserved in that channel's markup.
+The query pipeline SHALL format each answer exactly once for its destination channel, respecting that channel's message length limit and markup syntax, and SHALL escape characters reserved in that channel's markup. Channel adapters SHALL deliver the returned text without a second formatting pass.
 
 #### Scenario: Telegram limit respected
 
@@ -180,6 +181,11 @@ The system SHALL format each answer for its destination channel, respecting that
 
 - **WHEN** an answer carries citations
 - **THEN** they are rendered in a form appropriate to the destination channel
+
+#### Scenario: Telegram markup escaped once
+
+- **WHEN** the query pipeline returns Telegram-safe text
+- **THEN** the Telegram adapter sends that text without escaping it again
 
 ### Requirement: Delivery acknowledgement during processing
 
@@ -231,13 +237,19 @@ The system SHALL record integration errors — authentication failures, delivery
 
 ### Requirement: End-to-end integration test
 
-The system SHALL provide an admin-triggered test per channel that sends a sample query through the full pipeline and delivers it to that channel, and SHALL report the outcome, the failing stage on failure, and the measured round-trip latency.
+The system SHALL remember the most recent successful reply destination for each channel and SHALL provide an admin-triggered test that sends a sample query through the full pipeline to that destination. It SHALL report the outcome, failing stage, and measured latency through completion of delivery.
 
 #### Scenario: Test passes
 
 - **WHEN** an admin runs the test for a configured channel
 - **THEN** a sample question is processed through classification, retrieval, generation, and delivery
 - **AND** the result reports success with the measured latency
+
+#### Scenario: Test has no delivery destination
+
+- **WHEN** an admin runs a channel test before any user has messaged that bot
+- **THEN** the test reports that a real user must message the bot first
+- **AND** it does not report a delivery success
 
 #### Scenario: Test fails on invalid credentials
 
