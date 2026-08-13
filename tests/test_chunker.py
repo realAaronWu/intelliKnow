@@ -11,8 +11,9 @@ from pathlib import Path
 from app.config import RAGConfig
 from app.rag.blocks import Block
 from app.rag.chunker import Chunk, chunk_blocks
+from app.rag.loaders.docx import DocxLoader
 from app.rag.loaders.pdf import PdfLoader
-from scripts.make_fixtures import SALARY_BANDS
+from scripts.make_fixtures import SALARY_BANDS, WRAPPED_TABLE_HEADER, WRAPPED_TABLE_ROWS
 
 FIXTURES = Path(__file__).parent / "fixtures" / "docs"
 
@@ -42,6 +43,59 @@ class TestTableRowsNeverSplit:
             row_line = f"| {band} | {min_val} | {mid_val} | {max_val} |"
             matches = [c for c in chunks if row_line in c.text]
             assert matches, f"row for {band!r} not found intact in any chunk"
+
+
+class TestWrappedCellTableRowsNeverSplit:
+    """"Table rows are never split" has to hold for cells that wrap.
+
+    `wrapped_table.docx`'s middle column holds two paragraphs per cell, so
+    `cell.text` carries an embedded newline. While the chunker split a
+    table by calling `text.split("\\n")`, each of those newlines looked
+    like a row boundary, so an oversized table was cut *inside* a cell —
+    the exact thing the rule forbids.
+    """
+
+    def test_multi_line_cells_never_produce_a_partial_row(self):
+        """Every table line a chunk carries must be a whole row: opened and
+        closed by a pipe, with one cell per configured column. Row identity
+        is asserted against the fixture's own known column count, never
+        against the rendered markdown re-split the same way the bug did.
+        """
+        blocks = DocxLoader().load(FIXTURES / "wrapped_table.docx")
+        table_block = next(b for b in blocks if b.kind == "table")
+        # Small enough that the table must split across several chunks.
+        cfg = RAGConfig(chunk_chars=200, chunk_overlap_chars=20)
+        assert len(table_block.text) > cfg.chunk_chars * 1.5
+
+        chunks = chunk_blocks(blocks, cfg)
+
+        columns = len(WRAPPED_TABLE_HEADER)
+        for chunk in chunks:
+            for line in chunk.text.split("\n"):
+                if "|" not in line:
+                    continue
+                assert line.startswith("|") and line.endswith("|"), (
+                    f"chunk contains a partial table row: {line!r}"
+                )
+                assert line.count("|") == columns + 1, (
+                    f"table row has {line.count('|') - 1} cells, expected "
+                    f"{columns}: {line!r}"
+                )
+
+    def test_every_source_row_survives_intact_on_one_line(self):
+        blocks = DocxLoader().load(FIXTURES / "wrapped_table.docx")
+        cfg = RAGConfig(chunk_chars=200, chunk_overlap_chars=20)
+
+        chunks = chunk_blocks(blocks, cfg)
+
+        lines = [line for chunk in chunks for line in chunk.text.split("\n")]
+        for policy, detail_paragraphs, owner in WRAPPED_TABLE_ROWS:
+            # First cell, both wrapped detail paragraphs, and last cell all
+            # have to land on the same line for the row to be intact.
+            assert any(
+                policy in line and owner in line and all(p in line for p in detail_paragraphs)
+                for line in lines
+            ), f"row {policy!r} was split or lost"
 
 
 class TestSmallOversizedTableStaysWhole:
@@ -134,11 +188,7 @@ class TestDeterministic:
         blocks = [
             Block(kind="heading", text="Section", source_ref="p. 1", heading_level=1),
             Block(kind="paragraph", text="Repeatable text. " * 15, source_ref="p. 1"),
-            Block(
-                kind="table",
-                text="| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |",
-                source_ref="p. 2",
-            ),
+            Block.table(rows=[["A", "B"], ["1", "2"], ["3", "4"]], source_ref="p. 2"),
         ]
         cfg = RAGConfig(chunk_chars=60, chunk_overlap_chars=10)
 

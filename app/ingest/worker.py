@@ -129,39 +129,27 @@ def _mark_indexed(
         )
 
 
-def _markdown_to_rows(markdown: str) -> list[list[str]]:
-    """Parse a loader-generated `| cell | cell |` markdown table back into
-    raw rows so `is_ragged` — which inspects the pre-markdown grid — can
-    look at it. Every loader in `app/rag/loaders` renders tables in this
-    exact shape (header row, a `| --- | ... |` separator, then body rows),
-    so this is not a general markdown parser — it only has to round-trip
-    what this codebase itself produces. Row index 1 (the separator) is
-    skipped.
-    """
-    lines = [line for line in markdown.strip().split("\n") if line.strip()]
-    rows: list[list[str]] = []
-    for index, line in enumerate(lines):
-        if index == 1:
-            continue
-        rows.append([cell.strip() for cell in line.strip().strip("|").split("|")])
-    return rows
-
-
 def _repair_ragged_tables(
     blocks: list[Block], llm: LLMProvider, *, doc_id: int | None = None
 ) -> list[Block]:
-    """Replace each ragged table block's text with an LLM-restructured
-    version; clean tables pass through unchanged and are never sent to the
-    model — `spec: document-ingestion` § "Clean tables are not sent to the
-    model".
+    """Replace each ragged table block with an LLM-restructured version;
+    clean tables pass through unchanged and are never sent to the model —
+    `spec: document-ingestion` § "Clean tables are not sent to the model".
+
+    Raggedness is judged on the block's own structural `rows`. It used to
+    be judged on rows reconstructed by splitting the block's rendered
+    markdown on newlines, which turned every wrapped or multi-paragraph
+    cell into a phantom short row — so a clean table full of wrapped cells
+    was declared ragged and sent to the model, in production, while the
+    single-line-cell fixtures in the test suite never noticed.
     """
     repaired: list[Block] = []
     for block in blocks:
-        if block.kind != "table" or not is_ragged(_markdown_to_rows(block.text)):
+        if block.kind != "table" or not is_ragged(block.rows or []):
             repaired.append(block)
             continue
-        new_text = repair_table(block.text, llm, doc_id=doc_id)
-        repaired.append(Block(kind="table", text=new_text, source_ref=block.source_ref))
+        new_rows = repair_table(block.rows or [], llm, doc_id=doc_id)
+        repaired.append(Block.table(rows=new_rows, source_ref=block.source_ref))
     return repaired
 
 

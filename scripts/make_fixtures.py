@@ -1,6 +1,6 @@
 """Deterministic synthetic document fixtures for the RAG write-path tests.
 
-Generates nine small documents with exactly known content, used by the
+Generates ten small documents with exactly known content, used by the
 loader tests (increment 03) instead of hand-crafted or downloaded files.
 Byte reproducibility is a hard requirement: `duplicate.pdf` must match
 `salary_bands.pdf` byte-for-byte, and every fixture must be identical
@@ -47,6 +47,52 @@ SALARY_BANDS: list[tuple[str, int, int, int]] = [
 
 REIMBURSEMENT_LIMIT_USD = 150
 REIMBURSEMENT_FORM = "Form FIN-204"
+
+# A perfectly rectangular table whose middle column holds *multi-paragraph*
+# cells — the single most common real-world table shape that neither
+# pdfplumber nor python-docx flattens for you: `cell.text` comes back with
+# an embedded "\n". The grid itself is clean (three columns on every row,
+# no empty cells), so nothing here should ever be sent to the LLM for
+# repair, and no chunk boundary should ever fall inside one of these rows.
+# Both properties were broken while table structure was carried only as
+# rendered markdown that later code split on "\n".
+WRAPPED_TABLE_HEADER = ["Policy", "Detail", "Owner"]
+
+#: (first cell, the detail cell's paragraphs, last cell)
+WRAPPED_TABLE_ROWS: list[tuple[str, list[str], str]] = [
+    (
+        "Annual leave",
+        [
+            f"Full-time employees accrue {ANNUAL_LEAVE_DAYS} days per calendar year.",
+            "Prorated for partial years of service.",
+        ],
+        "HR",
+    ),
+    (
+        "Expenses",
+        [
+            f"Meals are reimbursed up to {REIMBURSEMENT_LIMIT_USD} USD per day.",
+            f"Submit receipts using {REIMBURSEMENT_FORM}.",
+        ],
+        "Finance",
+    ),
+    (
+        "Equipment",
+        [
+            "One laptop per employee, refreshed every three years.",
+            "Damaged hardware is replaced within five working days.",
+        ],
+        "Operations",
+    ),
+    (
+        "Access",
+        [
+            "VPN access requires manager approval.",
+            "Requests are processed within one business day.",
+        ],
+        "Operations",
+    ),
+]
 
 BUDGET_SHEET_NAMES = ["Summary", "Q1 Actuals"]
 # Cell -> computed value for the formula cells on the "Q1 Actuals" sheet.
@@ -323,6 +369,34 @@ def _make_expense_policy(path: Path) -> None:
     _freeze_zip(path)
 
 
+def _make_wrapped_table(path: Path) -> None:
+    """A clean three-column table whose middle cells each hold two
+    paragraphs, so `cell.text` reads back with an embedded newline. See
+    `WRAPPED_TABLE_ROWS`.
+    """
+    document = Document()
+    _pin_docx_core_properties(document)
+
+    document.add_heading("Policy Summary", level=1)
+    table = document.add_table(rows=1 + len(WRAPPED_TABLE_ROWS), cols=3)
+    table.style = "Table Grid"
+
+    for column, heading in enumerate(WRAPPED_TABLE_HEADER):
+        table.rows[0].cells[column].text = heading
+
+    for index, (policy, detail_paragraphs, owner) in enumerate(WRAPPED_TABLE_ROWS, start=1):
+        cells = table.rows[index].cells
+        cells[0].text = policy
+        first, *rest = detail_paragraphs
+        cells[1].text = first
+        for paragraph in rest:
+            cells[1].add_paragraph(paragraph)
+        cells[2].text = owner
+
+    document.save(str(path))
+    _freeze_zip(path)
+
+
 # ---------------------------------------------------------------------------
 # XLSX fixture
 # ---------------------------------------------------------------------------
@@ -357,7 +431,7 @@ def _make_budget(path: Path) -> None:
 
 
 def build_all(out_dir: Path) -> list[Path]:
-    """Generate all nine fixtures into `out_dir` (created if needed).
+    """Generate all ten fixtures into `out_dir` (created if needed).
 
     Returns the list of written paths. Deterministic: calling this twice
     into different directories produces byte-identical files.
@@ -370,6 +444,7 @@ def build_all(out_dir: Path) -> list[Path]:
     ragged_path = out_dir / "ragged_salary_grid.pdf"
     nda_path = out_dir / "nda.docx"
     expense_policy_path = out_dir / "expense_policy.docx"
+    wrapped_table_path = out_dir / "wrapped_table.docx"
     budget_path = out_dir / "budget.xlsx"
     corrupt_path = out_dir / "corrupt.pdf"
     scanned_path = out_dir / "scanned.pdf"
@@ -380,6 +455,7 @@ def build_all(out_dir: Path) -> list[Path]:
     _make_ragged_salary_grid(ragged_path)
     _make_nda(nda_path)
     _make_expense_policy(expense_policy_path)
+    _make_wrapped_table(wrapped_table_path)
     _make_budget(budget_path)
     _make_corrupt(salary_bands_path.read_bytes(), corrupt_path)
     _make_scanned(scanned_path)
@@ -391,6 +467,7 @@ def build_all(out_dir: Path) -> list[Path]:
         ragged_path,
         nda_path,
         expense_policy_path,
+        wrapped_table_path,
         budget_path,
         corrupt_path,
         scanned_path,

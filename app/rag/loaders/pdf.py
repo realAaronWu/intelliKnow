@@ -72,9 +72,7 @@ class PdfLoader:
                     blocks.append(Block(kind="paragraph", text=line.text, source_ref=ref))
 
             for table in tables:
-                blocks.append(
-                    Block(kind="table", text=_table_to_markdown(table), source_ref=ref)
-                )
+                blocks.append(Block.table(rows=table, source_ref=ref))
 
         if not blocks:
             raise LoaderError(
@@ -178,17 +176,3 @@ def _heading_level_map(page_lines: list[list[_Line]]) -> dict[float, int]:
         reverse=True,
     )
     return {size: level for level, size in enumerate(heading_sizes, start=1)}
-
-
-def _table_to_markdown(table: list[list[str | None]]) -> str:
-    if not table:
-        return ""
-    rows = [[cell.strip() if cell else "" for cell in row] for row in table]
-    header, *body = rows
-    lines = [
-        "| " + " | ".join(header) + " |",
-        "| " + " | ".join("---" for _ in header) + " |",
-    ]
-    for row in body:
-        lines.append("| " + " | ".join(row) + " |")
-    return "\n".join(lines)

@@ -47,34 +47,49 @@ class TestIsRagged:
         assert is_ragged([]) is False
 
 
+RAGGED_ROWS = [
+    ["Band", "", "Min", "Mid", "Max"],
+    ["Band", "1 (merged)", "", "38000", "44000"],
+    ["Band", "2", "45000", "52000-59000", ""],
+]
+
+
 class TestRepairTable:
+    """`repair_table` takes and returns the structural grid, never
+    markdown: a repaired table has to re-enter the pipeline the same shape
+    a loader produces, so that `render_table_markdown` stays the one place
+    a table becomes text (see `app/rag/blocks.py`).
+    """
+
     def test_ragged_region_repaired_by_llm(self):
         llm = FakeLLMProvider()
-        llm.expect_schema(
-            {
-                "rows": [
-                    ["Band", "Min", "Mid", "Max"],
-                    ["Band 1", "32000", "38000", "44000"],
-                ]
-            }
-        )
-        raw_text = "Band (merged) 38000 44000"
+        repaired = [
+            ["Band", "Min", "Mid", "Max"],
+            ["Band 1", "32000", "38000", "44000"],
+        ]
+        llm.expect_schema({"rows": repaired})
 
-        result = repair_table(raw_text, llm)
+        result = repair_table(RAGGED_ROWS, llm)
 
         assert len(llm.calls) == 1
-        assert result != raw_text
-        assert "Band 1" in result
-        assert "32000" in result
+        assert result == repaired
 
-    def test_provider_failure_falls_back_to_raw_text(self):
+    def test_the_ragged_table_is_sent_to_the_model_as_rendered_markdown(self):
+        llm = FakeLLMProvider()
+        llm.expect_schema({"rows": [["Band", "Min"], ["Band 1", "32000"]]})
+
+        repair_table(RAGGED_ROWS, llm)
+
+        sent = llm.calls[0]["user"]
+        assert "| Band |  | Min | Mid | Max |" in sent
+
+    def test_provider_failure_falls_back_to_the_original_rows(self):
         llm = FakeLLMProvider()
         llm.fail_next(ProviderError.timeout("timed out"))
-        raw_text = "ragged raw table text"
 
-        result = repair_table(raw_text, llm)
+        result = repair_table(RAGGED_ROWS, llm)
 
-        assert result == raw_text
+        assert result == RAGGED_ROWS
 
     def test_provider_failure_logs_a_warning_naming_the_document(self, caplog):
         """DEFECT 2's fallback-visibility fix applies here too: a silent
@@ -83,47 +98,43 @@ class TestRepairTable:
         """
         llm = FakeLLMProvider()
         llm.fail_next(ProviderError.timeout("timed out"))
-        raw_text = "ragged raw table text"
 
         with caplog.at_level(logging.WARNING, logger="app.rag.tables"):
-            result = repair_table(raw_text, llm, doc_id=7)
+            result = repair_table(RAGGED_ROWS, llm, doc_id=7)
 
-        assert result == raw_text
+        assert result == RAGGED_ROWS
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1
         message = warnings[0].getMessage()
         assert "7" in message
         assert "timeout" in message
 
-    def test_invalid_structure_falls_back_to_raw_text(self):
+    def test_invalid_structure_falls_back_to_the_original_rows(self):
         llm = FakeLLMProvider()
         llm.expect_schema({"rows": "not-a-table"})
-        raw_text = "ragged raw table text"
 
-        result = repair_table(raw_text, llm)
+        result = repair_table(RAGGED_ROWS, llm)
 
-        assert result == raw_text
+        assert result == RAGGED_ROWS
 
-    def test_missing_rows_key_falls_back_to_raw_text(self):
+    def test_missing_rows_key_falls_back_to_the_original_rows(self):
         llm = FakeLLMProvider()
         llm.expect_schema({"unexpected": "shape"})
-        raw_text = "ragged raw table text"
 
-        result = repair_table(raw_text, llm)
+        result = repair_table(RAGGED_ROWS, llm)
 
-        assert result == raw_text
+        assert result == RAGGED_ROWS
 
-    def test_ragged_rows_returned_by_llm_falls_back_to_raw_text(self):
+    def test_ragged_rows_returned_by_llm_falls_back_to_the_original_rows(self):
         # The whole point of repair is a *clean* table — if the model's own
-        # answer is itself ragged, trust the raw text instead of silently
-        # swapping one ragged rendering for another.
+        # answer is itself ragged, trust the raw extraction instead of
+        # silently swapping one ragged grid for another.
         llm = FakeLLMProvider()
         llm.expect_schema({"rows": [["a", "b", "c"], ["d", "e"]]})
-        raw_text = "ragged raw table text"
 
-        result = repair_table(raw_text, llm)
+        result = repair_table(RAGGED_ROWS, llm)
 
-        assert result == raw_text
+        assert result == RAGGED_ROWS
 
 
 class TestCleanTableCostsNothing:

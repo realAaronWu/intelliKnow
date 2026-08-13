@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.rag.blocks import Block, DocumentLoader, LoaderError
+from app.rag.blocks import Block, DocumentLoader, LoaderError, render_table_markdown
 
 
 class TestBlock:
@@ -24,7 +24,7 @@ class TestBlock:
         assert block.heading_level is None
 
     def test_table_block_defaults_heading_level_to_none(self):
-        block = Block(kind="table", text="| a | b |", source_ref="p. 1")
+        block = Block.table(rows=[["a", "b"]], source_ref="p. 1")
 
         assert block.heading_level is None
 
@@ -38,7 +38,13 @@ class TestBlock:
 
     def test_table_with_level_is_rejected(self):
         with pytest.raises(ValueError):
-            Block(kind="table", text="| a | b |", source_ref="p. 1", heading_level=1)
+            Block(
+                kind="table",
+                text="| a | b |",
+                source_ref="p. 1",
+                heading_level=1,
+                rows=[["a", "b"]],
+            )
 
     def test_source_ref_is_carried(self):
         block = Block(kind="paragraph", text="Some body text.", source_ref="p. 4")
@@ -46,12 +52,73 @@ class TestBlock:
         assert block.source_ref == "p. 4"
 
 
+class TestTableBlockStructure:
+    """A table block carries its grid structurally, and its markdown is
+    derived from that grid — never the other way round. See
+    `app/rag/blocks.py`'s module docstring for why the direction matters.
+    """
+
+    def test_table_block_carries_its_rows(self):
+        block = Block.table(rows=[["A", "B"], ["1", "2"]], source_ref="p. 1")
+
+        assert block.rows == [["A", "B"], ["1", "2"]]
+
+    def test_table_block_renders_its_rows_to_markdown(self):
+        block = Block.table(rows=[["A", "B"], ["1", "2"]], source_ref="p. 1")
+
+        assert block.text == "| A | B |\n| --- | --- |\n| 1 | 2 |"
+
+    def test_a_table_block_without_rows_is_rejected(self):
+        with pytest.raises(ValueError, match="structural rows"):
+            Block(kind="table", text="| a | b |", source_ref="p. 1")
+
+    def test_rows_on_a_non_table_block_is_rejected(self):
+        with pytest.raises(ValueError, match="only valid on table blocks"):
+            Block(kind="paragraph", text="text", source_ref="p. 1", rows=[["a"]])
+
+    def test_a_wrapped_cell_renders_on_a_single_line(self):
+        """python-docx joins a multi-paragraph cell's paragraphs with "\\n"
+        and pdfplumber returns newlines for any wrapped cell. A rendered
+        row must still occupy exactly one line, or every later stage that
+        reasons about rows sees phantom ones.
+        """
+        block = Block.table(
+            rows=[["Policy", "Detail"], ["Leave", "25 days a year.\nProrated."]],
+            source_ref="¶ 1",
+        )
+
+        assert len(block.text.split("\n")) == 3
+        assert "| Leave | 25 days a year. Prorated. |" in block.text
+
+    def test_a_pipe_inside_a_cell_is_escaped_when_rendered_but_kept_in_rows(self):
+        block = Block.table(rows=[["A"], ["x | y"]], source_ref="p. 1")
+
+        # The grid keeps the cell's real value; only the rendering escapes.
+        assert block.rows == [["A"], ["x | y"]]
+        assert block.text.splitlines()[-1] == r"| x \| y |"
+
+    def test_rendering_is_idempotent_over_an_already_normalized_grid(self):
+        """`Block.table` normalizes, then renders. Re-rendering the stored
+        rows — which the chunker's table splitter does for every piece —
+        must not escape an escape.
+        """
+        block = Block.table(rows=[["A"], ["x | y"]], source_ref="p. 1")
+
+        assert render_table_markdown(block.rows) == block.text
+
+    def test_an_empty_cell_is_rendered_blank_rather_than_none(self):
+        block = Block.table(rows=[["A", "B"], ["1", None]], source_ref="p. 1")
+
+        assert block.rows == [["A", "B"], ["1", ""]]
+        assert block.text.splitlines()[-1] == "| 1 |  |"
+
+
 class TestBlockOrdering:
     def test_blocks_preserve_document_order(self):
         blocks = [
             Block(kind="heading", text="Title", source_ref="p. 1", heading_level=1),
             Block(kind="paragraph", text="First paragraph.", source_ref="p. 1"),
-            Block(kind="table", text="| a | b |", source_ref="p. 1"),
+            Block.table(rows=[["a", "b"]], source_ref="p. 1"),
             Block(kind="paragraph", text="Second paragraph.", source_ref="p. 2"),
         ]
 

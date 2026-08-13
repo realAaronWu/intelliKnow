@@ -7,11 +7,15 @@ what a merged-cell salary grid produces once its cells are read back as
 plain text. `is_ragged` is a cheap, local check with no external calls, so
 it can gate every extracted table without cost.
 
-`repair_table` sends only the flagged raw text to an `LLMProvider` with a
-schema requesting a clean rectangular table, and its result replaces the
-extraction. Any provider failure — or a response that, even though
-schema-valid JSON, is not itself a clean rectangular table — falls back to
-the original raw text so ingestion always completes. Both fallback paths
+`repair_table` takes and returns the structural grid — never markdown —
+so a repaired table re-enters the pipeline the same shape a loader
+produces, and `app/rag/blocks.py::render_table_markdown` stays the one
+place a table becomes text. It sends the flagged region to an
+`LLMProvider` with a schema requesting a clean rectangular table, and its
+result replaces the extraction. Any provider failure — or a response
+that, even though schema-valid JSON, is not itself a clean rectangular
+table — falls back to the original rows so ingestion always completes.
+Both fallback paths
 log a warning (naming the document, when known, and — for a provider
 failure — the error category) so a repair that silently gave up is visible
 in service output rather than indistinguishable from a table that was
@@ -24,6 +28,7 @@ from __future__ import annotations
 import logging
 
 from app.providers.base import LLMProvider, ProviderError
+from app.rag.blocks import render_table_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -71,20 +76,25 @@ def is_ragged(rows: list[list[str]]) -> bool:
     return empty_cells * 2 > total_cells
 
 
-def repair_table(raw_text: str, llm: LLMProvider, *, doc_id: int | None = None) -> str:
-    """Ask `llm` to restructure a ragged table's raw text into a clean one.
+def repair_table(
+    rows: list[list[str]], llm: LLMProvider, *, doc_id: int | None = None
+) -> list[list[str]]:
+    """Ask `llm` to restructure a ragged table's grid into a clean one.
 
-    Returns the corrected table as markdown on success. Falls back to
-    `raw_text` unchanged if the provider call fails, or if it succeeds but
-    the returned structure is not itself a clean rectangular table — never
-    raises, so a bad repair attempt cannot block ingestion. Either fallback
-    logs a warning naming `doc_id` (when the caller has one) so the
-    degraded repair is visible rather than silent.
+    Returns the corrected grid on success. Falls back to `rows` unchanged
+    if the provider call fails, or if it succeeds but the returned
+    structure is not itself a clean rectangular table — never raises, so a
+    bad repair attempt cannot block ingestion. Either fallback logs a
+    warning naming `doc_id` (when the caller has one) so the degraded
+    repair is visible rather than silent.
     """
     try:
         result = llm.complete(
             system=_REPAIR_SYSTEM_PROMPT,
-            user=f"Ragged table text extracted from a document:\n\n{raw_text}",
+            user=(
+                "Ragged table extracted from a document:\n\n"
+                f"{render_table_markdown(rows)}"
+            ),
             schema=_TABLE_SCHEMA,
         )
     except ProviderError as exc:
@@ -95,18 +105,18 @@ def repair_table(raw_text: str, llm: LLMProvider, *, doc_id: int | None = None) 
             exc.category,
             exc,
         )
-        return raw_text
+        return rows
 
-    rows = _clean_rows(result.parsed)
-    if rows is None:
+    repaired = _clean_rows(result.parsed)
+    if repaired is None:
         logger.warning(
             "table repair for document %s fell back to raw extracted text: "
             "model response was not a clean rectangular table",
             doc_id,
         )
-        return raw_text
+        return rows
 
-    return _rows_to_markdown(rows)
+    return repaired
 
 
 def _clean_rows(parsed: dict | None) -> list[list[str]] | None:
@@ -130,14 +140,3 @@ def _clean_rows(parsed: dict | None) -> list[list[str]] | None:
         return None
 
     return rows
-
-
-def _rows_to_markdown(rows: list[list[str]]) -> str:
-    header, *body = rows
-    lines = [
-        "| " + " | ".join(header) + " |",
-        "| " + " | ".join("---" for _ in header) + " |",
-    ]
-    for row in body:
-        lines.append("| " + " | ".join(row) + " |")
-    return "\n".join(lines)

@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.config import RAGConfig
-from app.rag.blocks import Block
+from app.rag.blocks import Block, render_table_markdown
 
 # A table is left whole even when it exceeds the target size, as long as
 # it's under this multiple of it — splitting a small, mildly-oversized
@@ -130,7 +130,7 @@ def _chunk_section(blocks: list[Block], target: int, overlap: int) -> list[_RawC
     for block in blocks:
         if block.kind == "table":
             flush_pending()
-            for piece in _split_table_pieces(block.text, target):
+            for piece in _split_table_pieces(block.rows or [], target):
                 raw_chunks.append(_RawChunk(body=piece, source_ref=block.source_ref))
         else:
             pending.append((block.text, block.source_ref))
@@ -184,41 +184,48 @@ def _refs_in_range(spans: list[tuple[int, int, str]], start: int, end: int) -> s
     return ", ".join(ordered)
 
 
-def _split_table_pieces(text: str, target: int) -> list[str]:
-    """Split a table's markdown into pieces that never break a row.
+def _split_table_pieces(rows: list[list[str]], target: int) -> list[str]:
+    """Split a table's grid into rendered pieces that never break a row.
+
+    Splitting is decided on the structural grid and each piece is rendered
+    from whole rows, so a cell whose own text contains a newline cannot be
+    mistaken for a row boundary. (It was: this used to split the rendered
+    markdown on "\\n", which cut oversized tables *inside* a wrapped cell
+    and broke the "a table row is never split" rule for every real-world
+    table with multi-line cells.)
 
     A table under `_TABLE_WHOLE_RATIO * target` stays whole. A larger one
-    splits by whole rows, repeating the header and separator in every
-    piece so each remains a self-contained, readable table; a single row
-    line is never divided even if it alone exceeds the target.
+    splits by whole rows, repeating the header in every piece so each
+    remains a self-contained, readable table; a single row is never
+    divided even if it alone exceeds the target.
     """
-    if len(text) < target * _TABLE_WHOLE_RATIO:
-        return [text]
+    whole = render_table_markdown(rows)
+    if len(whole) < target * _TABLE_WHOLE_RATIO:
+        return [whole]
 
-    lines = text.split("\n")
-    if len(lines) < 3:
-        return [text]
-    header, separator, *rows = lines
-    if not rows:
-        return [text]
+    header, *body = rows
+    if not body:
+        return [whole]
 
-    header_cost = len(header) + len(separator) + 2
+    # The header line plus the `| --- |` separator line, both repeated in
+    # every piece — charge them against the target up front.
+    header_cost = len(render_table_markdown([header])) + 1
     pieces: list[str] = []
-    current_rows: list[str] = []
+    current: list[list[str]] = []
     current_len = header_cost
 
     def flush() -> None:
-        if current_rows:
-            pieces.append("\n".join([header, separator, *current_rows]))
+        if current:
+            pieces.append(render_table_markdown([header, *current]))
 
-    for row in rows:
-        row_cost = len(row) + 1
-        if current_rows and current_len + row_cost > target:
+    for row in body:
+        row_cost = len(render_table_markdown([header, row])) - header_cost + 1
+        if current and current_len + row_cost > target:
             flush()
-            current_rows = []
+            current = []
             current_len = header_cost
-        current_rows.append(row)
+        current.append(row)
         current_len += row_cost
 
     flush()
-    return pieces if pieces else [text]
+    return pieces if pieces else [whole]

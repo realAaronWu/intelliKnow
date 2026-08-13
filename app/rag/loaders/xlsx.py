@@ -36,7 +36,7 @@ class XlsxLoader:
             if not rows:
                 continue
             ref = f"{sheet.title}!{sheet.dimensions}"
-            blocks.append(Block(kind="table", text=_table_to_markdown(rows), source_ref=ref))
+            blocks.append(Block.table(rows=[list(row) for row in rows], source_ref=ref))
 
         if not blocks:
             raise LoaderError(f"{path.name} contains no sheets with data")
@@ -44,19 +44,3 @@ class XlsxLoader:
         return blocks
 
 
-def _cell_str(value: object) -> str:
-    if value is None:
-        return ""
-    return str(value)
-
-
-def _table_to_markdown(rows: list[tuple]) -> str:
-    header, *body = rows
-    header_cells = [_cell_str(c) for c in header]
-    lines = [
-        "| " + " | ".join(header_cells) + " |",
-        "| " + " | ".join("---" for _ in header_cells) + " |",
-    ]
-    for row in body:
-        lines.append("| " + " | ".join(_cell_str(c) for c in row) + " |")
-    return "\n".join(lines)

@@ -49,7 +49,7 @@ class DocxLoader:
             elif isinstance(item, DocxTable):
                 ref_counter += 1
                 ref = f"¶ {ref_counter}"
-                blocks.append(Block(kind="table", text=_table_to_markdown(item), source_ref=ref))
+                blocks.append(Block.table(rows=_table_rows(item), source_ref=ref))
 
         if not blocks:
             raise LoaderError(f"{path.name} contains no extractable content")
@@ -83,15 +83,12 @@ def _heading_level(style_name: str | None) -> int | None:
     return None
 
 
-def _table_to_markdown(table: DocxTable) -> str:
-    rows = [[cell.text.strip() for cell in row.cells] for row in table.rows]
-    if not rows:
-        return ""
-    header, *body = rows
-    lines = [
-        "| " + " | ".join(header) + " |",
-        "| " + " | ".join("---" for _ in header) + " |",
-    ]
-    for row in body:
-        lines.append("| " + " | ".join(row) + " |")
-    return "\n".join(lines)
+def _table_rows(table: DocxTable) -> list[list[str]]:
+    """The table's cells as a raw grid.
+
+    `cell.text` joins a multi-paragraph cell's paragraphs with newlines,
+    so these strings routinely contain "\\n" — `Block.table` normalizes
+    that away when it renders, and the structural grid is what every
+    downstream row-level decision reads.
+    """
+    return [[cell.text for cell in row.cells] for row in table.rows]

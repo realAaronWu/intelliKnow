@@ -318,6 +318,38 @@ def test_ragged_table_document_triggers_repair_and_still_indexes(engine, store, 
     }
 
 
+def test_table_with_wrapped_multi_line_cells_is_not_treated_as_ragged(engine, store, cfg):
+    """`wrapped_table.docx` is a perfectly rectangular 3-column grid whose
+    middle cells each hold two paragraphs, so `cell.text` carries an
+    embedded newline — the single most common real-world table shape.
+
+    While table structure survived loading only as rendered markdown, the
+    raggedness check reconstructed the grid by splitting that markdown on
+    "\\n", so every wrapped cell manufactured a phantom short row and this
+    clean table was declared ragged. That fired an LLM call per table in
+    production while test 4.5's "clean tables cost nothing" guard — which
+    only ever saw single-line cells — kept passing.
+    """
+    llm = FakeLLMProvider()
+    llm.expect_schema({"slug": "hr"})  # intent suggestion only; no repair call
+    embedder = FakeEmbeddingProvider(dimension=DIMENSION)
+    writer = IndexWriter(engine, store, embedder)
+    deps = IngestDeps(
+        engine=engine,
+        cfg=cfg,
+        classify_llm=llm,
+        embedding=embedder,
+        vector_store=store,
+        index_writer=writer,
+    )
+    doc_id = _insert_pending_document(engine, "wrapped_table.docx")
+
+    ingest_document(doc_id, FIXTURES / "wrapped_table.docx", deps)
+
+    assert _get_document(engine, doc_id).status == "indexed"
+    assert len(llm.calls) == 1, "a clean table with wrapped cells must not be sent for repair"
+
+
 def test_clean_table_document_is_not_sent_to_the_model_for_repair(engine, store, cfg):
     llm = FakeLLMProvider()
     llm.expect_schema({"slug": "finance"})  # only the intent-suggestion call

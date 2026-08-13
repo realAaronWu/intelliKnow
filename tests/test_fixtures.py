@@ -26,6 +26,7 @@ EXPECTED_FILENAMES = {
     "ragged_salary_grid.pdf",
     "nda.docx",
     "expense_policy.docx",
+    "wrapped_table.docx",
     "budget.xlsx",
     "corrupt.pdf",
     "scanned.pdf",
