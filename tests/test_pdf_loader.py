@@ -92,6 +92,72 @@ def _make_uniform_font_pdf(path: Path) -> Path:
     return path
 
 
+class TestPdfTableParagraphDedup:
+    """Covers Fix B: excluding paragraph lines by exact string match against
+    table cell values drops any prose line that happens to equal a cell
+    string — silent text loss, not duplication. Position-based exclusion
+    (cropping the table's bounding box out of the text-extraction area)
+    must fix this without losing real body text or leaking table content
+    into paragraph blocks.
+    """
+
+    def test_prose_line_matching_a_cell_value_is_not_dropped(self, tmp_path):
+        path = _make_prose_matches_cell_pdf(tmp_path / "prose_matches_cell.pdf")
+
+        blocks = PdfLoader().load(path)
+        paragraph_texts = [b.text for b in blocks if b.kind == "paragraph"]
+
+        assert "Band 1" in paragraph_texts
+
+    def test_table_cell_values_do_not_leak_into_paragraph_blocks(self, tmp_path):
+        path = _make_prose_matches_cell_pdf(tmp_path / "prose_matches_cell.pdf")
+
+        blocks = PdfLoader().load(path)
+        paragraph_texts = [b.text for b in blocks if b.kind == "paragraph"]
+        table_texts = [b.text for b in blocks if b.kind == "table"]
+
+        assert len(table_texts) == 1
+        # The prose line above the table is the only "Band 1" paragraph —
+        # the table's own "Band 1" cell must not also leak out as a second,
+        # duplicate paragraph block.
+        assert paragraph_texts.count("Band 1") == 1
+
+    def test_salary_bands_cell_values_are_not_duplicated_as_paragraphs(self):
+        blocks = PdfLoader().load(FIXTURES / "salary_bands.pdf")
+        paragraph_texts = "\n".join(b.text for b in blocks if b.kind == "paragraph")
+
+        for band, _min_val, mid_val, _max_val in SALARY_BANDS:
+            assert band not in paragraph_texts
+            assert str(mid_val) not in paragraph_texts
+
+
+def _make_prose_matches_cell_pdf(path: Path) -> Path:
+    """A paragraph whose full text ("Band 1") exactly equals a table cell
+    value in the table below it. The old string-equality de-dup dropped
+    this prose line entirely because it matched a cell string;
+    position-based exclusion keeps it, since it sits outside the table's
+    bounding box.
+    """
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    styles = getSampleStyleSheet()
+    doc = SimpleDocTemplate(str(path), pagesize=letter, invariant=1)
+    table = Table(
+        [["Band", "Value"], ["Band 1", "100"]],
+        style=TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.black)]),
+    )
+    story = [
+        Paragraph("Band 1", styles["BodyText"]),
+        Spacer(1, 12),
+        table,
+    ]
+    doc.build(story)
+    return path
+
+
 class TestPdfPageRefs:
     def test_refs_are_one_indexed_page_numbers(self):
         blocks = PdfLoader().load(FIXTURES / "handbook.pdf")

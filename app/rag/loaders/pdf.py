@@ -91,28 +91,40 @@ def _extract_pages(
     """Return, per page, the non-table text lines (with dominant font size)
     and the raw table rows.
 
-    Table cell values are excluded from the text lines by exact string
-    match — a known limitation (silent text loss when a prose line equals a
-    cell value) tracked separately and not part of this change.
+    Table regions are excluded from the text-extraction area by bounding
+    box, not by matching cell text: pdfplumber gives every detected table a
+    bbox, so cropping it out (`Page.outside_bbox`) removes exactly the
+    table's rendered area regardless of how its content happens to line up
+    into text lines. String-equality exclusion (the previous approach)
+    silently dropped any prose line that happened to equal a cell value
+    verbatim, and — because a table row's chars are often grouped into one
+    combined text line rather than one line per cell — could equally fail
+    to exclude a table's own row text. Position is the only signal immune
+    to both failure modes.
     """
     page_lines: list[list[_Line]] = []
     page_tables: list[list[list[list[str | None]]]] = []
 
     with pdfplumber.open(str(path)) as pdf:
         for page in pdf.pages:
-            tables = [table.extract() for table in page.find_tables()]
-            cell_values = _flatten_cell_values(tables)
-            page_lines.append(_extract_lines(page, exclude=cell_values))
+            found_tables = page.find_tables()
+            tables = [table.extract() for table in found_tables]
+
+            text_area = page
+            for table in found_tables:
+                text_area = text_area.outside_bbox(table.bbox)
+
+            page_lines.append(_extract_lines(text_area))
             page_tables.append(tables)
 
     return page_lines, page_tables
 
 
-def _extract_lines(page: pdfplumber.page.Page, exclude: set[str]) -> list[_Line]:
+def _extract_lines(page: pdfplumber.page.Page) -> list[_Line]:
     lines: list[_Line] = []
     for raw_line in page.extract_text_lines():
         text = raw_line["text"].strip()
-        if not text or text in exclude:
+        if not text:
             continue
         lines.append(_Line(text=text, size=_dominant_size(raw_line.get("chars") or [])))
     return lines
@@ -152,16 +164,6 @@ def _heading_level_map(page_lines: list[list[_Line]]) -> dict[float, int]:
         reverse=True,
     )
     return {size: level for level, size in enumerate(heading_sizes, start=1)}
-
-
-def _flatten_cell_values(tables: list[list[list[str | None]]]) -> set[str]:
-    values: set[str] = set()
-    for table in tables:
-        for row in table:
-            for cell in row:
-                if cell:
-                    values.add(cell.strip())
-    return values
 
 
 def _table_to_markdown(table: list[list[str | None]]) -> str:
