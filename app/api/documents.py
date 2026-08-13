@@ -148,7 +148,12 @@ def build_documents_router(deps: IngestDeps) -> APIRouter:
         if q:
             like_clause = f"filename LIKE :q_like ESCAPE '{_LIKE_ESCAPE}'"
             params["q_like"] = _like_pattern(q)
-            match_query = _fts_query(q)
+            # AND, not `_fts_query`'s OR default: this is a user-typed
+            # filter box, not a ranked retrieval feed feeding a reranker —
+            # typing an extra word should narrow the result set, the
+            # behaviour a search box implies. See `app/rag/fts_query.py`
+            # for why keyword retrieval needs the opposite default.
+            match_query = _fts_query(q, op="AND")
             if match_query:
                 clauses.append(
                     f"({like_clause} OR id IN ("

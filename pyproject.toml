@@ -30,3 +30,6 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "slow: loads a real model or hits real infra (see docs/superpowers/test-plans/04-rag-read-path-tests.md L2); excluded by `-m \"not slow\"`.",
+]
