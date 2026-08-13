@@ -21,8 +21,9 @@ class TestPdfBodyText:
         blocks = PdfLoader().load(FIXTURES / "handbook.pdf")
         paragraph_text = "\n".join(b.text for b in blocks if b.kind == "paragraph")
 
-        assert "Employee Handbook" in paragraph_text
-        assert "Leave Policy" in paragraph_text
+        # "Employee Handbook" and "Leave Policy" are headings (see
+        # TestPdfHeadings below), not paragraphs — only true body text
+        # belongs here.
         assert str(ANNUAL_LEAVE_DAYS) in paragraph_text
 
     def test_paragraphs_are_in_document_order(self):
@@ -30,8 +31,65 @@ class TestPdfBodyText:
         paragraph_text = [b.text for b in blocks if b.kind == "paragraph"]
         joined = "\n".join(paragraph_text)
 
-        assert joined.index("Employee Handbook") < joined.index("Leave Policy")
-        assert joined.index("Leave Policy") < joined.index("Compensation")
+        assert joined.index("annual") < joined.index("Salary bands are reviewed")
+
+
+class TestPdfHeadings:
+    """Covers Fix A: pypdf exposes no font metadata, so headings were never
+    classified — every non-table PDF line became a `paragraph` block, and
+    Task 5's chunker heading-path enrichment was silently inert for PDFs.
+    `handbook.pdf` has a real title + two Heading1 sections (Task 0), all
+    rendered by reportlab at the same 18pt vs. 10pt body text.
+    """
+
+    def test_title_and_heading1_lines_become_heading_blocks(self):
+        blocks = PdfLoader().load(FIXTURES / "handbook.pdf")
+        heading_texts = {b.text for b in blocks if b.kind == "heading"}
+
+        assert heading_texts == {"Employee Handbook", "Leave Policy", "Compensation"}
+
+    def test_heading_blocks_are_no_longer_paragraphs(self):
+        blocks = PdfLoader().load(FIXTURES / "handbook.pdf")
+        paragraph_texts = {b.text for b in blocks if b.kind == "paragraph"}
+
+        assert "Employee Handbook" not in paragraph_texts
+        assert "Leave Policy" not in paragraph_texts
+        assert "Compensation" not in paragraph_texts
+
+    def test_heading_level_reflects_font_size_ordering(self):
+        # reportlab's default stylesheet gives "Title" and "Heading1" the
+        # same 18pt font size, so a pure size heuristic correctly collapses
+        # both to the same (largest) level relative to the 10pt body text.
+        blocks = PdfLoader().load(FIXTURES / "handbook.pdf")
+        heading_levels = {b.text: b.heading_level for b in blocks if b.kind == "heading"}
+
+        assert heading_levels == {"Employee Handbook": 1, "Leave Policy": 1, "Compensation": 1}
+
+    def test_uniform_font_size_document_has_no_headings(self, tmp_path):
+        path = _make_uniform_font_pdf(tmp_path / "uniform.pdf")
+
+        blocks = PdfLoader().load(path)
+
+        assert not [b for b in blocks if b.kind == "heading"]
+        assert [b for b in blocks if b.kind == "paragraph"]
+
+
+def _make_uniform_font_pdf(path: Path) -> Path:
+    """A minimal PDF with every line set in the same font size — the edge
+    case the heading heuristic must handle without crashing or inventing
+    heading levels when there is no size variation to detect.
+    """
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
+    c = canvas.Canvas(str(path), pagesize=letter, invariant=1)
+    c.setFont("Helvetica", 11)
+    c.drawString(72, 700, "This is the first line of body text.")
+    c.drawString(72, 680, "This is the second line of body text.")
+    c.drawString(72, 660, "This is the third line of body text.")
+    c.showPage()
+    c.save()
+    return path
 
 
 class TestPdfPageRefs:
