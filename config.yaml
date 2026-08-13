@@ -35,12 +35,16 @@ rag:
   rerank_candidates: 20            # fused pool fed to the cross-encoder
   final_top_k: 5                   # kept after reranking
   max_context_chars: 6000
-  relevance_floor: 0.45            # on sigmoid(cross-encoder score) — CALIBRATE, see below
+  relevance_floor: 0.45            # on sigmoid(cross-encoder score) — bounded sanity check kept the
+                                    # default (see .superpowers/sdd/2026-08-08-04-rag-read-path/calibration-report.md);
+                                    # real calibration against the golden question set is still pending
 
 orchestrator:
   confidence_threshold: 0.70
   fallback_space: general
-  centroid_temperature: 0.05       # softmax over centroid similarities — CALIBRATE
+  centroid_temperature: 0.05       # softmax over centroid similarities — bounded sanity check kept the
+                                    # default (see .superpowers/sdd/2026-08-08-04-rag-read-path/calibration-report.md);
+                                    # real calibration against the golden question set is still pending
   escalate_to_llm: true            # call the LLM when centroid confidence < threshold
 
 intent_spaces:
