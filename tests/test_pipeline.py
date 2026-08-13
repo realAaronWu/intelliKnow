@@ -37,6 +37,13 @@ _GENERAL_VEC = [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
 _QUESTION = "how much annual leave do I get"
 
+# Equidistant between the HR and General centroids (each dot product is
+# 0.7071...) so, at the fixture's centroid_temperature=0.05, the softmax
+# splits close to evenly -- confidence well below the 0.70 threshold,
+# reliably triggering LLM escalation rather than a centroid-only decision.
+_AMBIGUOUS_VEC = [0.70710678, 0.70710678, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+_AMBIGUOUS_QUESTION = "what about that thing from before"
+
 _CHANNEL = ChannelProfile(name="test", max_chars=4000, markup="plain", supports_lists=True)
 
 
@@ -304,6 +311,81 @@ def test_11_6_latency_is_recorded_and_plausible(
 # reading from a live `ConfigService` — and a `ConfigService.update()`
 # (not a second, separately-constructed `AppConfig`) in between two calls
 # to `answer_question` on that same `deps`.
+
+
+# --- C3: QueryOutcome carries classification.reasoning / .failed through ---
+#
+# `classification.reasoning` and `classification.failed` were computed by
+# `classify()` and then discarded when `answer_question` built its
+# `QueryOutcome` -- structurally unable to be logged anywhere downstream.
+# These three tests drive each `QueryOutcome`-construction site in
+# `answer_question` (success, no_match, and the failed-classification path
+# that routes to no_match via fallback) and assert the new
+# `QueryOutcome.reasoning` / `.classification_failed` fields actually carry
+# `Classification`'s values through, not just exist on the dataclass.
+
+
+def test_c3_success_outcome_carries_classification_reasoning_through(
+    engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids
+):
+    _seed_matching_chunk(engine, vector_store)
+    embedder.set_vector(_AMBIGUOUS_QUESTION, _AMBIGUOUS_VEC)
+    classify_llm.expect_schema(
+        {"slug": "hr", "confidence": 0.95, "reasoning": "mentions leave, an HR topic"}
+    )
+    reranker = Reranker("fake-model", client=_FakeCrossEncoder({_CHUNK_TEXT: 5.0}))
+    generate_llm.expect_text("You get 25 days of leave. [1]")
+    deps = _deps(engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids, reranker)
+
+    outcome = answer_question(_AMBIGUOUS_QUESTION, _CHANNEL, deps)
+
+    assert outcome.status == "success"
+    assert outcome.classified_by == "llm"
+    assert outcome.reasoning == "mentions leave, an HR topic"
+    assert outcome.classification_failed is False
+
+
+def test_c3_no_match_outcome_carries_classification_reasoning_through(
+    engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids
+):
+    """Even a fallback-routed no_match (confidence below threshold) still
+    carries whatever reasoning the LLM gave for its (below-threshold) pick
+    -- the field is populated whenever `classify()` returned one, not only
+    on the success path.
+    """
+    _seed_matching_chunk(engine, vector_store)
+    embedder.set_vector(_AMBIGUOUS_QUESTION, _AMBIGUOUS_VEC)
+    classify_llm.expect_schema(
+        {"slug": "hr", "confidence": 0.2, "reasoning": "weak signal, low confidence"}
+    )
+    reranker = Reranker("fake-model", client=_FakeCrossEncoder({_CHUNK_TEXT: -10.0}))
+    deps = _deps(engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids, reranker)
+
+    outcome = answer_question(_AMBIGUOUS_QUESTION, _CHANNEL, deps)
+
+    assert outcome.status == "no_match"
+    assert outcome.reasoning == "weak signal, low confidence"
+    assert outcome.classification_failed is False
+
+
+def test_c3_classification_failure_outcome_records_classification_failed(
+    engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids
+):
+    """Classification failure (`spec: query-orchestration` § "Classification
+    failure falls back rather than failing") must be visible on the
+    `QueryOutcome` it produces, not just swallowed into a generic no_match.
+    """
+    _seed_matching_chunk(engine, vector_store)
+    embedder.set_vector(_AMBIGUOUS_QUESTION, _AMBIGUOUS_VEC)
+    classify_llm.fail_next(ProviderError.backend("classifier down"))
+    reranker = Reranker("fake-model", client=_FakeCrossEncoder({_CHUNK_TEXT: -10.0}))
+    deps = _deps(engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids, reranker)
+
+    outcome = answer_question(_AMBIGUOUS_QUESTION, _CHANNEL, deps)
+
+    assert outcome.status == "no_match"
+    assert outcome.classification_failed is True
+    assert outcome.reasoning is None
 
 
 def test_c2_relevance_floor_change_takes_effect_on_next_query_no_restart(

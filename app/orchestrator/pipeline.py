@@ -99,6 +99,8 @@ class QueryOutcome:
     intent_slug: str
     confidence: float
     classified_by: Literal["centroid", "llm"]
+    reasoning: str | None
+    classification_failed: bool
     fallback_used: bool
     status: Literal["success", "no_match", "failed"]
     retrieved_doc_ids: list[int]
@@ -134,6 +136,8 @@ def _no_match_outcome(
     intent_slug: str,
     confidence: float,
     classified_by: Literal["centroid", "llm"],
+    reasoning: str | None,
+    classification_failed: bool,
     fallback_used: bool,
     latency_ms: int,
 ) -> QueryOutcome:
@@ -149,6 +153,8 @@ def _no_match_outcome(
         intent_slug=intent_slug,
         confidence=confidence,
         classified_by=classified_by,
+        reasoning=reasoning,
+        classification_failed=classification_failed,
         fallback_used=fallback_used,
         status="no_match",
         retrieved_doc_ids=[],
@@ -200,6 +206,8 @@ def answer_question(question: str, channel: ChannelProfile, deps: PipelineDeps) 
             intent_slug=routing.logged_slug,
             confidence=classification.confidence,
             classified_by=classification.classified_by,
+            reasoning=classification.reasoning,
+            classification_failed=classification.failed,
             fallback_used=routing.fallback_used,
             latency_ms=_elapsed_ms(start),
         )
@@ -215,6 +223,8 @@ def answer_question(question: str, channel: ChannelProfile, deps: PipelineDeps) 
             intent_slug=routing.logged_slug,
             confidence=classification.confidence,
             classified_by=classification.classified_by,
+            reasoning=classification.reasoning,
+            classification_failed=classification.failed,
             fallback_used=routing.fallback_used,
             status="failed",
             retrieved_doc_ids=[],
@@ -232,6 +242,8 @@ def answer_question(question: str, channel: ChannelProfile, deps: PipelineDeps) 
         intent_slug=routing.logged_slug,
         confidence=classification.confidence,
         classified_by=classification.classified_by,
+        reasoning=classification.reasoning,
+        classification_failed=classification.failed,
         fallback_used=routing.fallback_used,
         status="success",
         retrieved_doc_ids=retrieved_doc_ids,
