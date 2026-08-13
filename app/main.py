@@ -133,7 +133,11 @@ def _build_pipeline_deps(
 
     return PipelineDeps(
         engine=engine,
-        cfg=cfg,
+        # `application.config` re-reads `application.config_service.
+        # current` on every access, so this stays live across any
+        # `ConfigService.update()`/`.reload()` made on that same service —
+        # see `PipelineDeps.get_cfg`'s docstring (C2).
+        get_cfg=lambda: application.config,
         embedding=application.embedding,
         classify_llm=application.classify_llm,
         generate_llm=application.generate_llm,

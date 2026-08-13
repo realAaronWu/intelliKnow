@@ -79,6 +79,23 @@ class Reranker:
             self._client = sentence_transformers.CrossEncoder(self._model_name)
         return self._client
 
+    def set_model(self, model_name: str) -> None:
+        """Point this instance at `model_name`, discarding any cached
+        client for a different one so the next `.score()`/`.rerank()` call
+        lazily loads it instead of silently continuing to score with the
+        old model.
+
+        A caller holding a live config (`app/orchestrator/pipeline.py::
+        answer_question`) calls this on every query — a no-op, cheap
+        string comparison, when the name hasn't changed (the common case),
+        so the cached model survives across queries exactly as before this
+        method existed; `tests/test_rerank.py`'s "model loads once, not
+        reloaded per query" guarantee still holds.
+        """
+        if model_name != self._model_name:
+            self._model_name = model_name
+            self._client = None
+
     def score(self, question: str, chunks: list[str]) -> list[float]:
         """Score every (question, chunk) pair in one batch call."""
         if not chunks:

@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Literal
+from typing import Callable, Literal
 
 from sqlalchemy.engine import Engine
 
@@ -67,10 +67,23 @@ class PipelineDeps:
     per-call so their (comparatively expensive) setup — embedding every
     space's centroid text, loading the cross-encoder model — happens once,
     not once per query.
+
+    `get_cfg` — not a plain `cfg: AppConfig` — is deliberate: a plain field
+    is a value captured once, at construction time, and `ConfigService.
+    update()`/`.reload()` rebind to a *new* `AppConfig` rather than
+    mutating the old one in place, so a snapshot field would silently stop
+    tracking config changes made after wiring. `get_cfg` is a zero-argument
+    callable a caller points at a live source — production wires
+    `lambda: application.config` (itself `application.config_service.
+    current`, always the latest); a test that wants a fixed config for its
+    lifetime just wires `lambda: cfg` for some `cfg` it holds. Either way
+    `answer_question` calls it exactly once per query, at the top, so every
+    stage downstream sees one consistent config for that query — never a
+    mix of old and new values from a config that changed mid-request.
     """
 
     engine: Engine
-    cfg: AppConfig
+    get_cfg: Callable[[], AppConfig]
     embedding: EmbeddingProvider
     classify_llm: LLMProvider
     generate_llm: LLMProvider
@@ -153,16 +166,30 @@ def answer_question(question: str, channel: ChannelProfile, deps: PipelineDeps) 
     "degrade to a recorded status, never crash the caller" contract.
     """
     start = time.perf_counter()
-    cfg = deps.cfg
+    # Read once, here, so every stage below sees one consistent config for
+    # this query — never a mix of old and new values from a config that
+    # changed mid-request. See `PipelineDeps.get_cfg`'s docstring for why
+    # this is a call, not a stored value.
+    cfg = deps.get_cfg()
 
     [query_vector] = deps.embedding.embed([question])
 
+    # No-op when `intent_spaces` hasn't changed since the last query (the
+    # common case) — otherwise rebuilds the centroids from the edited
+    # config. Either way `deps.centroids` now reflects the current
+    # `centroid_temperature` too. See `CentroidIndex.sync`'s docstring.
+    deps.centroids.sync(cfg)
     classification = classify(question, query_vector, cfg, deps.centroids, deps.classify_llm)
     routing = decide_spaces(classification, cfg)
 
     dense_hits = dense_search(query_vector, routing.spaces, cfg.rag.vector_top_n, deps.vector_store)
     keyword_hits = keyword_search(question, routing.spaces, cfg.rag.keyword_top_n, deps.engine)
     fused = fuse(dense_hits, keyword_hits, cfg.rag.rrf_k, cfg.rag.rerank_candidates)
+    # No-op when the configured model name hasn't changed — otherwise
+    # discards the cached cross-encoder client so the next call below
+    # loads the newly configured model instead of silently continuing to
+    # score with the old one. See `Reranker.set_model`'s docstring.
+    deps.reranker.set_model(cfg.rag.rerank_model)
     ranked = deps.reranker.rerank(question, fused, deps.engine, cfg.rag.final_top_k)
 
     if not passes_gate(ranked, cfg.rag.relevance_floor):

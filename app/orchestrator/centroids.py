@@ -18,12 +18,16 @@ Query vectors arrive already unit-normalized from the embedding provider
 same provider, so a plain dot product **is** cosine similarity — no
 separate normalization step is needed here.
 
-`rebuild()` recomputes every centroid from the current (or a newly
-supplied) `AppConfig`. Nothing in this module watches `ConfigService` for
-changes on its own — a caller that holds a live config (an admin
-intent-space editor, wired in a later increment) calls `rebuild(new_cfg)`
-after a save, which is what makes "a keyword edit moves the centroid with
-no restart and no re-indexing" true without this index polling anything.
+`rebuild()` recomputes every centroid unconditionally, from the current
+(or a newly supplied) `AppConfig`. Nothing in this module watches
+`ConfigService` for changes on its own — a caller that holds a live
+config calls `sync(new_cfg)` on every query (`app/orchestrator/
+pipeline.py::answer_question` does exactly this), which rebuilds only
+when `intent_spaces` actually changed and otherwise just adopts the new
+config for its other live-reloadable fields (`centroid_temperature`).
+That is what makes "a keyword edit moves the centroid with no restart and
+no re-indexing" true without this index polling anything or re-embedding
+on every single query regardless of whether anything changed.
 """
 
 from __future__ import annotations
@@ -95,6 +99,31 @@ class CentroidIndex:
         texts = [_space_text(space) for space in spaces]
         vectors = self._embedder.embed(texts) if texts else []
         self._centroids = {space.slug: vector for space, vector in zip(spaces, vectors)}
+
+    def sync(self, cfg: AppConfig) -> None:
+        """Adopt `cfg` as this index's current config, rebuilding centroids
+        only if `intent_spaces` actually changed since the last build.
+
+        This is the seam a caller holding a *live* config source calls on
+        every query (`app/orchestrator/pipeline.py::answer_question`),
+        rather than `rebuild()` directly: re-embedding every space on every
+        single query — regardless of whether anything changed — would
+        reintroduce exactly the "more than one embedding call per query"
+        defect `spec: query-orchestration` § "Query embedding is reused"
+        exists to prevent. Comparing `intent_spaces` (a list of ordinary
+        pydantic models, compared by field value) is a handful of string/
+        list comparisons, not I/O, so paying that cost every query is fine.
+
+        Even when no rebuild is needed, `cfg` still replaces the config
+        this index holds — `score()` reads `centroid_temperature` from it
+        on every call, so a temperature-only edit (no `intent_spaces`
+        change at all) takes effect on the very next query too, without
+        this method needing to special-case it.
+        """
+        if cfg.intent_spaces != self._cfg.intent_spaces:
+            self.rebuild(cfg)
+        else:
+            self._cfg = cfg
 
     def score(self, query_vector: list[float]) -> dict[str, float]:
         """Slug -> probability, a temperature-scaled softmax over cosine

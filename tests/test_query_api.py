@@ -67,6 +67,12 @@ def cfg(tmp_path: Path) -> AppConfig:
             "rag": {
                 "vector_top_n": 10,
                 "keyword_top_n": 10,
+                # Matches every `Reranker("fake-model", ...)` constructed in
+                # this file: `answer_question` now calls
+                # `deps.reranker.set_model(cfg.rag.rerank_model)` on every
+                # query (see C2), so a mismatch here would discard the
+                # injected fake client and try to load a real one.
+                "rerank_model": "fake-model",
                 "rerank_candidates": 10,
                 "final_top_k": 5,
                 "relevance_floor": 0.45,
@@ -139,7 +145,7 @@ def _pipeline_deps(engine, cfg, embedder, classify_llm, generate_llm, store, rer
     centroids = CentroidIndex(embedder, cfg)
     return PipelineDeps(
         engine=engine,
-        cfg=cfg,
+        get_cfg=lambda: cfg,
         embedding=embedder,
         classify_llm=classify_llm,
         generate_llm=generate_llm,

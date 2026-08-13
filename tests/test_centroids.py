@@ -196,6 +196,70 @@ def test_8a_6_new_space_gets_a_centroid_and_can_be_classified_into():
     assert slug == "finance"
 
 
+# --- C2 regression: sync() is the seam a live-config caller actually uses ----
+#
+# `test_8a_3_...` above proves `rebuild(cfg2)` works when a caller remembers
+# to call it explicitly — but nothing in the real pipeline ever did that
+# (`app/orchestrator/pipeline.py::answer_question` held a `cfg` snapshot
+# captured once at `PipelineDeps` construction time), which is exactly how
+# "editing keywords rebuilds the centroid" shipped unmet despite this file
+# passing. `sync()` is the method a caller holding a live config now calls on
+# every query; these tests pin down its actual contract: rebuild only when
+# `intent_spaces` content has actually changed (never once per query, which
+# would silently reintroduce the "more than one embedding call per query"
+# defect these fixes are meant to avoid), but always adopt the new config
+# object so cheap-to-read fields like `centroid_temperature` are live too.
+
+
+def test_8a_7_sync_is_a_no_op_when_intent_spaces_are_unchanged():
+    cfg1 = _cfg()
+    embedder = _embedder_with_defaults(cfg1)
+    index = CentroidIndex(embedder, cfg1)
+    calls_before = len(embedder.calls)
+
+    # A structurally-identical but distinct `AppConfig` object — exactly
+    # what `ConfigService.update()`/`.reload()` produce for an edit that
+    # touches something other than `intent_spaces`.
+    cfg2 = _cfg()
+    index.sync(cfg2)
+
+    assert len(embedder.calls) == calls_before
+    assert index.score(_QUERY_ALIGNED_WITH_HR)["hr"] == pytest.approx(
+        CentroidIndex(_embedder_with_defaults(cfg1), cfg1).score(_QUERY_ALIGNED_WITH_HR)["hr"]
+    )
+
+
+def test_8a_8_sync_rebuilds_when_a_keyword_changes_no_restart():
+    cfg1 = _cfg(hr_keywords=["leave"])
+    embedder = _embedder_with_defaults(cfg1)
+    index = CentroidIndex(embedder, cfg1)
+    before = index.score(_QUERY_ALIGNED_WITH_HR)["hr"]
+    calls_before = len(embedder.calls)
+
+    cfg2 = _cfg(hr_keywords=["totally-different-topic"])
+    hr2 = cfg2.intent_spaces[0]
+    embedder.set_vector(_space_text(hr2.name, hr2.description, hr2.keywords), _HR_VEC_V2)
+
+    index.sync(cfg2)
+    after = index.score(_QUERY_ALIGNED_WITH_HR)["hr"]
+
+    assert len(embedder.calls) > calls_before
+    assert after < before  # the new centroid is orthogonal to the query
+
+
+def test_8a_9_sync_adopts_a_live_temperature_even_without_a_rebuild():
+    cfg1 = _cfg(temperature=0.05)
+    embedder = _embedder_with_defaults(cfg1)
+    index = CentroidIndex(embedder, cfg1)
+
+    cfg2 = _cfg(temperature=1.0)  # same intent_spaces, softer temperature
+    index.sync(cfg2)
+
+    softer = index.score(_QUERY_ALIGNED_WITH_HR)["hr"]
+    sharper = CentroidIndex(_embedder_with_defaults(cfg1), cfg1).score(_QUERY_ALIGNED_WITH_HR)["hr"]
+    assert softer < sharper
+
+
 def test_softmax_math_is_temperature_scaled(monkeypatch):
     """Direct check against a hand-computed softmax, so the formula itself
     (not just its qualitative sharpening behaviour) is pinned down.

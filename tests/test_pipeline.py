@@ -15,9 +15,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 from sqlalchemy import insert
 
 from app.config import AppConfig
+from app.config_service import ConfigService
 from app.db import chunks as chunks_table
 from app.db import create_engine_for, documents as documents_table, init_schema
 from app.orchestrator.centroids import CentroidIndex
@@ -70,6 +72,12 @@ def cfg() -> AppConfig:
                 "vector_top_n": 10,
                 "keyword_top_n": 10,
                 "rrf_k": 60,
+                # Matches every `Reranker("fake-model", ...)` constructed in
+                # this file: `answer_question` now calls
+                # `deps.reranker.set_model(cfg.rag.rerank_model)` on every
+                # query (see C2), so a mismatch here would discard the
+                # injected fake client and try to load a real one.
+                "rerank_model": "fake-model",
                 "rerank_candidates": 10,
                 "final_top_k": 5,
                 "relevance_floor": 0.45,
@@ -172,7 +180,7 @@ def _deps(
 ) -> PipelineDeps:
     return PipelineDeps(
         engine=engine,
-        cfg=cfg,
+        get_cfg=lambda: cfg,
         embedding=embedder,
         classify_llm=classify_llm,
         generate_llm=generate_llm,
@@ -278,3 +286,178 @@ def test_11_6_latency_is_recorded_and_plausible(
 
     assert outcome.latency_ms >= 0
     assert outcome.latency_ms < 5000
+
+
+# --- C2 regression: PipelineDeps.cfg must not be a construction-time snapshot ---
+#
+# `test_10_7_threshold_change_takes_effect_on_next_decision`
+# (`tests/test_routing.py`) passes two different `AppConfig` objects
+# straight into `decide_spaces`, a pure function — it proves `decide_spaces`
+# itself is fine, and nothing more. It cannot catch a `PipelineDeps` that
+# hands `answer_question` a `cfg` captured once at construction time,
+# because it never goes anywhere near `PipelineDeps` or `answer_question`
+# at all. That is exactly why five "without a restart" spec scenarios
+# shipped unmet: every existing test in this file, like every test in
+# `test_routing.py`, passes `cfg` as a direct argument.
+#
+# This test drives the real seam instead: one `PipelineDeps`, built once,
+# reading from a live `ConfigService` — and a `ConfigService.update()`
+# (not a second, separately-constructed `AppConfig`) in between two calls
+# to `answer_question` on that same `deps`.
+
+
+def test_c2_relevance_floor_change_takes_effect_on_next_query_no_restart(
+    tmp_path: Path, engine, embedder, classify_llm, generate_llm, vector_store, centroids
+):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "embedding": {"model": "fake-embed-model", "dimension": DIMENSION},
+                "orchestrator": {
+                    "confidence_threshold": 0.70,
+                    "centroid_temperature": 0.05,
+                    "fallback_space": "general",
+                    "escalate_to_llm": True,
+                },
+                "rag": {
+                    "vector_top_n": 10,
+                    "keyword_top_n": 10,
+                    "rrf_k": 60,
+                    "rerank_model": "fake-model",
+                    "rerank_candidates": 10,
+                    "final_top_k": 5,
+                    "relevance_floor": 0.3,
+                },
+                "intent_spaces": [
+                    {
+                        "slug": "hr",
+                        "name": "HR",
+                        "description": "Employee policies, leave, benefits",
+                        "keywords": ["leave"],
+                    },
+                    {"slug": "general", "name": "General", "description": "Fallback", "keywords": []},
+                ],
+            }
+        )
+    )
+    config_service = ConfigService.load(config_path)
+
+    _seed_matching_chunk(engine, vector_store)
+    # sigmoid(0.0) == 0.5 -- clears a 0.3 floor, misses a 0.9 floor.
+    reranker = Reranker("fake-model", client=_FakeCrossEncoder({_CHUNK_TEXT: 0.0}))
+    generate_llm.expect_text("You get 25 days of leave. [1]")
+
+    deps = PipelineDeps(
+        engine=engine,
+        get_cfg=lambda: config_service.current,
+        embedding=embedder,
+        classify_llm=classify_llm,
+        generate_llm=generate_llm,
+        vector_store=vector_store,
+        centroids=centroids,
+        reranker=reranker,
+    )
+
+    before = answer_question(_QUESTION, _CHANNEL, deps)
+    assert before.status == "success", before
+
+    config_service.update({"rag": {"relevance_floor": 0.9}})
+
+    after = answer_question(_QUESTION, _CHANNEL, deps)
+
+    assert after.status == "no_match", (
+        "the relevance-floor update on the live ConfigService never "
+        "reached answer_question -- PipelineDeps is still handing it a "
+        f"stale cfg snapshot (outcome: {after})"
+    )
+    assert len(generate_llm.calls) == 1  # only `before` generated; `after` gated out
+
+
+def test_c2_reranker_model_change_takes_effect_on_next_query_no_restart(
+    tmp_path: Path, engine, embedder, classify_llm, generate_llm, vector_store, centroids, monkeypatch
+):
+    """`Reranker` bakes `model_name` in at construction — `PipelineDeps`
+    holds one `Reranker` instance for the process's life, so a config-only
+    model change used to have no seam to travel through at all. Proven
+    here the same way `tests/test_rerank.py`'s C2 tests prove `Reranker`
+    itself: swap `sentence_transformers.CrossEncoder` for a fake
+    constructor and assert it is invoked with the *new* model name after
+    a `ConfigService.update()`, with no restart and no new `PipelineDeps`.
+    """
+    import sys
+    import types
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "embedding": {"model": "fake-embed-model", "dimension": DIMENSION},
+                "orchestrator": {
+                    "confidence_threshold": 0.70,
+                    "centroid_temperature": 0.05,
+                    "fallback_space": "general",
+                    "escalate_to_llm": True,
+                },
+                "rag": {
+                    "vector_top_n": 10,
+                    "keyword_top_n": 10,
+                    "rrf_k": 60,
+                    "rerank_model": "model-v1",
+                    "rerank_candidates": 10,
+                    "final_top_k": 5,
+                    "relevance_floor": 0.0,
+                },
+                "intent_spaces": [
+                    {
+                        "slug": "hr",
+                        "name": "HR",
+                        "description": "Employee policies, leave, benefits",
+                        "keywords": ["leave"],
+                    },
+                    {"slug": "general", "name": "General", "description": "Fallback", "keywords": []},
+                ],
+            }
+        )
+    )
+    config_service = ConfigService.load(config_path)
+
+    _seed_matching_chunk(engine, vector_store)
+    generate_llm.expect_text("You get 25 days of leave. [1]")
+    generate_llm.expect_text("You get 25 days of leave. [1]")
+
+    constructed_with: list[str] = []
+
+    class _RecordingCrossEncoder:
+        def __init__(self, model_name: str) -> None:
+            constructed_with.append(model_name)
+
+        def predict(self, pairs: list[list[str]]) -> list[float]:
+            return [5.0 for _ in pairs]
+
+    fake_module = types.ModuleType("sentence_transformers")
+    fake_module.CrossEncoder = _RecordingCrossEncoder
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+
+    reranker = Reranker("model-v1")  # no injected client -- exercises the real lazy-load path
+    deps = PipelineDeps(
+        engine=engine,
+        get_cfg=lambda: config_service.current,
+        embedding=embedder,
+        classify_llm=classify_llm,
+        generate_llm=generate_llm,
+        vector_store=vector_store,
+        centroids=centroids,
+        reranker=reranker,
+    )
+
+    answer_question(_QUESTION, _CHANNEL, deps)
+    assert constructed_with == ["model-v1"]
+
+    config_service.update({"rag": {"rerank_model": "model-v2"}})
+    answer_question(_QUESTION, _CHANNEL, deps)
+
+    assert constructed_with == ["model-v1", "model-v2"], (
+        "the reranker model-name update on the live ConfigService never "
+        "reached the Reranker instance held by PipelineDeps"
+    )

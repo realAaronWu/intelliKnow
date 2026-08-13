@@ -225,3 +225,71 @@ def test_3a_6_model_loads_once_not_reloaded_per_query(engine, monkeypatch):
     reranker.rerank("second question", hits, engine, top_k=2)
 
     assert construction_count == 1
+
+
+# --- C2 regression: reranker model change without a restart --------------------
+#
+# `spec: knowledge-retrieval` § "Retrieval parameters are configuration-driven"
+# names the reranker model explicitly. Before this fix nothing could ever
+# satisfy it: `Reranker.__init__` bakes `model_name` into `self._model_name`
+# once, `_get_client()` only ever loads *that* model, and `PipelineDeps` held
+# one `Reranker` instance for the process's lifetime with no way to point it
+# at a different model. `set_model()` is the seam a live-config caller
+# (`answer_question`) now calls on every query: a no-op when the name hasn't
+# changed (so the cached client survives, exactly like 3a.6 above), and a
+# cache-discarding update when it has, so the *next* `.rerank()`/`.score()`
+# call lazily loads the new model instead of silently keeping scoring
+# answers with the old one.
+
+
+def test_c2_set_model_is_a_no_op_when_the_name_is_unchanged(engine, monkeypatch):
+    doc_id = _insert_document(engine)
+    ids = [_insert_chunk(engine, doc_id, "hr", i, f"chunk body {i}") for i in range(2)]
+    hits = [_fused(cid, fused_score=1.0 / (i + 1)) for i, cid in enumerate(ids)]
+
+    construction_count = 0
+
+    class _CountingCrossEncoder(_FakeCrossEncoder):
+        def __init__(self, model_name):
+            nonlocal construction_count
+            construction_count += 1
+            super().__init__()
+
+    fake_module = types.ModuleType("sentence_transformers")
+    fake_module.CrossEncoder = _CountingCrossEncoder
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+
+    reranker = Reranker("cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+    reranker.set_model("cross-encoder/ms-marco-MiniLM-L-6-v2")
+    reranker.rerank("first question", hits, engine, top_k=2)
+    reranker.set_model("cross-encoder/ms-marco-MiniLM-L-6-v2")
+    reranker.rerank("second question", hits, engine, top_k=2)
+
+    assert construction_count == 1
+
+
+def test_c2_set_model_change_discards_the_cached_client_no_restart(engine, monkeypatch):
+    doc_id = _insert_document(engine)
+    ids = [_insert_chunk(engine, doc_id, "hr", i, f"chunk body {i}") for i in range(2)]
+    hits = [_fused(cid, fused_score=1.0 / (i + 1)) for i, cid in enumerate(ids)]
+
+    constructed_with: list[str] = []
+
+    class _RecordingCrossEncoder(_FakeCrossEncoder):
+        def __init__(self, model_name):
+            constructed_with.append(model_name)
+            super().__init__()
+
+    fake_module = types.ModuleType("sentence_transformers")
+    fake_module.CrossEncoder = _RecordingCrossEncoder
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+
+    reranker = Reranker("model-v1")
+    reranker.rerank("first question", hits, engine, top_k=2)
+    assert constructed_with == ["model-v1"]
+
+    reranker.set_model("model-v2")
+    reranker.rerank("second question", hits, engine, top_k=2)
+
+    assert constructed_with == ["model-v1", "model-v2"]
