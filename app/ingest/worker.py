@@ -98,18 +98,34 @@ def _mark_failed(engine: Engine, doc_id: int, message: str) -> None:
         )
 
 
-def _mark_indexed(engine: Engine, doc_id: int, *, intent_slug: str, chunk_count: int) -> None:
+def _mark_indexed(
+    engine: Engine,
+    doc_id: int,
+    *,
+    intent_slug: str,
+    chunk_count: int,
+    intent_assigned_by: str | None = None,
+) -> None:
+    """Set status `indexed` plus the given intent/chunk fields.
+
+    `intent_assigned_by` is optional and omitted from the UPDATE entirely
+    when not given, leaving the document's existing value untouched — that
+    is what lets `app/ingest/lifecycle.py::reparse_document` (which keeps
+    the document's existing intent space rather than suggesting a fresh
+    one) call this without disturbing who assigned it.
+    """
+    values: dict = {
+        "status": "indexed",
+        "error_message": None,
+        "intent_slug": intent_slug,
+        "chunk_count": chunk_count,
+        "indexed_at": _utc_now_iso(),
+    }
+    if intent_assigned_by is not None:
+        values["intent_assigned_by"] = intent_assigned_by
     with engine.begin() as conn:
         conn.execute(
-            update(documents_table)
-            .where(documents_table.c.id == doc_id)
-            .values(
-                status="indexed",
-                error_message=None,
-                intent_slug=intent_slug,
-                chunk_count=chunk_count,
-                indexed_at=_utc_now_iso(),
-            )
+            update(documents_table).where(documents_table.c.id == doc_id).values(**values)
         )
 
 
@@ -131,7 +147,9 @@ def _markdown_to_rows(markdown: str) -> list[list[str]]:
     return rows
 
 
-def _repair_ragged_tables(blocks: list[Block], llm: LLMProvider) -> list[Block]:
+def _repair_ragged_tables(
+    blocks: list[Block], llm: LLMProvider, *, doc_id: int | None = None
+) -> list[Block]:
     """Replace each ragged table block's text with an LLM-restructured
     version; clean tables pass through unchanged and are never sent to the
     model — `spec: document-ingestion` § "Clean tables are not sent to the
@@ -142,7 +160,7 @@ def _repair_ragged_tables(blocks: list[Block], llm: LLMProvider) -> list[Block]:
         if block.kind != "table" or not is_ragged(_markdown_to_rows(block.text)):
             repaired.append(block)
             continue
-        new_text = repair_table(block.text, llm)
+        new_text = repair_table(block.text, llm, doc_id=doc_id)
         repaired.append(Block(kind="table", text=new_text, source_ref=block.source_ref))
     return repaired
 
@@ -160,13 +178,17 @@ def load_and_chunk(
     cfg: AppConfig,
     classify_llm: LLMProvider,
     loaders: Mapping[str, DocumentLoader] = DEFAULT_LOADERS,
+    *,
+    doc_id: int | None = None,
 ) -> tuple[list[Block], list[Chunk]]:
     """Load `path`, repair any ragged table blocks, and chunk the result.
 
     Shared by `ingest_document` (fresh ingest, below) and
     `app/ingest/lifecycle.py`'s re-parse: both run the identical
     load -> repair -> chunk pipeline and differ only in what happens to
-    the document's intent space afterward.
+    the document's intent space afterward. `doc_id` is passed through to
+    table repair purely so its fallback warning (`app/rag/tables.py`) can
+    name the document.
     """
     ext = path.suffix.lower()
     loader = loaders.get(ext)
@@ -176,7 +198,7 @@ def load_and_chunk(
             f"{', '.join(sorted(loaders))}"
         )
     blocks = loader.load(path)
-    blocks = _repair_ragged_tables(blocks, classify_llm)
+    blocks = _repair_ragged_tables(blocks, classify_llm, doc_id=doc_id)
     chunks = chunk_blocks(blocks, cfg.rag)
     return blocks, chunks
 
@@ -194,12 +216,22 @@ def ingest_document(doc_id: int, path: Path, deps: IngestDeps) -> None:
     _set_status(deps.engine, doc_id, "parsing")
 
     try:
-        blocks, chunk_list = load_and_chunk(path, deps.cfg, deps.classify_llm, deps.loaders)
-        intent_slug = suggest_intent(_sample_text(blocks), deps.cfg, deps.classify_llm)
-        deps.index_writer.write_document(doc_id, intent_slug, chunk_list)
+        blocks, chunk_list = load_and_chunk(
+            path, deps.cfg, deps.classify_llm, deps.loaders, doc_id=doc_id
+        )
+        suggestion = suggest_intent(
+            _sample_text(blocks), deps.cfg, deps.classify_llm, doc_id=doc_id
+        )
+        deps.index_writer.write_document(doc_id, suggestion.slug, chunk_list)
     except Exception as exc:
         deps.index_writer.remove_document(doc_id)
         _mark_failed(deps.engine, doc_id, str(exc))
         return
 
-    _mark_indexed(deps.engine, doc_id, intent_slug=intent_slug, chunk_count=len(chunk_list))
+    _mark_indexed(
+        deps.engine,
+        doc_id,
+        intent_slug=suggestion.slug,
+        intent_assigned_by=suggestion.assigned_by,
+        chunk_count=len(chunk_list),
+    )

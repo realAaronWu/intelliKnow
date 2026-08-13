@@ -8,6 +8,7 @@ ingesting `salary_bands.pdf` (a clean, ruled table) does not.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -313,6 +314,7 @@ def test_ragged_table_document_triggers_repair_and_still_indexes(engine, store, 
         "type": "object",
         "properties": {"slug": {"type": "string"}},
         "required": ["slug"],
+        "additionalProperties": False,
     }
 
 
@@ -336,3 +338,69 @@ def test_clean_table_document_is_not_sent_to_the_model_for_repair(engine, store,
     row = _get_document(engine, doc_id)
     assert row.status == "indexed"
     assert len(llm.calls) == 1
+
+
+# --- Fallback visibility (DEFECT 2) -------------------------------------------------
+#
+# `suggest_intent` catching a `ProviderError` and returning the fallback
+# space with no log, no record, nothing left every document in a live
+# provider outage looking exactly like a document the model genuinely
+# judged "general" — an operator had no way to tell the two apart. Falling
+# back so ingestion completes is correct; falling back silently is not.
+
+
+def test_provider_failure_still_completes_ingestion_via_fallback_space(engine, deps, classify_llm):
+    """The fix is about visibility, not about making the fallback fatal —
+    ingestion must still reach `indexed` when the provider fails.
+    """
+    doc_id = _insert_pending_document(engine, "handbook.pdf")
+    classify_llm.fail_next(ProviderError.backend("provider is down"))
+
+    ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
+
+    row = _get_document(engine, doc_id)
+    assert row.status == "indexed"
+    assert row.intent_slug == AppConfig().orchestrator.fallback_space
+
+
+def test_provider_failure_marks_the_document_as_fallback_assigned(engine, deps, classify_llm):
+    """The document row itself must record that its intent space came from
+    a fallback rather than the model, since the slug alone is ambiguous —
+    "general" can be the model's genuine judgement or the fallback space.
+    """
+    doc_id = _insert_pending_document(engine, "handbook.pdf")
+    classify_llm.fail_next(ProviderError.backend("provider is down"))
+
+    ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
+
+    row = _get_document(engine, doc_id)
+    assert row.intent_assigned_by == "provider_error"
+
+
+def test_model_assigned_intent_is_marked_as_such(engine, deps, classify_llm):
+    """The happy path must record `assigned_by == "model"`, so the fallback
+    marker only ever appears when a fallback actually happened.
+    """
+    doc_id = _insert_pending_document(engine, "handbook.pdf")
+    classify_llm.expect_schema({"slug": "hr"})
+
+    ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
+
+    row = _get_document(engine, doc_id)
+    assert row.intent_assigned_by == "model"
+
+
+def test_provider_failure_during_intent_suggestion_logs_a_warning_naming_the_document(
+    engine, deps, classify_llm, caplog
+):
+    doc_id = _insert_pending_document(engine, "handbook.pdf")
+    classify_llm.fail_next(ProviderError.backend("provider is down"))
+
+    with caplog.at_level(logging.WARNING, logger="app.ingest.classify_doc"):
+        ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert str(doc_id) in message
+    assert "backend" in message

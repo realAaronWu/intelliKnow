@@ -55,6 +55,23 @@ from app.rag.vector_store import VectorStore  # noqa: E402
 _CHUNK_PREVIEW_COUNT = 3
 _CHUNK_PREVIEW_CHARS = 100
 
+# Human-readable reasons for `documents.intent_assigned_by` values other
+# than "model" — see `app/ingest/classify_doc.py::IntentSuggestion`. An
+# operator must be able to tell a model-assigned space from a fallback one
+# at a glance, per Task 9's fallback-visibility fix.
+_ASSIGNED_BY_LABELS = {
+    "provider_error": "provider error",
+    "invalid_slug": "invalid slug suggested",
+}
+
+
+def _intent_space_label(row) -> str:
+    assigned_by = row.intent_assigned_by
+    if assigned_by == "model":
+        return row.intent_slug
+    reason = _ASSIGNED_BY_LABELS.get(assigned_by, assigned_by)
+    return f"{row.intent_slug} (fallback: {reason})"
+
 
 def _build_deps() -> IngestDeps:
     """Wire `IngestDeps` from the real composition root — the same
@@ -105,7 +122,7 @@ def _print_document_result(deps: IngestDeps, doc_id: int, path: Path) -> None:
 
     print(f"\n{path.name}")
     print(f"  status:       {row.status}")
-    print(f"  intent space: {row.intent_slug}")
+    print(f"  intent space: {_intent_space_label(row)}")
     print(f"  chunk count:  {row.chunk_count}")
     if row.status == "failed":
         print(f"  error:        {row.error_message}")

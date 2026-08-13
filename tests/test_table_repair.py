@@ -5,6 +5,7 @@ Covers docs/superpowers/test-plans/03-rag-write-path-tests.md §4.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pdfplumber
@@ -74,6 +75,25 @@ class TestRepairTable:
         result = repair_table(raw_text, llm)
 
         assert result == raw_text
+
+    def test_provider_failure_logs_a_warning_naming_the_document(self, caplog):
+        """DEFECT 2's fallback-visibility fix applies here too: a silent
+        fallback to raw text is indistinguishable from a table that was
+        never ragged to begin with unless it is logged.
+        """
+        llm = FakeLLMProvider()
+        llm.fail_next(ProviderError.timeout("timed out"))
+        raw_text = "ragged raw table text"
+
+        with caplog.at_level(logging.WARNING, logger="app.rag.tables"):
+            result = repair_table(raw_text, llm, doc_id=7)
+
+        assert result == raw_text
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        message = warnings[0].getMessage()
+        assert "7" in message
+        assert "timeout" in message
 
     def test_invalid_structure_falls_back_to_raw_text(self):
         llm = FakeLLMProvider()

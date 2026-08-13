@@ -21,6 +21,17 @@ conflated:
   `ProviderError` at all — it's retried once, and only if the retry also
   fails does a `ProviderError` with category `backend` get raised, naming
   the violated schema. See `app/providers/schema_validation.py`.
+
+Before either of those runs, `_validate_schema_shape` rejects a
+caller-supplied schema outright if any `type: "object"` node — at any
+nesting depth — omits `additionalProperties: false`. The real Anthropic API
+returns `400 invalid_request_error: output_config.format.schema: For
+'object' type, 'additionalProperties' must be explicitly set to false`, a
+constraint no other provider in this codebase enforces, so a schema built
+and tested only against the local/OpenAI providers passes every existing
+test and only 400s the moment `llm.provider` switches to `anthropic` —
+exactly how this defect reached a live run undetected. The check runs here,
+client-side, so that failure happens loudly and immediately instead.
 """
 
 from __future__ import annotations
@@ -46,6 +57,59 @@ from app.providers.schema_validation import (
 # A malformed structured-output response is retried once (initial attempt +
 # one retry) before giving up — see module docstring.
 _MAX_SCHEMA_ATTEMPTS = 2
+
+
+def _validate_schema_shape(schema: dict, path: str = "schema") -> None:
+    """Raise `ProviderError.backend` if any `type: "object"` node in
+    `schema` — at any nesting depth — does not set
+    `additionalProperties: false`. See module docstring.
+
+    Walks every place a subschema can appear: `properties`, `items` (both
+    the single-schema and tuple-validation list forms), `anyOf`/`oneOf`/
+    `allOf`, `not`, and `$defs`/`definitions`. `path` names the offending
+    node in the raised error so a multi-object schema doesn't leave the
+    caller guessing which part is wrong.
+    """
+    if not isinstance(schema, dict):
+        return
+
+    if schema.get("type") == "object" and schema.get("additionalProperties") is not False:
+        raise ProviderError.backend(
+            f"schema node at {path!r} has type 'object' but does not set "
+            "'additionalProperties: false'; the Anthropic API rejects "
+            "object schemas without it (400 invalid_request_error)"
+        )
+
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        for key, subschema in properties.items():
+            _validate_schema_shape(subschema, f"{path}.properties.{key}")
+
+    items = schema.get("items")
+    if isinstance(items, dict):
+        _validate_schema_shape(items, f"{path}.items")
+    elif isinstance(items, list):
+        for index, subschema in enumerate(items):
+            _validate_schema_shape(subschema, f"{path}.items[{index}]")
+
+    for keyword in ("anyOf", "oneOf", "allOf"):
+        variants = schema.get(keyword)
+        if isinstance(variants, list):
+            for index, subschema in enumerate(variants):
+                _validate_schema_shape(subschema, f"{path}.{keyword}[{index}]")
+
+    not_schema = schema.get("not")
+    if isinstance(not_schema, dict):
+        _validate_schema_shape(not_schema, f"{path}.not")
+
+    defs = schema.get("$defs")
+    defs_keyword = "$defs"
+    if not isinstance(defs, dict):
+        defs = schema.get("definitions")
+        defs_keyword = "definitions"
+    if isinstance(defs, dict):
+        for key, subschema in defs.items():
+            _validate_schema_shape(subschema, f"{path}.{defs_keyword}.{key}")
 
 
 class AnthropicLLM:
@@ -93,6 +157,7 @@ class AnthropicLLM:
         if self._effort is not None:
             output_config["effort"] = self._effort
         if schema is not None:
+            _validate_schema_shape(schema)
             output_config["format"] = {"type": "json_schema", "schema": schema}
 
         kwargs: dict[str, Any] = {

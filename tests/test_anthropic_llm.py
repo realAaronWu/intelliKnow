@@ -128,9 +128,66 @@ def test_free_form_completion_returns_text_model_and_token_counts():
     assert result.output_tokens == 3
 
 
+# --- Schema shape guard (DEFECT 1) ------------------------------------------------
+#
+# The real Anthropic API returns `400 invalid_request_error:
+# output_config.format.schema: For 'object' type, 'additionalProperties'
+# must be explicitly set to false` for any object-typed schema node missing
+# that key. Every automated test injects a stub client, so nothing here
+# would ever have caught a request shape the real API rejects — these two
+# tests exist so that defect can never again reach a live run silently: the
+# guard must fire before the stub client is even called.
+
+
+def test_schema_missing_additional_properties_false_is_rejected_by_guard():
+    llm, client = _make_llm()
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(
+            system="s",
+            user="u",
+            schema={"type": "object", "properties": {"answer": {"type": "string"}}},
+        )
+
+    assert excinfo.value.category == "backend"
+    assert "additionalProperties" in str(excinfo.value)
+    # The guard must run before any request is attempted.
+    assert client.messages.calls == []
+
+
+def test_nested_object_schema_missing_additional_properties_is_checked_too():
+    """Not just the root: an object nested under `properties` must also
+    carry `additionalProperties: false`, since the real API rejects it at
+    any depth.
+    """
+    llm, client = _make_llm()
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "metadata": {
+                "type": "object",
+                "properties": {"confidence": {"type": "number"}},
+                # missing additionalProperties: false — the violation is here
+            }
+        },
+    }
+
+    with pytest.raises(ProviderError) as excinfo:
+        llm.complete(system="s", user="u", schema=schema)
+
+    assert excinfo.value.category == "backend"
+    assert "metadata" in str(excinfo.value)
+    assert client.messages.calls == []
+
+
 def test_schema_request_returns_parsed_object_and_carries_schema_in_output_config():
     llm, client = _make_llm()
-    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "additionalProperties": False,
+    }
     client.messages.queue_response(
         _StubMessage(
             content=[_StubTextBlock('{"answer": "42"}')],
@@ -162,7 +219,7 @@ def test_unparseable_schema_response_raises_backend_error_after_one_retry():
     client.messages.queue_response(malformed)
 
     with pytest.raises(ProviderError) as excinfo:
-        llm.complete(system="s", user="u", schema={"type": "object"})
+        llm.complete(system="s", user="u", schema={"type": "object", "additionalProperties": False})
 
     assert excinfo.value.category == "backend"
     assert len(client.messages.calls) == 2
@@ -187,7 +244,12 @@ def test_schema_retry_recovers_after_malformed_first_response():
         )
     )
 
-    result = llm.complete(system="s", user="u", schema={"type": "object"})
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "additionalProperties": False,
+    }
+    result = llm.complete(system="s", user="u", schema=schema)
 
     assert result.parsed == {"answer": "42"}
     assert len(client.messages.calls) == 2
@@ -198,6 +260,7 @@ _INTENT_SCHEMA = {
     "type": "object",
     "properties": {"intent_slug": {"type": "string"}},
     "required": ["intent_slug"],
+    "additionalProperties": False,
 }
 
 
@@ -269,7 +332,12 @@ def test_schema_violation_recovers_on_retry():
 
 def test_untitled_schema_is_still_named_in_the_error():
     llm, client = _make_llm()
-    schema = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+        "additionalProperties": False,
+    }
     client.messages.queue_response(_schema_message("{}"))
     client.messages.queue_response(_schema_message("{}"))
 
@@ -539,7 +607,11 @@ def test_structured_output_unaffected_by_unset_effort():
     model that rejects the parameter.
     """
     llm, client = _make_llm(model="claude-haiku-4-5", effort=None)
-    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "additionalProperties": False,
+    }
     client.messages.queue_response(
         _StubMessage(
             content=[_StubTextBlock('{"answer": "42"}')],

@@ -63,7 +63,9 @@ def reparse_document(doc_id: int, path: Path, deps: IngestDeps) -> None:
     _set_status(deps.engine, doc_id, "parsing")
 
     try:
-        _blocks, chunk_list = load_and_chunk(path, deps.cfg, deps.classify_llm, deps.loaders)
+        _blocks, chunk_list = load_and_chunk(
+            path, deps.cfg, deps.classify_llm, deps.loaders, doc_id=doc_id
+        )
     except Exception as exc:
         _mark_failed(deps.engine, doc_id, str(exc))
         return

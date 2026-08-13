@@ -11,12 +11,21 @@ it can gate every extracted table without cost.
 schema requesting a clean rectangular table, and its result replaces the
 extraction. Any provider failure — or a response that, even though
 schema-valid JSON, is not itself a clean rectangular table — falls back to
-the original raw text so ingestion always completes.
+the original raw text so ingestion always completes. Both fallback paths
+log a warning (naming the document, when known, and — for a provider
+failure — the error category) so a repair that silently gave up is visible
+in service output rather than indistinguishable from a table that was
+never ragged to begin with; see `app/ingest/classify_doc.py`'s module
+docstring for the identical reasoning applied to intent suggestion.
 """
 
 from __future__ import annotations
 
+import logging
+
 from app.providers.base import LLMProvider, ProviderError
+
+logger = logging.getLogger(__name__)
 
 _TABLE_SCHEMA = {
     "type": "object",
@@ -27,6 +36,7 @@ _TABLE_SCHEMA = {
         }
     },
     "required": ["rows"],
+    "additionalProperties": False,
 }
 
 _REPAIR_SYSTEM_PROMPT = (
@@ -61,13 +71,15 @@ def is_ragged(rows: list[list[str]]) -> bool:
     return empty_cells * 2 > total_cells
 
 
-def repair_table(raw_text: str, llm: LLMProvider) -> str:
+def repair_table(raw_text: str, llm: LLMProvider, *, doc_id: int | None = None) -> str:
     """Ask `llm` to restructure a ragged table's raw text into a clean one.
 
     Returns the corrected table as markdown on success. Falls back to
     `raw_text` unchanged if the provider call fails, or if it succeeds but
     the returned structure is not itself a clean rectangular table — never
-    raises, so a bad repair attempt cannot block ingestion.
+    raises, so a bad repair attempt cannot block ingestion. Either fallback
+    logs a warning naming `doc_id` (when the caller has one) so the
+    degraded repair is visible rather than silent.
     """
     try:
         result = llm.complete(
@@ -75,11 +87,23 @@ def repair_table(raw_text: str, llm: LLMProvider) -> str:
             user=f"Ragged table text extracted from a document:\n\n{raw_text}",
             schema=_TABLE_SCHEMA,
         )
-    except ProviderError:
+    except ProviderError as exc:
+        logger.warning(
+            "table repair for document %s fell back to raw extracted text: "
+            "provider error (category=%s): %s",
+            doc_id,
+            exc.category,
+            exc,
+        )
         return raw_text
 
     rows = _clean_rows(result.parsed)
     if rows is None:
+        logger.warning(
+            "table repair for document %s fell back to raw extracted text: "
+            "model response was not a clean rectangular table",
+            doc_id,
+        )
         return raw_text
 
     return _rows_to_markdown(rows)
