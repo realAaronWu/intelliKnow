@@ -20,9 +20,11 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
+from sqlalchemy.engine import Engine
+
 from app.api.documents import build_documents_router
 from app.api.query import build_query_router
-from app.bootstrap import bootstrap
+from app.bootstrap import Application, bootstrap
 from app.db import create_engine_for, init_schema
 from app.ingest.worker import IngestDeps
 from app.orchestrator.centroids import CentroidIndex
@@ -49,17 +51,31 @@ def create_app(deps: IngestDeps, pipeline_deps: PipelineDeps | None = None) -> F
     return fastapi_app
 
 
-def _build_default_deps() -> IngestDeps:
+def _build_default_deps(
+    application: Application | None = None,
+    engine: Engine | None = None,
+    vector_store: VectorStore | None = None,
+) -> IngestDeps:
     """Wire `IngestDeps` from the real composition root: `bootstrap()`'s
     providers plus a real `Engine`/`VectorStore`/`IndexWriter` opened at
     the paths named in `config.yaml`.
+
+    `application`, `engine`, and `vector_store` are accepted (all
+    optional) so `__getattr__` below can build each of them exactly once
+    and hand the *same* objects to both this function and
+    `_build_pipeline_deps` — see that function's docstring for why sharing
+    them matters. Called with no arguments (every existing caller,
+    including `tests/test_deps_wiring.py`), this builds its own of each,
+    unchanged from before.
     """
-    application = bootstrap()
+    application = application or bootstrap()
     cfg = application.config
 
-    engine = create_engine_for(Path(cfg.storage.sqlite_path))
-    init_schema(engine)
-    vector_store = VectorStore(Path(cfg.storage.faiss_dir), cfg.embedding.dimension)
+    if engine is None:
+        engine = create_engine_for(Path(cfg.storage.sqlite_path))
+        init_schema(engine)
+    if vector_store is None:
+        vector_store = VectorStore(Path(cfg.storage.faiss_dir), cfg.embedding.dimension)
     index_writer = IndexWriter(
         engine,
         vector_store,
@@ -77,25 +93,41 @@ def _build_default_deps() -> IngestDeps:
     )
 
 
-def _build_pipeline_deps() -> PipelineDeps:
+def _build_pipeline_deps(
+    application: Application | None = None,
+    engine: Engine | None = None,
+    vector_store: VectorStore | None = None,
+) -> PipelineDeps:
     """Wire `PipelineDeps` from the real composition root, mirroring
     `_build_default_deps` for the query pipeline's dependencies.
 
-    Calls `bootstrap()` a second time rather than threading a shared
-    `Application` through `_build_default_deps` — which is tested
-    directly (`tests/test_deps_wiring.py`) and returns `IngestDeps` only,
-    so changing its signature would break that test for no benefit here.
-    `bootstrap()` is ordinary, idempotent I/O (read `.env`, read
-    `config.yaml`, construct fresh provider objects); calling it twice at
-    process startup, once, is not a hot path worth threading state to
-    avoid.
+    `application`, `engine`, and `vector_store`, when supplied by
+    `__getattr__`, are the *exact same objects* `_build_default_deps` was
+    given — sharing one `Engine` and, critically, one `VectorStore`
+    between the ingest and query paths. `VectorStore._get_or_create`
+    caches a space's index in memory on first touch and never re-reads it
+    from disk; two independent `VectorStore` instances over the same
+    `faiss_dir` (the previous behaviour: each of these two functions built
+    its own) meant a document ingested after the query-side instance had
+    already cached a space was invisible to dense retrieval for the rest
+    of the process, with no error — `spec: knowledge-retrieval`'s hybrid
+    retrieval would silently degrade to keyword-only.
+
+    Called with no arguments (every existing caller other than
+    `__getattr__`), this builds its own `Application`/`Engine`/
+    `VectorStore`, unchanged from before — `bootstrap()` is ordinary,
+    idempotent I/O (read `.env`, read `config.yaml`, construct fresh
+    provider objects), so that remains a safe default for a caller that
+    only wants the query pipeline wired in isolation.
     """
-    application = bootstrap()
+    application = application or bootstrap()
     cfg = application.config
 
-    engine = create_engine_for(Path(cfg.storage.sqlite_path))
-    init_schema(engine)
-    vector_store = VectorStore(Path(cfg.storage.faiss_dir), cfg.embedding.dimension)
+    if engine is None:
+        engine = create_engine_for(Path(cfg.storage.sqlite_path))
+        init_schema(engine)
+    if vector_store is None:
+        vector_store = VectorStore(Path(cfg.storage.faiss_dir), cfg.embedding.dimension)
     centroids = CentroidIndex(application.embedding, cfg)
     reranker = Reranker(cfg.rag.rerank_model)
 
@@ -113,5 +145,17 @@ def _build_pipeline_deps() -> PipelineDeps:
 
 def __getattr__(name: str):
     if name == "app":
-        return create_app(_build_default_deps(), _build_pipeline_deps())
+        # Built once, here, and threaded into both `_build_default_deps`
+        # and `_build_pipeline_deps` so the ingest and query paths share
+        # one `Application`, one `Engine`, and — the fix this exists for —
+        # one `VectorStore`. See `_build_pipeline_deps`'s docstring.
+        application = bootstrap()
+        cfg = application.config
+        engine = create_engine_for(Path(cfg.storage.sqlite_path))
+        init_schema(engine)
+        vector_store = VectorStore(Path(cfg.storage.faiss_dir), cfg.embedding.dimension)
+
+        deps = _build_default_deps(application, engine, vector_store)
+        pipeline_deps = _build_pipeline_deps(application, engine, vector_store)
+        return create_app(deps, pipeline_deps)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
