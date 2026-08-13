@@ -108,6 +108,20 @@ def _extract_pages(
     with pdfplumber.open(str(path)) as pdf:
         for page in pdf.pages:
             found_tables = page.find_tables()
+            if not found_tables:
+                # No ruled lines to detect a table by position — some
+                # source documents (e.g. a merged-cell grid exported
+                # without borders) render a table with no lines at all.
+                # Falling back to pdfplumber's text-position strategy
+                # catches those; a page with no table at all still comes
+                # back empty, since there is no consistent grid of aligned
+                # text for the text strategy to find either.
+                found_tables = page.find_tables(
+                    table_settings={
+                        "vertical_strategy": "text",
+                        "horizontal_strategy": "text",
+                    }
+                )
             tables = [table.extract() for table in found_tables]
 
             text_area = page

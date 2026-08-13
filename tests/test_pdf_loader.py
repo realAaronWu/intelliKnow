@@ -186,6 +186,31 @@ class TestPdfTableStructure:
             assert str(mid_val) in text
 
 
+class TestPdfBorderlessTableDetection:
+    """`ragged_salary_grid.pdf` has no ruled lines at all, so pdfplumber's
+    default line-based table strategy finds no table on it — the repair
+    path (Task 4's `is_ragged`/`repair_table`) would never fire on the
+    very fixture built to exercise it. The loader must fall back to a
+    text-position table strategy when the line strategy finds nothing.
+    """
+
+    def test_borderless_table_is_still_detected(self):
+        blocks = PdfLoader().load(FIXTURES / "ragged_salary_grid.pdf")
+        table_blocks = [b for b in blocks if b.kind == "table"]
+
+        assert len(table_blocks) >= 1
+
+    def test_ruled_table_is_unaffected_by_the_fallback(self):
+        # salary_bands.pdf has ruled lines, so the (unchanged) line
+        # strategy must still be the one that finds it, and it must still
+        # come back as a single clean table — the fallback must not also
+        # fire and duplicate or corrupt an already-well-detected table.
+        blocks = PdfLoader().load(FIXTURES / "salary_bands.pdf")
+        table_blocks = [b for b in blocks if b.kind == "table"]
+
+        assert len(table_blocks) == 1
+
+
 class TestPdfScanned:
     def test_scanned_pdf_raises_loader_error_naming_scanned(self):
         with pytest.raises(LoaderError, match="scanned"):
