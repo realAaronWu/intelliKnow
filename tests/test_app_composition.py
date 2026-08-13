@@ -27,6 +27,8 @@ the seam C1 is about, independent of routing or reranking behaviour.
 from __future__ import annotations
 
 import shutil
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -156,4 +158,44 @@ def test_c1_second_document_visible_to_dense_retrieval_without_restart(
         "from a stale, separately-cached VectorStore instance rather than "
         "the one the ingest path just wrote and persisted to "
         f"(response: {body2})"
+    )
+
+
+# --- I5: cross-encoder loads at startup, not lazily on the first query -----------
+#
+# `uvicorn app.main:app` imports faiss at module import (via `VectorStore`
+# above) and previously left `sentence-transformers`/torch to load lazily,
+# on whichever request happened to reach `Reranker.rerank()` first. On this
+# platform, initializing torch's OpenMP runtime in a process that has
+# already initialized faiss's aborts the interpreter outright -- so that
+# hazard was live in production, not just in the test suite `tests/
+# test_rerank.py::test_3a_6_...` documents it for. The composition root now
+# loads the cross-encoder client during `app.main.app`'s construction
+# instead, fixing the import order at process start.
+
+
+def test_i5_cross_encoder_loads_eagerly_during_app_composition_not_on_first_query(
+    application: Application, monkeypatch
+):
+    monkeypatch.setattr(app.main, "bootstrap", lambda: application)
+
+    constructed_with: list[str] = []
+
+    class _RecordingCrossEncoder:
+        def __init__(self, model_name: str) -> None:
+            constructed_with.append(model_name)
+
+        def predict(self, pairs: list[list[str]]) -> list[float]:
+            return [5.0 for _ in pairs]
+
+    fake_module = types.ModuleType("sentence_transformers")
+    fake_module.CrossEncoder = _RecordingCrossEncoder
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+
+    _fastapi_app = app.main.app  # triggers the real composition root exactly once
+
+    assert constructed_with, (
+        "the cross-encoder client was not constructed while building "
+        "app.main.app -- it is still being deferred to the first query "
+        "that reaches Reranker.rerank()"
     )

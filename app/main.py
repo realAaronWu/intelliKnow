@@ -161,5 +161,18 @@ def __getattr__(name: str):
 
         deps = _build_default_deps(application, engine, vector_store)
         pipeline_deps = _build_pipeline_deps(application, engine, vector_store)
+        # I5: load the cross-encoder now, at process startup, rather than
+        # deferring it into whichever query happens to be first.
+        # `VectorStore` above has already imported faiss; loading the
+        # cross-encoder (and therefore torch) here too, in the same
+        # process-startup window, fixes their relative import order at a
+        # predictable point instead of leaving it to a live request -- see
+        # `tests/test_rerank.py::test_3a_6_...`'s docstring for why that
+        # ordering matters on this platform (an interpreter abort, not a
+        # catchable exception). Also takes model-load latency off the
+        # first user's query. `Reranker.score`'s docstring documents
+        # exactly this: construct `Reranker` and call `.score()` once
+        # during wiring for callers that want it loaded at startup.
+        pipeline_deps.reranker.score("warm-up", ["warm-up"])
         return create_app(deps, pipeline_deps)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
