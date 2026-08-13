@@ -50,12 +50,29 @@ def read_meta(faiss_dir: Path) -> IndexMeta | None:
 
 def write_meta(faiss_dir: Path, model: str, dimension: int) -> None:
     """Record `model`/`dimension` as the embedding config the index was
-    built with. Called at first ingest, and again by a full re-index once
-    every document has been rebuilt under a new model.
+    built with, replacing any existing record.
+
+    Only a full re-index may call this on an index that already has a
+    record — the whole point of the record is that it names the model the
+    stored vectors were produced with. Ingest uses `record_meta_if_absent`.
     """
     path = _meta_path(faiss_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"model": model, "dimension": dimension}))
+
+
+def record_meta_if_absent(faiss_dir: Path, model: str, dimension: int) -> None:
+    """Record `model`/`dimension` if nothing has been recorded yet.
+
+    `spec: document-ingestion` § "Embedding model recorded at first
+    ingest". Called on every successful ingest, and a no-op on all but the
+    first: an existing record names the model the vectors already in the
+    index were built with, and restamping it with whatever happens to be
+    configured now would erase exactly the mismatch `assert_compatible`
+    exists to detect.
+    """
+    if read_meta(faiss_dir) is None:
+        write_meta(faiss_dir, model=model, dimension=dimension)
 
 
 def _has_any_vectors(faiss_dir: Path) -> bool:
@@ -80,10 +97,13 @@ def assert_compatible(cfg: AppConfig, faiss_dir: Path) -> None:
     recorded for `faiss_dir` and the index actually holds vectors.
 
     No recorded meta (fresh install) or a recorded-but-empty index (nothing
-    to be incompatible with) permits any model. This is deliberately
-    shaped so a caller can adapt it into a `ConfigService` guard —
-    `lambda old, new: assert_compatible(new, faiss_dir)` — rejecting an
-    embedding-model change at update time rather than only at startup.
+    to be incompatible with) permits any model.
+
+    `app/bootstrap.py` calls this two ways, and needs both: directly, at
+    startup, because editing `config.yaml` and restarting is how an
+    operator actually changes a model; and adapted into a `ConfigService`
+    guard — `lambda old, new: assert_compatible(new, faiss_dir)` — so a
+    live `update()` or `reload()` is rejected too.
     """
     meta = read_meta(faiss_dir)
     if meta is None:

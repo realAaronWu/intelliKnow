@@ -200,6 +200,65 @@ def test_embedding_model_change_permitted_before_any_document_is_indexed(
     assert updated.embedding.model == "a-different-model"
 
 
+# --- The guard at startup, not only at update() -------------------------------
+#
+# Registering `assert_compatible` as a `ConfigService` guard only ever
+# covered `update()`. The normal way an operator changes the embedding
+# model is editing `config.yaml` and restarting — the one path that was
+# unchecked — so the guard was inert exactly where it mattered.
+
+
+def test_startup_rejects_a_config_whose_model_differs_from_the_built_index(
+    local_config_with_faiss_dir,
+):
+    config_path, faiss_dir = local_config_with_faiss_dir
+    _plant_index_with_vectors(faiss_dir, "hr", model="the-model-that-built-it", dimension=384)
+
+    with pytest.raises(ValueError) as excinfo:
+        bootstrap(config_path=config_path, env={})
+
+    message = str(excinfo.value)
+    assert "the-model-that-built-it" in message
+    assert "all-MiniLM-L6-v2" in message
+
+
+def test_startup_accepts_a_config_matching_the_built_index(local_config_with_faiss_dir):
+    config_path, faiss_dir = local_config_with_faiss_dir
+    _plant_index_with_vectors(faiss_dir, "hr", model="all-MiniLM-L6-v2", dimension=384)
+
+    app = bootstrap(config_path=config_path, env={})
+
+    assert app.config.embedding.model == "all-MiniLM-L6-v2"
+
+
+def test_startup_permits_any_model_on_a_fresh_install(local_config_with_faiss_dir):
+    config_path, _faiss_dir = local_config_with_faiss_dir
+
+    app = bootstrap(config_path=config_path, env={})
+
+    assert app.config.embedding.model == "all-MiniLM-L6-v2"
+
+
+def test_reload_rejects_an_externally_edited_embedding_model(local_config_with_faiss_dir):
+    """`reload()` re-reads the file an operator just edited, so it needs the
+    same guard `update()` gets.
+    """
+    import yaml
+
+    config_path, faiss_dir = local_config_with_faiss_dir
+    _plant_index_with_vectors(faiss_dir, "hr", model="all-MiniLM-L6-v2", dimension=384)
+    app = bootstrap(config_path=config_path, env={})
+
+    raw = yaml.safe_load(config_path.read_text())
+    raw["embedding"]["model"] = "text-embedding-3-small"
+    config_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+
+    with pytest.raises(ValueError, match="all-MiniLM-L6-v2"):
+        app.config_service.reload()
+
+    assert app.config_service.current.embedding.model == "all-MiniLM-L6-v2"
+
+
 def test_caller_supplied_guards_run_alongside_the_embedding_guard(local_config_with_faiss_dir):
     config_path, _faiss_dir = local_config_with_faiss_dir
     calls: list[str] = []

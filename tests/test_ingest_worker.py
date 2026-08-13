@@ -18,6 +18,7 @@ from app.config import AppConfig
 from app.db import chunks, create_engine_for, documents, init_schema
 from app.ingest.worker import IngestDeps, ingest_document
 from app.providers.base import ProviderError
+from app.rag.index_meta import read_meta, write_meta
 from app.rag.index_writer import IndexWriter
 from app.rag.vector_store import VectorStore
 from tests.doubles import FakeEmbeddingProvider, FakeLLMProvider
@@ -54,13 +55,27 @@ def engine(tmp_path: Path):
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> VectorStore:
-    return VectorStore(tmp_path / "faiss", DIMENSION)
+def faiss_dir(tmp_path: Path) -> Path:
+    return tmp_path / "faiss"
 
 
 @pytest.fixture
-def cfg() -> AppConfig:
-    return AppConfig()
+def store(faiss_dir: Path) -> VectorStore:
+    return VectorStore(faiss_dir, DIMENSION)
+
+
+@pytest.fixture
+def cfg(faiss_dir: Path) -> AppConfig:
+    """Storage paths are pinned under `tmp_path`: ingestion now records
+    `index_meta.json` next to `storage.faiss_dir`, and the defaults point
+    at the repo's real `./data` directory.
+    """
+    return AppConfig.model_validate(
+        {
+            "embedding": {"model": "fake-embed-model", "dimension": DIMENSION},
+            "storage": {"faiss_dir": str(faiss_dir)},
+        }
+    )
 
 
 @pytest.fixture
@@ -158,6 +173,58 @@ def test_10_1_happy_path_sets_indexed_with_chunk_count_and_timestamp(
     assert row.intent_slug == "hr"
     assert row.error_message is None
     assert _chunk_count_for(engine, doc_id) == row.chunk_count
+
+
+# --- Embedding model recorded at first ingest -----------------------------------
+#
+# `spec: document-ingestion` § "Embedding model recorded at first ingest".
+# `write_meta` had exactly one production caller — a full re-index — so on
+# a real install `index_meta.json` never existed, `assert_compatible` hit
+# its `if meta is None: return` branch, and the immutability guard
+# permitted every model change forever. Every guard test planted the file
+# by hand, so nothing noticed the requirement was unimplemented.
+
+
+def test_first_ingest_records_the_embedding_model_and_dimension(
+    engine, deps, classify_llm, cfg
+):
+    faiss_dir = Path(cfg.storage.faiss_dir)
+    assert read_meta(faiss_dir) is None
+    doc_id = _insert_pending_document(engine, "handbook.pdf")
+    classify_llm.expect_schema({"slug": "hr"})
+
+    ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
+
+    assert _get_document(engine, doc_id).status == "indexed"
+    meta = read_meta(faiss_dir)
+    assert meta is not None
+    assert meta.model == cfg.embedding.model
+    assert meta.dimension == cfg.embedding.dimension
+
+
+def test_a_later_ingest_does_not_rewrite_an_existing_record(engine, deps, classify_llm, cfg):
+    """The record names the model the index was *built* with. Only a full
+    re-index may change it — a later ingest must never quietly restamp it
+    with whatever is configured now, since that is precisely the mismatch
+    `assert_compatible` exists to catch.
+    """
+    faiss_dir = Path(cfg.storage.faiss_dir)
+    write_meta(faiss_dir, model="the-model-that-built-it", dimension=DIMENSION)
+    doc_id = _insert_pending_document(engine, "handbook.pdf")
+    classify_llm.expect_schema({"slug": "hr"})
+
+    ingest_document(doc_id, FIXTURES / "handbook.pdf", deps)
+
+    assert read_meta(faiss_dir).model == "the-model-that-built-it"
+
+
+def test_a_failed_ingest_records_nothing(engine, deps, cfg):
+    doc_id = _insert_pending_document(engine, "corrupt.pdf")
+
+    ingest_document(doc_id, FIXTURES / "corrupt.pdf", deps)
+
+    assert _get_document(engine, doc_id).status == "failed"
+    assert read_meta(Path(cfg.storage.faiss_dir)) is None
 
 
 # --- 10.2 Loader failure -----------------------------------------------------------

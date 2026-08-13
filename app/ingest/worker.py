@@ -35,6 +35,7 @@ from app.ingest.classify_doc import suggest_intent
 from app.providers.base import EmbeddingProvider, LLMProvider
 from app.rag.blocks import Block, DocumentLoader, LoaderError
 from app.rag.chunker import Chunk, chunk_blocks
+from app.rag.index_meta import record_meta_if_absent
 from app.rag.index_writer import IndexWriter
 from app.rag.loaders.docx import DocxLoader
 from app.rag.loaders.pdf import PdfLoader
@@ -194,7 +195,8 @@ def load_and_chunk(
 def ingest_document(doc_id: int, path: Path, deps: IngestDeps) -> None:
     """Run the full ingestion pipeline for `doc_id`, whose uploaded file
     lives at `path`: load -> repair tables -> chunk -> suggest intent ->
-    embed -> index -> status `indexed` with chunk count and timestamp.
+    embed -> index -> record the embedding model (first ingest only) ->
+    status `indexed` with chunk count and timestamp.
 
     Any failure sets status `failed` with a human-readable message and
     leaves no partial chunks, chunk_fts rows, or vectors behind for this
@@ -215,6 +217,15 @@ def ingest_document(doc_id: int, path: Path, deps: IngestDeps) -> None:
         deps.index_writer.remove_document(doc_id)
         _mark_failed(deps.engine, doc_id, str(exc))
         return
+
+    # `spec: document-ingestion` § "Embedding model recorded at first
+    # ingest". A no-op after the first document; see
+    # `app/rag/index_meta.py::record_meta_if_absent`.
+    record_meta_if_absent(
+        Path(deps.cfg.storage.faiss_dir),
+        model=deps.cfg.embedding.model,
+        dimension=deps.cfg.embedding.dimension,
+    )
 
     _mark_indexed(
         deps.engine,

@@ -130,6 +130,46 @@ def test_2_7_reload_picks_up_external_edit(config_path):
     assert service.current.orchestrator.confidence_threshold == 0.55
 
 
+def test_reload_runs_the_guards_against_the_edited_file(config_path):
+    """Editing `config.yaml` by hand and restarting — or reloading — is the
+    normal way an operator changes a setting, so a guard that only runs on
+    `update()` never sees the change it exists to reject.
+    """
+    def refuse_embedding_change(old: AppConfig, new: AppConfig) -> None:
+        if old.embedding.model != new.embedding.model:
+            raise ValueError("embedding.model is immutable while documents exist")
+
+    service = ConfigService.load(config_path, guards=[refuse_embedding_change])
+    original_model = service.current.embedding.model
+
+    raw = yaml.safe_load(config_path.read_text())
+    raw["embedding"]["model"] = "a-different-model"
+    config_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+
+    with pytest.raises(ValueError, match="immutable"):
+        service.reload()
+
+    assert service.current.embedding.model == original_model
+
+
+def test_a_passing_guard_lets_a_reload_through(config_path):
+    calls: list[tuple[float, float]] = []
+
+    def record(old: AppConfig, new: AppConfig) -> None:
+        calls.append((old.orchestrator.confidence_threshold, new.orchestrator.confidence_threshold))
+
+    service = ConfigService.load(config_path, guards=[record])
+
+    raw = yaml.safe_load(config_path.read_text())
+    raw["orchestrator"]["confidence_threshold"] = 0.55
+    config_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+
+    reloaded = service.reload()
+
+    assert reloaded.orchestrator.confidence_threshold == 0.55
+    assert calls == [(0.70, 0.55)]
+
+
 # --- 2.8 Failed update leaves no backup churn --------------------------------
 
 

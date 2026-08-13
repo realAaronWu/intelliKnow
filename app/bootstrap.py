@@ -63,13 +63,19 @@ def bootstrap(
     naming the missing variable, per `spec: ai-provider` § "Startup
     credential validation".
 
-    Every `ConfigService` built here also carries the embedding-
-    immutability guard: `app/rag/index_meta.py::assert_compatible`,
-    adapted exactly as its own docstring suggests
-    (`lambda old, new: assert_compatible(new, faiss_dir)`), so an
-    embedding-model change while indexed documents exist is rejected at
-    `update()` time rather than only noticed at the next startup. Any
-    caller-supplied `guards` run in addition to it.
+    The embedding-immutability check
+    (`app/rag/index_meta.py::assert_compatible`) runs here in both of the
+    two ways it has to:
+
+    - **directly, against the config just loaded**, so a `config.yaml`
+      edited by hand and picked up at the next restart — the ordinary way
+      an operator changes models — fails loudly at startup rather than
+      silently degrading every answer; and
+    - **as a `ConfigService` guard**, adapted exactly as its own docstring
+      suggests (`lambda old, new: assert_compatible(new, faiss_dir)`), so
+      a live `update()` or `reload()` is rejected too.
+
+    Any caller-supplied `guards` run in addition to it.
     """
     load_dotenv(env_file, override=False)
     env = env if env is not None else os.environ
@@ -83,6 +89,12 @@ def bootstrap(
 
     config_service = ConfigService.load(config_path, guards=(embedding_guard, *guards))
     cfg = config_service.current
+
+    # Guards only ever see a *change* to a live config. Editing
+    # `config.yaml` and restarting changes nothing at runtime, so the
+    # loaded config has to be checked against the index directly, here, or
+    # the most likely way an operator swaps models goes unchecked.
+    assert_compatible(cfg, faiss_dir)
 
     return Application(
         config_service=config_service,
