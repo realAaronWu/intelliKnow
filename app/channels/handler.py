@@ -41,6 +41,7 @@ class HandlerResult:
     status: Literal["ignored", "unsupported", "success", "no_match", "failed"]
     latency_ms: int
     error: str | None = None
+    failure_stage: Literal["pipeline", "delivery"] | None = None
 
 
 Pipeline = Callable[[str, ChannelProfile], QueryOutcome]
@@ -99,7 +100,9 @@ class ChannelHandler:
             latency = self._elapsed(start)
             self._store.mark_disconnected(message.channel, str(exc))
             self._safe_log_failure(message, str(exc), latency, outcome)
-            return HandlerResult(True, False, "failed", latency, str(exc))
+            return HandlerResult(
+                True, False, "failed", latency, str(exc), "delivery"
+            )
 
         latency = self._elapsed(start)
         self._store.mark_connected(message.channel, message.reply_ref)
@@ -120,19 +123,23 @@ class ChannelHandler:
             latency = self._elapsed(start)
             self._store.mark_disconnected(message.channel, str(send_error))
             self._safe_log_failure(message, str(send_error), latency)
-            return HandlerResult(True, False, "failed", latency, str(send_error))
+            return HandlerResult(
+                True, False, "failed", latency, str(send_error), "delivery"
+            )
 
         latency = self._elapsed(start)
         self._store.mark_connected(message.channel, message.reply_ref)
         self._safe_log_failure(message, str(error), latency)
-        return HandlerResult(True, True, "failed", latency, str(error))
+        return HandlerResult(
+            True, True, "failed", latency, str(error), "pipeline"
+        )
 
     def _delivery_failure(
         self, message: InboundMessage, start: float, error: Exception
     ) -> HandlerResult:
         latency = self._elapsed(start)
         self._store.mark_disconnected(message.channel, str(error))
-        return HandlerResult(True, False, "failed", latency, str(error))
+        return HandlerResult(True, False, "failed", latency, str(error), "delivery")
 
     def _safe_log(
         self, message: InboundMessage, outcome: QueryOutcome, latency_ms: int

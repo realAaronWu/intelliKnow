@@ -28,12 +28,14 @@ from sqlalchemy.engine import Engine
 from app.analytics.log import QueryLogger
 from app.api.auth import build_admin_auth
 from app.api.documents import build_documents_router
+from app.api.integrations import build_integrations_router
 from app.api.query import build_query_router
 from app.bootstrap import Application, bootstrap
 from app.channels.handler import ChannelHandler
 from app.channels.store import ChannelStore
 from app.channels.telegram import TelegramPoller
 from app.channels.teams import TeamsEndpoint, build_teams_router
+from app.channels.tester import ChannelTestService
 from app.db import create_engine_for, init_schema, recover_interrupted_documents
 from app.ingest.worker import IngestDeps
 from app.orchestrator.centroids import CentroidIndex
@@ -50,6 +52,8 @@ def create_app(
     admin_password: str | None = None,
     lifespan=None,
     teams_endpoint: TeamsEndpoint | None = None,
+    integration_store: ChannelStore | None = None,
+    channel_tester: ChannelTestService | None = None,
 ) -> FastAPI:
     """Build the FastAPI app bound to `deps` (and, when supplied,
     `pipeline_deps`). Pure: no I/O beyond constructing the
@@ -73,6 +77,11 @@ def create_app(
         )
     if teams_endpoint is not None:
         fastapi_app.include_router(build_teams_router(teams_endpoint))
+    if integration_store is not None and channel_tester is not None:
+        fastapi_app.include_router(
+            build_integrations_router(integration_store, channel_tester),
+            dependencies=admin_dependencies,
+        )
     return fastapi_app
 
 
@@ -249,17 +258,26 @@ def __getattr__(name: str):
             channel_handler,
             max_message_chars=cfg.channels.teams.max_message_chars,
         )
+        channel_tester = ChannelTestService(
+            channel_store,
+            channel_handler,
+            telegram_max_chars=cfg.channels.telegram.max_message_chars,
+            teams_max_chars=cfg.channels.teams.max_message_chars,
+        )
         fastapi_app = create_app(
             deps,
             pipeline_deps,
             admin_password=application.admin_password,
             lifespan=_poller_lifespan(telegram_poller),
             teams_endpoint=teams_endpoint,
+            integration_store=channel_store,
+            channel_tester=channel_tester,
         )
         fastapi_app.state.channel_store = channel_store
         fastapi_app.state.query_logger = query_logger
         fastapi_app.state.channel_handler = channel_handler
         fastapi_app.state.telegram_poller = telegram_poller
         fastapi_app.state.teams_endpoint = teams_endpoint
+        fastapi_app.state.channel_tester = channel_tester
         return fastapi_app
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

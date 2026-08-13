@@ -130,7 +130,13 @@ class ChannelStore:
             raise CredentialError("credentials must contain non-empty values")
         payload = json.dumps(values, sort_keys=True).encode("utf-8")
         encrypted = self._fernet.encrypt(payload).decode("ascii")
-        self._upsert(channel, credentials_encrypted=encrypted)
+        self._upsert(
+            channel,
+            credentials_encrypted=encrypted,
+            status="disconnected",
+            last_error=None,
+            last_error_at=None,
+        )
 
     def load_credentials(self, channel: str) -> Credentials | None:
         self._validate_channel(channel)

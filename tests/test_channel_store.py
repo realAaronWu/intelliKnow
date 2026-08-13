@@ -42,6 +42,20 @@ def test_credentials_are_encrypted_round_trip_and_masked(engine, key):
     }
 
 
+def test_replacing_credentials_disconnects_stale_connected_state(engine, key):
+    store = ChannelStore(engine, key)
+    store.save_credentials("telegram", {"token": "old-secret"})
+    store.set_enabled("telegram", True)
+    store.mark_connected("telegram", "chat-id")
+
+    store.save_credentials("telegram", {"token": "new-secret"})
+
+    state = store.get("telegram")
+    assert state.enabled is True
+    assert state.status == "disconnected"
+    assert state.last_reply_ref == "chat-id"
+
+
 def test_channel_credentials_require_the_platform_specific_fields(engine, key):
     store = ChannelStore(engine, key)
 

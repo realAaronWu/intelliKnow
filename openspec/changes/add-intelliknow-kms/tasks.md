@@ -47,7 +47,7 @@ The implementation is organized by delivered increments, followed by a stabiliza
 - [x] 5.4 Implement Telegram long polling, typing indication, delivery, and duplicate-offset protection
 - [x] 5.5 Implement the authenticated Bot Framework messaging endpoint for Teams
 - [x] 5.6 Log query results after delivery and isolate analytics failures from user replies
-- [ ] 5.7 Add authenticated integration status/configuration/test endpoints
+- [x] 5.7 Add authenticated integration status/configuration/test endpoints
 - [ ] 5.8 Verify real Telegram and real Teams round trips and measure latency through send completion
 
 ## 6. Admin console and delivery
