@@ -32,7 +32,7 @@ from sqlalchemy import Engine, update
 from app.config import AppConfig
 from app.db import documents as documents_table
 from app.ingest.classify_doc import suggest_intent
-from app.providers.base import LLMProvider
+from app.providers.base import EmbeddingProvider, LLMProvider
 from app.rag.blocks import Block, DocumentLoader, LoaderError
 from app.rag.chunker import Chunk, chunk_blocks
 from app.rag.index_writer import IndexWriter
@@ -40,6 +40,7 @@ from app.rag.loaders.docx import DocxLoader
 from app.rag.loaders.pdf import PdfLoader
 from app.rag.loaders.xlsx import XlsxLoader
 from app.rag.tables import is_ragged, repair_table
+from app.rag.vector_store import VectorStore
 
 #: Extension -> loader. Shared default; a caller may substitute its own
 #: mapping (tests do, to inject stub loaders without touching the real
@@ -54,13 +55,23 @@ DEFAULT_LOADERS: Mapping[str, DocumentLoader] = {
 @dataclass
 class IngestDeps:
     """Everything `ingest_document` — and `app/ingest/lifecycle.py`'s
-    re-parse, which shares `load_and_chunk` — needs. Assembled once by the
-    caller from `bootstrap()`'s `Application` plus an `IndexWriter`.
+    re-parse, reassign, delete, and full re-index — need. Assembled once
+    by the caller from `bootstrap()`'s `Application` plus an
+    `IndexWriter`.
+
+    `embedding` and `vector_store` duplicate what `index_writer` already
+    holds internally (privately): per-document operations go through
+    `index_writer` so its chunks/chunk_fts/FAISS invariant stays in one
+    place, but a full re-index rebuilds every space from the `chunks`
+    table directly — an operation `IndexWriter` has no per-document method
+    for — and needs the raw embedder and vector store to do it.
     """
 
     engine: Engine
     cfg: AppConfig
     classify_llm: LLMProvider
+    embedding: EmbeddingProvider
+    vector_store: VectorStore
     index_writer: IndexWriter
     loaders: Mapping[str, DocumentLoader] = field(default_factory=lambda: DEFAULT_LOADERS)
 

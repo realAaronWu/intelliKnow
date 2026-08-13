@@ -68,13 +68,25 @@ def classify_llm() -> FakeLLMProvider:
 
 
 @pytest.fixture
-def index_writer(engine, store) -> IndexWriter:
-    return IndexWriter(engine, store, FakeEmbeddingProvider(dimension=DIMENSION))
+def embedder() -> FakeEmbeddingProvider:
+    return FakeEmbeddingProvider(dimension=DIMENSION)
 
 
 @pytest.fixture
-def deps(engine, cfg, classify_llm, index_writer) -> IngestDeps:
-    return IngestDeps(engine=engine, cfg=cfg, classify_llm=classify_llm, index_writer=index_writer)
+def index_writer(engine, store, embedder) -> IndexWriter:
+    return IndexWriter(engine, store, embedder)
+
+
+@pytest.fixture
+def deps(engine, cfg, classify_llm, embedder, store, index_writer) -> IngestDeps:
+    return IngestDeps(
+        engine=engine,
+        cfg=cfg,
+        classify_llm=classify_llm,
+        embedding=embedder,
+        vector_store=store,
+        index_writer=index_writer,
+    )
 
 
 def _insert_pending_document(engine, filename: str, sha256: str = "a" * 64) -> int:
@@ -179,7 +191,12 @@ def test_10_3_embedding_failure_leaves_no_partial_chunks_fts_or_vectors(
     failing_embedder = _FailingEmbeddingProvider(dimension=DIMENSION)
     failing_writer = IndexWriter(engine, store, failing_embedder)
     failing_deps = IngestDeps(
-        engine=engine, cfg=cfg, classify_llm=classify_llm, index_writer=failing_writer
+        engine=engine,
+        cfg=cfg,
+        classify_llm=classify_llm,
+        embedding=failing_embedder,
+        vector_store=store,
+        index_writer=failing_writer,
     )
     doc_id = _insert_pending_document(engine, "handbook.pdf")
     classify_llm.expect_schema({"slug": "hr"})
@@ -201,9 +218,15 @@ def test_10_4_provider_outage_leaves_other_indexed_documents_searchable(
     engine, store, cfg, classify_llm
 ):
     # A healthy document, indexed first.
-    healthy_writer = IndexWriter(engine, store, FakeEmbeddingProvider(dimension=DIMENSION))
+    healthy_embedder = FakeEmbeddingProvider(dimension=DIMENSION)
+    healthy_writer = IndexWriter(engine, store, healthy_embedder)
     healthy_deps = IngestDeps(
-        engine=engine, cfg=cfg, classify_llm=classify_llm, index_writer=healthy_writer
+        engine=engine,
+        cfg=cfg,
+        classify_llm=classify_llm,
+        embedding=healthy_embedder,
+        vector_store=store,
+        index_writer=healthy_writer,
     )
     other_doc_id = _insert_pending_document(engine, "salary_bands.pdf", sha256="b" * 64)
     classify_llm.expect_schema({"slug": "finance"})
@@ -216,7 +239,12 @@ def test_10_4_provider_outage_leaves_other_indexed_documents_searchable(
     failing_embedder = _FailingEmbeddingProvider(dimension=DIMENSION)
     failing_writer = IndexWriter(engine, store, failing_embedder)
     failing_deps = IngestDeps(
-        engine=engine, cfg=cfg, classify_llm=classify_llm, index_writer=failing_writer
+        engine=engine,
+        cfg=cfg,
+        classify_llm=classify_llm,
+        embedding=failing_embedder,
+        vector_store=store,
+        index_writer=failing_writer,
     )
     doc_id = _insert_pending_document(engine, "handbook.pdf", sha256="c" * 64)
     classify_llm.expect_schema({"slug": "hr"})
@@ -261,8 +289,16 @@ def test_ragged_table_document_triggers_repair_and_still_indexes(engine, store, 
         }
     )
     llm.expect_schema({"slug": "finance"})
-    writer = IndexWriter(engine, store, FakeEmbeddingProvider(dimension=DIMENSION))
-    deps = IngestDeps(engine=engine, cfg=cfg, classify_llm=llm, index_writer=writer)
+    embedder = FakeEmbeddingProvider(dimension=DIMENSION)
+    writer = IndexWriter(engine, store, embedder)
+    deps = IngestDeps(
+        engine=engine,
+        cfg=cfg,
+        classify_llm=llm,
+        embedding=embedder,
+        vector_store=store,
+        index_writer=writer,
+    )
     doc_id = _insert_pending_document(engine, "ragged_salary_grid.pdf")
 
     ingest_document(doc_id, FIXTURES / "ragged_salary_grid.pdf", deps)
@@ -283,8 +319,16 @@ def test_ragged_table_document_triggers_repair_and_still_indexes(engine, store, 
 def test_clean_table_document_is_not_sent_to_the_model_for_repair(engine, store, cfg):
     llm = FakeLLMProvider()
     llm.expect_schema({"slug": "finance"})  # only the intent-suggestion call
-    writer = IndexWriter(engine, store, FakeEmbeddingProvider(dimension=DIMENSION))
-    deps = IngestDeps(engine=engine, cfg=cfg, classify_llm=llm, index_writer=writer)
+    embedder = FakeEmbeddingProvider(dimension=DIMENSION)
+    writer = IndexWriter(engine, store, embedder)
+    deps = IngestDeps(
+        engine=engine,
+        cfg=cfg,
+        classify_llm=llm,
+        embedding=embedder,
+        vector_store=store,
+        index_writer=writer,
+    )
     doc_id = _insert_pending_document(engine, "salary_bands.pdf")
 
     ingest_document(doc_id, FIXTURES / "salary_bands.pdf", deps)
