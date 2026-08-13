@@ -16,12 +16,15 @@ import os
 import shutil
 from pathlib import Path
 
+import faiss
+import numpy as np
 import pytest
 
 from app.bootstrap import bootstrap
 from app.config_service import ConfigService
 from app.providers.local_embedding import SentenceTransformerEmbedding
 from app.providers.local_llm import LocalLLM
+from app.rag.index_meta import write_meta
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SHIPPED_CONFIG = REPO_ROOT / "config.yaml"
@@ -123,3 +126,148 @@ def test_missing_credential_fails_startup_naming_the_env_var(tmp_path):
 
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
         bootstrap(config_path=dest, env={})
+
+
+# --- Embedding-immutability guard (carry-forward item b) ------------------------
+#
+# `app/rag/index_meta.py::assert_compatible` exists and is unit-tested
+# directly (tests/test_index_meta.py), but until it is registered as a
+# `ConfigService` guard here, an embedding-model change is only ever
+# noticed at the next startup — `assert_compatible` is never actually
+# called on a live `update()`. These tests exercise the wiring, not the
+# check's own logic.
+
+
+@pytest.fixture
+def local_config_with_faiss_dir(tmp_path: Path) -> tuple[Path, Path]:
+    """The shipped config, switched to local backends and pointed at a
+    `faiss_dir` under `tmp_path` so a test can plant an index there
+    without touching the real `./data` directory.
+    """
+    import yaml
+
+    dest = tmp_path / "config.yaml"
+    shutil.copy(SHIPPED_CONFIG, dest)
+    faiss_dir = tmp_path / "faiss"
+    raw = yaml.safe_load(dest.read_text())
+    raw["llm"]["provider"] = "local"
+    raw["embedding"]["provider"] = "local"
+    raw["storage"]["faiss_dir"] = str(faiss_dir)
+    dest.write_text(yaml.safe_dump(raw, sort_keys=False))
+    return dest, faiss_dir
+
+
+def _plant_index_with_vectors(faiss_dir: Path, slug: str, model: str, dimension: int) -> None:
+    faiss_dir.mkdir(parents=True, exist_ok=True)
+    write_meta(faiss_dir, model=model, dimension=dimension)
+    index = faiss.IndexIDMap2(faiss.IndexFlatIP(dimension))
+    vectors = np.eye(1, dimension, dtype="float32")
+    ids = np.array([1], dtype="int64")
+    index.add_with_ids(vectors, ids)
+    faiss.write_index(index, str(faiss_dir / f"{slug}.index"))
+
+
+def test_embedding_model_change_is_rejected_at_update_time(local_config_with_faiss_dir):
+    config_path, faiss_dir = local_config_with_faiss_dir
+    _plant_index_with_vectors(faiss_dir, "hr", model="all-MiniLM-L6-v2", dimension=384)
+    app = bootstrap(config_path=config_path, env={})
+
+    with pytest.raises(ValueError, match="all-MiniLM-L6-v2"):
+        app.config_service.update({"embedding": {"model": "text-embedding-3-small"}})
+
+    assert app.config_service.current.embedding.model == "all-MiniLM-L6-v2"
+
+
+def test_embedding_model_kept_the_same_is_accepted(local_config_with_faiss_dir):
+    config_path, faiss_dir = local_config_with_faiss_dir
+    _plant_index_with_vectors(faiss_dir, "hr", model="all-MiniLM-L6-v2", dimension=384)
+    app = bootstrap(config_path=config_path, env={})
+
+    updated = app.config_service.update({"orchestrator": {"confidence_threshold": 0.85}})
+
+    assert updated.embedding.model == "all-MiniLM-L6-v2"
+    assert updated.orchestrator.confidence_threshold == 0.85
+
+
+def test_embedding_model_change_permitted_before_any_document_is_indexed(
+    local_config_with_faiss_dir,
+):
+    config_path, _faiss_dir = local_config_with_faiss_dir
+    app = bootstrap(config_path=config_path, env={})
+
+    updated = app.config_service.update({"embedding": {"model": "a-different-model"}})
+
+    assert updated.embedding.model == "a-different-model"
+
+
+# --- The guard at startup, not only at update() -------------------------------
+#
+# Registering `assert_compatible` as a `ConfigService` guard only ever
+# covered `update()`. The normal way an operator changes the embedding
+# model is editing `config.yaml` and restarting — the one path that was
+# unchecked — so the guard was inert exactly where it mattered.
+
+
+def test_startup_rejects_a_config_whose_model_differs_from_the_built_index(
+    local_config_with_faiss_dir,
+):
+    config_path, faiss_dir = local_config_with_faiss_dir
+    _plant_index_with_vectors(faiss_dir, "hr", model="the-model-that-built-it", dimension=384)
+
+    with pytest.raises(ValueError) as excinfo:
+        bootstrap(config_path=config_path, env={})
+
+    message = str(excinfo.value)
+    assert "the-model-that-built-it" in message
+    assert "all-MiniLM-L6-v2" in message
+
+
+def test_startup_accepts_a_config_matching_the_built_index(local_config_with_faiss_dir):
+    config_path, faiss_dir = local_config_with_faiss_dir
+    _plant_index_with_vectors(faiss_dir, "hr", model="all-MiniLM-L6-v2", dimension=384)
+
+    app = bootstrap(config_path=config_path, env={})
+
+    assert app.config.embedding.model == "all-MiniLM-L6-v2"
+
+
+def test_startup_permits_any_model_on_a_fresh_install(local_config_with_faiss_dir):
+    config_path, _faiss_dir = local_config_with_faiss_dir
+
+    app = bootstrap(config_path=config_path, env={})
+
+    assert app.config.embedding.model == "all-MiniLM-L6-v2"
+
+
+def test_reload_rejects_an_externally_edited_embedding_model(local_config_with_faiss_dir):
+    """`reload()` re-reads the file an operator just edited, so it needs the
+    same guard `update()` gets.
+    """
+    import yaml
+
+    config_path, faiss_dir = local_config_with_faiss_dir
+    _plant_index_with_vectors(faiss_dir, "hr", model="all-MiniLM-L6-v2", dimension=384)
+    app = bootstrap(config_path=config_path, env={})
+
+    raw = yaml.safe_load(config_path.read_text())
+    raw["embedding"]["model"] = "text-embedding-3-small"
+    config_path.write_text(yaml.safe_dump(raw, sort_keys=False))
+
+    with pytest.raises(ValueError, match="all-MiniLM-L6-v2"):
+        app.config_service.reload()
+
+    assert app.config_service.current.embedding.model == "all-MiniLM-L6-v2"
+
+
+def test_caller_supplied_guards_run_alongside_the_embedding_guard(local_config_with_faiss_dir):
+    config_path, _faiss_dir = local_config_with_faiss_dir
+    calls: list[str] = []
+
+    def extra_guard(old, new) -> None:
+        calls.append("extra")
+
+    app = bootstrap(config_path=config_path, env={}, guards=(extra_guard,))
+
+    app.config_service.update({"orchestrator": {"confidence_threshold": 0.85}})
+
+    assert calls == ["extra"]

@@ -84,8 +84,18 @@ class ConfigService:
         return self._current
 
     def reload(self) -> AppConfig:
-        """Re-read the config file from disk, picking up external edits."""
-        self._current = load_config(self._path)
+        """Re-read the config file from disk, picking up external edits.
+
+        Guards run against `(current, on-disk)` before the new config is
+        adopted, so a vetoed reload raises and leaves `current` untouched.
+        An operator editing `config.yaml` by hand is the *most* likely way
+        a guarded setting changes — a guard that only covered `update()`
+        would be inert on the path that actually matters.
+        """
+        new_config = load_config(self._path)
+        for guard in self._guards:
+            guard(self._current, new_config)
+        self._current = new_config
         return self._current
 
     def update(self, patch: dict[str, Any]) -> AppConfig:

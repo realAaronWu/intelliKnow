@@ -21,6 +21,20 @@ conflated:
   `ProviderError` at all — it's retried once, and only if the retry also
   fails does a `ProviderError` with category `backend` get raised, naming
   the violated schema. See `app/providers/schema_validation.py`.
+
+Before either of those runs, `schema_validation.validate_schema_shape`
+rejects a caller-supplied schema outright if any `type: "object"` node —
+at any nesting depth — omits `additionalProperties: false`, which the real
+Anthropic API rejects with a 400. The check itself lives in the
+provider-independent module, not here, for two reasons: it raises
+`InvalidSchemaError` rather than `ProviderError`, so a malformed schema
+cannot be absorbed by the `except ProviderError` fallbacks in
+`suggest_intent` and `repair_table` (which would file every document
+under the fallback space, the very defect this guards); and being
+provider-independent lets `tests/test_schema_shapes.py` apply it to every
+schema in `app/` at test time, whichever provider happens to be
+configured. Calling it here as well keeps the failure immediate and
+client-side rather than a 400 from the wire.
 """
 
 from __future__ import annotations
@@ -41,6 +55,7 @@ from app.providers.schema_validation import (
     SchemaViolation,
     describe_schema,
     parse_and_validate,
+    validate_schema_shape,
 )
 
 # A malformed structured-output response is retried once (initial attempt +
@@ -93,6 +108,7 @@ class AnthropicLLM:
         if self._effort is not None:
             output_config["effort"] = self._effort
         if schema is not None:
+            validate_schema_shape(schema)
             output_config["format"] = {"type": "json_schema", "schema": schema}
 
         kwargs: dict[str, Any] = {

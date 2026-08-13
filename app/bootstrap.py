@@ -20,10 +20,11 @@ from typing import Mapping
 
 from dotenv import load_dotenv
 
-from app.config import AppConfig
+from app.config import AppConfig, load_config
 from app.config_service import ConfigService, Guard
 from app.providers.base import EmbeddingProvider, LLMProvider
 from app.providers.factory import build_embedding_provider, build_llm_provider
+from app.rag.index_meta import assert_compatible
 
 DEFAULT_CONFIG_PATH = Path("config.yaml")
 DEFAULT_ENV_FILE = Path(".env")
@@ -61,12 +62,39 @@ def bootstrap(
     providers: a remote backend with no API key fails with a `RuntimeError`
     naming the missing variable, per `spec: ai-provider` § "Startup
     credential validation".
+
+    The embedding-immutability check
+    (`app/rag/index_meta.py::assert_compatible`) runs here in both of the
+    two ways it has to:
+
+    - **directly, against the config just loaded**, so a `config.yaml`
+      edited by hand and picked up at the next restart — the ordinary way
+      an operator changes models — fails loudly at startup rather than
+      silently degrading every answer; and
+    - **as a `ConfigService` guard**, adapted exactly as its own docstring
+      suggests (`lambda old, new: assert_compatible(new, faiss_dir)`), so
+      a live `update()` or `reload()` is rejected too.
+
+    Any caller-supplied `guards` run in addition to it.
     """
     load_dotenv(env_file, override=False)
     env = env if env is not None else os.environ
 
-    config_service = ConfigService.load(config_path, guards=guards)
+    # Read once, unguarded, purely to learn `storage.faiss_dir` — the
+    # embedding guard closes over it. `ConfigService.load` below re-reads
+    # the (by then certainly existing) file to build the real, guarded
+    # service.
+    faiss_dir = Path(load_config(config_path).storage.faiss_dir)
+    embedding_guard: Guard = lambda old, new: assert_compatible(new, faiss_dir)
+
+    config_service = ConfigService.load(config_path, guards=(embedding_guard, *guards))
     cfg = config_service.current
+
+    # Guards only ever see a *change* to a live config. Editing
+    # `config.yaml` and restarting changes nothing at runtime, so the
+    # loaded config has to be checked against the index directly, here, or
+    # the most likely way an operator swaps models goes unchecked.
+    assert_compatible(cfg, faiss_dir)
 
     return Application(
         config_service=config_service,

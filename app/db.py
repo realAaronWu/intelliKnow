@@ -46,6 +46,13 @@ documents = Table(
     Column("size_bytes", Integer, nullable=False),
     Column("sha256", String, nullable=False, unique=True),
     Column("intent_slug", String, nullable=False),
+    # "model" when `intent_slug` came from the LLM's own suggestion;
+    # otherwise names why a fallback was used instead ("provider_error" /
+    # "invalid_slug" — see `app/ingest/classify_doc.py::IntentSuggestion`).
+    # Defaults to "model" so a row that never reaches a real assignment
+    # (e.g. ingestion fails before intent suggestion runs) renders with no
+    # fallback annotation in `scripts/ingest.py`, matching prior behaviour.
+    Column("intent_assigned_by", String, nullable=False, default="model"),
     Column("status", String, nullable=False),
     Column("error_message", Text, nullable=True),
     Column("chunk_count", Integer, nullable=False, default=0),
@@ -172,6 +179,25 @@ def create_engine_for(path: Path) -> Engine:
     engine = create_engine(f"sqlite:///{path}")
     event.listen(engine, "connect", _configure_connection)
     return engine
+
+
+def check_fts_integrity(engine: Engine) -> None:
+    """Raise if `chunk_fts` has drifted out of step with `chunks`.
+
+    FTS5's own `integrity-check` command, with `rank = 1` — the argument
+    that makes it compare the index against the *content table* rather
+    than only checking the index's internal consistency. It raises
+    `DatabaseError: database disk image is malformed` when they disagree.
+
+    This exists because the obvious check does not work. `chunk_fts` is an
+    external-content table, so `SELECT count(*) FROM chunk_fts` full-scans
+    `chunks` and returns the chunks count whether or not the index is
+    synced — verified by deleting the sync triggers and watching it still
+    report the right number. Any "the three stores agree" assertion built
+    on that shape passes unconditionally.
+    """
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO chunk_fts(chunk_fts, rank) VALUES('integrity-check', 1)"))
 
 
 def init_schema(engine: Engine) -> None:

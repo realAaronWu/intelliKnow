@@ -8,7 +8,9 @@
 
 **Architecture:** A pipeline of single-responsibility components. `DocumentLoader` produces typed blocks with provenance; `StructuralChunker` packs blocks under structural rules; `Embedder` batches through the provider layer; `IndexWriter` keeps three stores consistent. An ingestion worker drives them in the background so uploads return immediately.
 
-**Tech Stack:** `pypdf`, `pdfplumber`, `python-docx`, `openpyxl`, `faiss-cpu`, SQLAlchemy, FastAPI
+**Tech Stack:** `pypdf`, `pdfplumber`, `python-docx`, `openpyxl`, `faiss-cpu`, `reportlab`, SQLAlchemy, FastAPI
+
+**Scheduling note:** increment 02 (test corpus) was deferred by the project owner — the real-world corpus fetch is not needed until the day-7 accuracy run. Its **Task 1 (synthetic fixture generator) is pulled forward into this plan as Task 0**, because every loader and chunker test here asserts against those fixtures' known content. Fixtures are script-generated, offline, and free; only the network fetch is deferred.
 
 ## Global Constraints
 
@@ -17,6 +19,20 @@
 - The `chunk` table, the `chunk_fts` keyword index, and the FAISS index must never disagree.
 - Ingestion failures are captured per-document; one bad file never affects the rest of the knowledge base.
 - L1 tests use `FakeLLMProvider` / `FakeEmbeddingProvider`. L2 tests may use real FAISS, FTS5, and local embeddings.
+
+---
+
+### Task 0: Synthetic document fixtures (pulled forward from plan 02)
+
+**Files:** Create `scripts/make_fixtures.py`, `tests/fixtures/docs/` (generated, committed) · Test `tests/test_fixtures.py`
+
+**Interfaces:** Produces `build_all(out_dir: Path) -> list[Path]` and module-level constants (`SALARY_BANDS`, `ANNUAL_LEAVE_DAYS`, …) that tests import rather than duplicating.
+
+**Behaviour:** see `docs/superpowers/plans/2026-08-08-02-test-corpus.md` § Task 1 for the nine-document table and the byte-reproducibility requirement. Test expectations are in `docs/superpowers/test-plans/02-test-corpus-tests.md` § 1.
+
+**Byte reproducibility is a hard requirement** — fix document metadata and suppress embedded timestamps. Without it `duplicate.pdf` stops matching `salary_bands.pdf` and the duplicate-rejection test in Task 9 becomes flaky.
+
+- [ ] Write failing tests · [ ] Confirm fail · [ ] Implement · [ ] Confirm green · [ ] Commit
 
 ---
 
@@ -211,6 +227,18 @@ This is the brief's first named AI usage scenario. Validate against `ragged_sala
 - Validation failures return actionable messages, not bare status codes.
 
 - [ ] Write failing tests · [ ] Confirm fail · [ ] Implement · [ ] Confirm green · [ ] Commit
+
+---
+
+### Task 13: Demo CLI
+
+**Files:** Create `scripts/ingest.py`
+
+**Behaviour:** the project owner needs something runnable at the end of this increment. A CLI that takes one or more file paths, runs them through the real ingestion pipeline, and prints per document: status, assigned intent space, chunk count, and the first few chunks with their heading path and source ref. Then prints the totals across all three stores (chunk rows, FTS5 rows, FAISS vectors per space) so the three-stores-agree invariant is visible rather than only asserted in tests.
+
+It must work with the shipped local-default config and no API key — intent suggestion falls back to the fallback space when no LLM is reachable, which is already the specified behaviour.
+
+- [ ] Build · [ ] Run against `tests/fixtures/docs/` · [ ] Commit
 
 ---
 
