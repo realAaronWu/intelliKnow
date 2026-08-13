@@ -14,7 +14,7 @@ inventing their own.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
 
@@ -39,6 +39,8 @@ class Application:
     generate_llm: LLMProvider
     embedding: EmbeddingProvider
     admin_password: str | None = None
+    credential_encryption_key: str | None = None
+    channel_env: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def config(self) -> AppConfig:
@@ -103,4 +105,10 @@ def bootstrap(
         generate_llm=build_llm_provider(cfg, role="generate", env=env),
         embedding=build_embedding_provider(cfg, env=env),
         admin_password=env.get("ADMIN_PASSWORD"),
+        credential_encryption_key=env.get("CREDENTIAL_ENCRYPTION_KEY"),
+        channel_env={
+            name: value
+            for name in ("TELEGRAM_BOT_TOKEN", "TEAMS_APP_ID", "TEAMS_APP_PASSWORD")
+            if (value := env.get(name))
+        },
     )

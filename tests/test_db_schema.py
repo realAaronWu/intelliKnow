@@ -58,6 +58,38 @@ def test_all_tables_present(engine):
         assert name in table_names
 
 
+def test_integration_table_has_handler_persistence_columns(engine):
+    columns = {column["name"] for column in inspect(engine).get_columns("integrations")}
+
+    assert {"last_reply_ref", "last_error_at"} <= columns
+
+
+def test_init_schema_adds_handler_columns_to_an_existing_integration_table(tmp_path):
+    old_engine = create_engine_for(tmp_path / "old.db")
+    with old_engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE integrations (
+                    channel VARCHAR PRIMARY KEY,
+                    display_name VARCHAR NOT NULL,
+                    enabled BOOLEAN NOT NULL,
+                    credentials_encrypted TEXT,
+                    status VARCHAR,
+                    last_ok_at VARCHAR,
+                    last_error TEXT,
+                    updated_at VARCHAR NOT NULL
+                )
+                """
+            )
+        )
+
+    init_schema(old_engine)
+
+    columns = {column["name"] for column in inspect(old_engine).get_columns("integrations")}
+    assert {"last_reply_ref", "last_error_at"} <= columns
+
+
 def test_wal_journal_mode_enabled(engine):
     with engine.connect() as conn:
         mode = conn.execute(text("PRAGMA journal_mode")).scalar()

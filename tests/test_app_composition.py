@@ -29,10 +29,12 @@ from __future__ import annotations
 import shutil
 import sys
 import types
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import yaml
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 import app.main
@@ -111,6 +113,7 @@ def application(tmp_path: Path) -> Application:
         generate_llm=FakeLLMProvider(),
         embedding=FakeEmbeddingProvider(dimension=DIMENSION),
         admin_password="test-admin-password",
+        credential_encryption_key=Fernet.generate_key().decode("ascii"),
     )
 
 
@@ -147,6 +150,9 @@ def test_c1_second_document_visible_to_dense_retrieval_without_restart(
         fastapi_app,
         headers={"Authorization": "Bearer test-admin-password"},
     )
+    assert fastapi_app.state.channel_store is not None
+    assert fastapi_app.state.channel_handler is not None
+    assert fastapi_app.state.query_logger is not None
 
     doc1_id = _upload(client, application.classify_llm, "handbook.pdf")
     body1 = _query(client, application.generate_llm, "tell me about document one")
@@ -203,3 +209,13 @@ def test_i5_cross_encoder_loads_eagerly_during_app_composition_not_on_first_quer
         "app.main.app -- it is still being deferred to the first query "
         "that reaches Reranker.rerank()"
     )
+
+
+def test_production_composition_requires_the_credential_encryption_key(
+    application: Application, monkeypatch
+):
+    without_key = replace(application, credential_encryption_key=None)
+    monkeypatch.setattr(app.main, "bootstrap", lambda: without_key)
+
+    with pytest.raises(RuntimeError, match="CREDENTIAL_ENCRYPTION_KEY"):
+        _ = app.main.app

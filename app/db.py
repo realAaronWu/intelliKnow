@@ -110,6 +110,8 @@ integrations = Table(
     Column("status", String, nullable=True),
     Column("last_ok_at", String, nullable=True),
     Column("last_error", Text, nullable=True),
+    Column("last_error_at", String, nullable=True),
+    Column("last_reply_ref", Text, nullable=True),
     Column("updated_at", String, nullable=False),
 )
 
@@ -212,6 +214,14 @@ def init_schema(engine: Engine) -> None:
         conn.execute(text(_CREATE_CHUNK_FTS))
         for trigger_ddl in _CREATE_CHUNK_FTS_TRIGGERS:
             conn.execute(text(trigger_ddl))
+        integration_columns = {
+            row.name
+            for row in conn.execute(text("PRAGMA table_info(integrations)")).mappings()
+        }
+        if "last_error_at" not in integration_columns:
+            conn.execute(text("ALTER TABLE integrations ADD COLUMN last_error_at TEXT"))
+        if "last_reply_ref" not in integration_columns:
+            conn.execute(text("ALTER TABLE integrations ADD COLUMN last_reply_ref TEXT"))
 
 
 def recover_interrupted_documents(engine: Engine) -> int:

@@ -23,14 +23,17 @@ from fastapi import Depends, FastAPI
 
 from sqlalchemy.engine import Engine
 
+from app.analytics.log import QueryLogger
 from app.api.auth import build_admin_auth
 from app.api.documents import build_documents_router
 from app.api.query import build_query_router
 from app.bootstrap import Application, bootstrap
+from app.channels.handler import ChannelHandler
+from app.channels.store import ChannelStore
 from app.db import create_engine_for, init_schema, recover_interrupted_documents
 from app.ingest.worker import IngestDeps
 from app.orchestrator.centroids import CentroidIndex
-from app.orchestrator.pipeline import PipelineDeps
+from app.orchestrator.pipeline import PipelineDeps, answer_question
 from app.rag.index_writer import IndexWriter
 from app.rag.retrieve.rerank import Reranker
 from app.rag.vector_store import VectorStore
@@ -169,10 +172,21 @@ def __getattr__(name: str):
         # one `Application`, one `Engine`, and — the fix this exists for —
         # one `VectorStore`. See `_build_pipeline_deps`'s docstring.
         application = bootstrap()
+        if not application.admin_password:
+            raise RuntimeError("ADMIN_PASSWORD must be set before starting the API")
+        if not application.credential_encryption_key:
+            raise RuntimeError(
+                "CREDENTIAL_ENCRYPTION_KEY must be set before starting the API"
+            )
         cfg = application.config
         engine = create_engine_for(Path(cfg.storage.sqlite_path))
         init_schema(engine)
         recover_interrupted_documents(engine)
+        channel_store = ChannelStore(
+            engine,
+            application.credential_encryption_key,
+            env=application.channel_env,
+        )
         vector_store = VectorStore(Path(cfg.storage.faiss_dir), cfg.embedding.dimension)
 
         deps = _build_default_deps(application, engine, vector_store)
@@ -190,9 +204,19 @@ def __getattr__(name: str):
         # exactly this: construct `Reranker` and call `.score()` once
         # during wiring for callers that want it loaded at startup.
         pipeline_deps.reranker.score("warm-up", ["warm-up"])
-        if not application.admin_password:
-            raise RuntimeError("ADMIN_PASSWORD must be set before starting the API")
-        return create_app(
+        query_logger = QueryLogger(engine)
+        channel_handler = ChannelHandler(
+            channel_store,
+            lambda question, profile: answer_question(
+                question, profile, pipeline_deps
+            ),
+            query_logger,
+        )
+        fastapi_app = create_app(
             deps, pipeline_deps, admin_password=application.admin_password
         )
+        fastapi_app.state.channel_store = channel_store
+        fastapi_app.state.query_logger = query_logger
+        fastapi_app.state.channel_handler = channel_handler
+        return fastapi_app
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
