@@ -45,6 +45,10 @@ from app.rag.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
+#: Matches `embedding.batch_size`'s own default in `app/config.py`, so a
+#: caller that omits it gets the documented behaviour. Every production
+#: construction site passes `cfg.embedding.batch_size` explicitly — the two
+#: values agreeing is what hid the fact that neither used to.
 _DEFAULT_BATCH_SIZE = 64
 
 

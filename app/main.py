@@ -48,7 +48,12 @@ def _build_default_deps() -> IngestDeps:
     engine = create_engine_for(Path(cfg.storage.sqlite_path))
     init_schema(engine)
     vector_store = VectorStore(Path(cfg.storage.faiss_dir), cfg.embedding.dimension)
-    index_writer = IndexWriter(engine, vector_store, application.embedding)
+    index_writer = IndexWriter(
+        engine,
+        vector_store,
+        application.embedding,
+        batch_size=cfg.embedding.batch_size,
+    )
 
     return IngestDeps(
         engine=engine,
