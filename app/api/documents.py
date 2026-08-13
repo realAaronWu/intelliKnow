@@ -23,6 +23,7 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import insert, select, text
+from sqlalchemy.exc import OperationalError
 
 from app.db import chunks as chunks_table
 from app.db import documents as documents_table
@@ -33,6 +34,48 @@ from app.ingest.worker import IngestDeps, _utc_now_iso, ingest_document
 
 class ReassignRequest(BaseModel):
     intent_slug: str
+
+
+#: A single backslash, used as the `LIKE ... ESCAPE` character. SQLite does
+#: not process backslash escapes inside string literals, so `'\'` in the SQL
+#: below is exactly one character.
+_LIKE_ESCAPE = "\\"
+
+
+def _like_pattern(q: str) -> str:
+    """Turn a search term into a `LIKE` pattern matching it literally.
+
+    `%` and `_` are `LIKE` wildcards, so an unescaped `%` in a filename
+    search quietly matched every document instead of the one the admin
+    typed. The escape character itself has to be escaped first, or
+    escaping would corrupt a term that already contains one.
+    """
+    escaped = (
+        q.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
+        .replace("%", f"{_LIKE_ESCAPE}%")
+        .replace("_", f"{_LIKE_ESCAPE}_")
+    )
+    return f"%{escaped}%"
+
+
+def _fts_query(q: str) -> str:
+    """Turn free-typed search text into a safe FTS5 `MATCH` expression.
+
+    FTS5's `MATCH` argument is a query *language*, not a string: `-`
+    introduces a column filter, `AND`/`OR`/`NOT`/`NEAR` are operators, and
+    `"`, `(`, `*`, `^`, `:` are all syntax. Passing raw user input through
+    meant `annual-leave`, `it's`, `foo(` and a bare `"` each raised
+    `OperationalError` — a 500 for input nobody would call malformed.
+
+    Every whitespace-separated term becomes a quoted FTS5 string (with any
+    embedded `"` doubled, its only escape), which turns the whole thing
+    into a literal phrase search. Multiple terms sit side by side, which
+    FTS5 reads as an implicit AND — the behaviour a search box implies.
+    Returns "" when the input holds no terms at all; there is no valid
+    empty `MATCH` expression, so callers skip the FTS clause entirely.
+    """
+    terms = q.split()
+    return " ".join('"' + term.replace('"', '""') + '"' for term in terms)
 
 
 def _upload_path(deps: IngestDeps, doc_id: int, ext: str) -> Path:
@@ -121,14 +164,21 @@ def build_documents_router(deps: IngestDeps) -> APIRouter:
         params: dict[str, str] = {}
 
         if q:
-            clauses.append(
-                "(filename LIKE :q_like OR id IN ("
-                "SELECT chunks.document_id FROM chunk_fts "
-                "JOIN chunks ON chunk_fts.rowid = chunks.id "
-                "WHERE chunk_fts MATCH :q_match))"
-            )
-            params["q_like"] = f"%{q}%"
-            params["q_match"] = q
+            like_clause = f"filename LIKE :q_like ESCAPE '{_LIKE_ESCAPE}'"
+            params["q_like"] = _like_pattern(q)
+            match_query = _fts_query(q)
+            if match_query:
+                clauses.append(
+                    f"({like_clause} OR id IN ("
+                    "SELECT chunks.document_id FROM chunk_fts "
+                    "JOIN chunks ON chunk_fts.rowid = chunks.id "
+                    "WHERE chunk_fts MATCH :q_match))"
+                )
+                params["q_match"] = match_query
+            else:
+                # Nothing tokenizable to search the chunk text for; the
+                # filename half still applies.
+                clauses.append(like_clause)
         if format:
             clauses.append("ext = :fmt")
             params["fmt"] = format if format.startswith(".") else f".{format}"
@@ -144,8 +194,18 @@ def build_documents_router(deps: IngestDeps) -> APIRouter:
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = f"SELECT * FROM documents {where} ORDER BY uploaded_at DESC"  # noqa: S608
-        with deps.engine.connect() as conn:
-            rows = conn.execute(text(sql), params).mappings().all()
+        try:
+            with deps.engine.connect() as conn:
+                rows = conn.execute(text(sql), params).mappings().all()
+        except OperationalError as exc:
+            # `_fts_query` quotes every term, so this should be
+            # unreachable for search input — but a 400 naming the term is
+            # the right answer if some FTS5 build rejects one anyway, and
+            # it is strictly better than the 500 this used to be.
+            raise HTTPException(
+                status_code=400,
+                detail=f"could not search for {q!r}: {exc.orig}",
+            ) from exc
         return [dict(row) for row in rows]
 
     @router.get("/documents/{doc_id}")

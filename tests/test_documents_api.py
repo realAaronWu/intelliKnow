@@ -155,6 +155,94 @@ def test_12_2_search_by_name_returns_only_matching_documents(client, classify_ll
     assert filenames == {"handbook.pdf"}
 
 
+def test_12_2_search_by_keyword_matches_chunk_text_not_only_the_filename(
+    client, classify_llm
+):
+    """"Search by name **or keyword**" — the keyword half had no test at
+    all, which is why an unescaped FTS5 `MATCH` shipped: every existing
+    search test matched on filename, where the `LIKE` half answered first
+    and the broken branch was never exercised.
+    """
+    _upload(client, classify_llm, "handbook.pdf", "hr")
+    _upload(client, classify_llm, "expense_policy.docx", "finance")
+
+    resp = client.get("/documents", params={"q": "reimbursed"})
+
+    assert resp.status_code == 200, resp.text
+    filenames = {d["filename"] for d in resp.json()}
+    assert filenames == {"expense_policy.docx"}
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "annual-leave",  # FTS5 reads the hyphen as a column filter
+        "it's",          # apostrophe: syntax error near "'"
+        "foo(",          # unbalanced paren
+        "AND",           # a bare boolean operator
+        'a "quoted phrase',  # unterminated string
+        '"',
+        "%",             # also a LIKE wildcard
+        "_",             # also a LIKE wildcard
+        "*",
+        "NEAR(a b)",
+        "^leading",
+        "",
+        "   ",
+    ],
+)
+def test_12_2_ordinary_search_input_never_500s(client, classify_llm, query):
+    """Every one of these raised `OperationalError` straight out of FTS5,
+    which FastAPI turns into a 500. None of them is a user error — a
+    hyphenated word and an apostrophe are ordinary things to type.
+    """
+    _upload(client, classify_llm, "handbook.pdf", "hr")
+
+    resp = client.get("/documents", params={"q": query})
+
+    assert resp.status_code == 200, resp.text
+    assert isinstance(resp.json(), list)
+
+
+def test_12_2_a_hyphenated_term_still_matches_chunk_text(client, classify_llm):
+    _upload(client, classify_llm, "handbook.pdf", "hr")
+
+    resp = client.get("/documents", params={"q": "Leave Policy"})
+
+    assert resp.status_code == 200, resp.text
+    assert {d["filename"] for d in resp.json()} == {"handbook.pdf"}
+
+
+def test_12_2_a_like_wildcard_in_the_query_is_matched_literally(client, engine):
+    """`%` and `_` went into the `LIKE` pattern unescaped, so searching for
+    a filename containing one silently matched everything instead.
+    """
+    _insert_document_directly(
+        engine, "q3%report.pdf", ".pdf", "a" * 64, "hr", "indexed", "2026-08-01T00:00:00Z"
+    )
+    _insert_document_directly(
+        engine, "q3xreport.pdf", ".pdf", "b" * 64, "hr", "indexed", "2026-08-01T00:00:00Z"
+    )
+
+    resp = client.get("/documents", params={"q": "q3%report"})
+
+    assert resp.status_code == 200, resp.text
+    assert {d["filename"] for d in resp.json()} == {"q3%report.pdf"}
+
+
+def test_12_2_an_underscore_in_the_query_is_matched_literally(client, engine):
+    _insert_document_directly(
+        engine, "cost_report.pdf", ".pdf", "a" * 64, "hr", "indexed", "2026-08-01T00:00:00Z"
+    )
+    _insert_document_directly(
+        engine, "costXreport.pdf", ".pdf", "b" * 64, "hr", "indexed", "2026-08-01T00:00:00Z"
+    )
+
+    resp = client.get("/documents", params={"q": "cost_report"})
+
+    assert {d["filename"] for d in resp.json()} == {"cost_report.pdf"}
+
+
 # --- 12.3 Filter by format ----------------------------------------------------------
 
 
