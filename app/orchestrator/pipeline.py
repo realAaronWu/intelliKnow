@@ -41,6 +41,7 @@ from app.config import AppConfig
 from app.orchestrator.centroids import CentroidIndex
 from app.orchestrator.classify import Classification, classify
 from app.orchestrator.errors import ClassificationError
+from app.orchestrator.feedback import ClassificationExample, examples_by_intent
 from app.orchestrator.route import RoutingDecision, decide_spaces
 from app.providers.base import EmbeddingProvider, LLMProvider, ProviderError
 from app.rag.citations import Citation, verify_citations
@@ -96,6 +97,7 @@ class PipelineDeps:
     vector_store: VectorStore
     centroids: CentroidIndex
     reranker: Reranker
+    get_classification_examples: Callable[[], list[ClassificationExample]] = list
 
 
 @dataclass(frozen=True)
@@ -104,7 +106,7 @@ class QueryOutcome:
     citations: list[Citation]
     intent_slug: str
     confidence: float
-    classified_by: Literal["centroid", "llm"] | None
+    classified_by: Literal["centroid", "llm", "review"] | None
     reasoning: str | None
     classification_failed: bool
     fallback_used: bool
@@ -191,7 +193,7 @@ def _no_match_outcome(
     *,
     intent_slug: str,
     confidence: float,
-    classified_by: Literal["centroid", "llm"],
+    classified_by: Literal["centroid", "llm", "review"],
     reasoning: str | None,
     classification_failed: bool,
     fallback_used: bool,
@@ -228,7 +230,7 @@ def _classification_failure_outcome(
     start: float,
     error: Exception,
     *,
-    classified_by: Literal["centroid", "llm"] | None = None,
+    classified_by: Literal["centroid", "llm", "review"] | None = None,
     timings: dict[str, int] | None = None,
     trace: QueryTrace | None = None,
 ) -> QueryOutcome:
@@ -312,9 +314,21 @@ def answer_question(
         # docstring.
         try:
             with _measure(timings, "classification_routing"):
-                deps.centroids.sync(cfg)
+                reviewed_examples = deps.get_classification_examples()
+                deps.centroids.sync(
+                    cfg,
+                    examples_by_intent(
+                        reviewed_examples,
+                        {space.slug for space in cfg.intent_spaces},
+                    ),
+                )
                 classification = classify(
-                    question, query_vector, cfg, deps.centroids, deps.classify_llm
+                    question,
+                    query_vector,
+                    cfg,
+                    deps.centroids,
+                    deps.classify_llm,
+                    reviewed_examples,
                 )
                 routing = decide_spaces(classification, cfg)
         except (ClassificationError, ProviderError) as exc:

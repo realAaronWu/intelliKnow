@@ -17,6 +17,7 @@ from app.config import AppConfig
 from app.orchestrator.centroids import CentroidIndex
 from app.orchestrator.classify import Classification, classify
 from app.orchestrator.errors import ClassificationError
+from app.orchestrator.feedback import ClassificationExample
 from app.providers.base import ProviderError
 from tests.doubles import FakeEmbeddingProvider, FakeLLMProvider
 
@@ -117,7 +118,9 @@ def test_9_2_low_centroid_confidence_escalates():
     assert result.classified_by == "llm"
     assert result.intent_slug == "hr"
     assert result.confidence == 0.88
-    assert result.reasoning == "mentions leave policy"
+    assert result.reasoning == "LLM selected hr at 88% confidence."
+    assert llm.calls[0]["max_tokens"] == 48
+    assert "reasoning" not in llm.calls[0]["schema"]["properties"]
     assert result.failed is False
 
 
@@ -217,6 +220,45 @@ def test_9_8_9_9_provider_failure_or_timeout_is_retryable(error):
 
     with pytest.raises(ClassificationError, match="Please retry"):
         classify("ambiguous", _AMBIGUOUS_QUERY, cfg, centroids, llm)
+
+
+def test_admin_reviewed_exact_question_overrides_model_classification():
+    cfg = _cfg()
+    centroids, _ = _centroids(cfg)
+    llm = FakeLLMProvider()
+
+    result = classify(
+        "  WHICH   TRAVEL FORM? ",
+        _QUERY_ALIGNED_WITH_HR,
+        cfg,
+        centroids,
+        llm,
+        [ClassificationExample("Which travel form?", "legal")],
+    )
+
+    assert result.intent_slug == "legal"
+    assert result.classified_by == "review"
+    assert result.confidence == 1.0
+    assert len(llm.calls) == 0
+
+
+def test_admin_reviewed_examples_reach_escalation_prompt():
+    cfg = _cfg()
+    centroids, _ = _centroids(cfg)
+    llm = FakeLLMProvider()
+    llm.expect_schema({"slug": "hr", "confidence": 0.9, "reasoning": "x"})
+
+    classify(
+        "ambiguous",
+        _AMBIGUOUS_QUERY,
+        cfg,
+        centroids,
+        llm,
+        [ClassificationExample("How much parental leave?", "hr")],
+    )
+
+    assert '"question": "How much parental leave?"' in llm.calls[0]["user"]
+    assert '"slug": "hr"' in llm.calls[0]["user"]
 
 
 # --- 9.10 Uses classify model ----------------------------------------------------

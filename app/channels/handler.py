@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 _TEXT_ONLY_MESSAGE = "Please send a text question."
 _FAILURE_MESSAGE = "Sorry, I couldn't answer that question. Please try again."
+_TYPING_TIMEOUT_SECONDS = 0.4
 
 
 class QueryLogSink(Protocol):
@@ -56,11 +57,13 @@ class ChannelHandler:
         query_logger: QueryLogSink,
         *,
         timer: Callable[[], float] = time.perf_counter,
+        typing_timeout_seconds: float = _TYPING_TIMEOUT_SECONDS,
     ) -> None:
         self._store = store
         self._pipeline = pipeline
         self._query_logger = query_logger
         self._timer = timer
+        self._typing_timeout_seconds = typing_timeout_seconds
 
     async def handle(
         self, message: InboundMessage, adapter: ChannelAdapter
@@ -108,12 +111,20 @@ class ChannelHandler:
             finally:
                 pipeline_wait_ms = self._elapsed(stage_start)
 
-        # These are independent network/compute operations. Starting both
-        # together removes the Telegram typing round trip from the critical
-        # path while preserving the indicator for slower answers.
-        typing_result, pipeline_result = await asyncio.gather(
-            send_typing(), run_pipeline(), return_exceptions=True
-        )
+        # Complete the acknowledgement before using the same platform client
+        # for delivery. The strict timeout prevents a slow typing endpoint from
+        # consuming the answer budget or competing with the actual send.
+        try:
+            typing_result = await asyncio.wait_for(
+                send_typing(), timeout=self._typing_timeout_seconds
+            )
+        except TimeoutError:
+            typing_result = None
+        try:
+            pipeline_result: QueryOutcome | Exception = await run_pipeline()
+        except Exception as exc:
+            pipeline_result = exc
+
         if isinstance(typing_result, Exception):
             logger.warning(
                 "%s typing indicator failed: %s", message.channel, typing_result

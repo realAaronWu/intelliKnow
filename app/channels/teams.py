@@ -68,11 +68,19 @@ class TeamsAdapter:
         )
 
 
-AdapterFactory = Callable[[str, str], BotFrameworkAdapter]
+AdapterFactory = Callable[[str, str, str], BotFrameworkAdapter]
 
 
-def _default_adapter_factory(app_id: str, app_password: str) -> BotFrameworkAdapter:
-    return BotFrameworkAdapter(BotFrameworkAdapterSettings(app_id, app_password))
+def _default_adapter_factory(
+    app_id: str, app_password: str, tenant_id: str
+) -> BotFrameworkAdapter:
+    return BotFrameworkAdapter(
+        BotFrameworkAdapterSettings(
+            app_id,
+            app_password,
+            channel_auth_tenant=tenant_id or None,
+        )
+    )
 
 
 class TeamsEndpoint:
@@ -121,13 +129,14 @@ class TeamsEndpoint:
                     status.HTTP_503_SERVICE_UNAVAILABLE,
                     "Teams credentials are not configured",
                 )
-            app_id = app_password = ""
+            app_id = app_password = tenant_id = ""
         else:
             app_id = credentials.values["app_id"]
             app_password = credentials.values["app_password"]
+            tenant_id = credentials.values["tenant_id"]
 
         auth_header = request.headers.get("Authorization", "")
-        adapter = self._adapter_factory(app_id, app_password)
+        adapter = self._adapter_factory(app_id, app_password, tenant_id)
 
         async def on_turn(context: TurnContext) -> None:
             message = normalize_activity(context)

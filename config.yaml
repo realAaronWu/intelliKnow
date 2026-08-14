@@ -41,6 +41,9 @@ intent_spaces:
   - benefits
   - onboarding
   - appraisal
+  - promotion
+  - promotional increase
+  - compensation review
 - slug: legal
   name: Legal
   description: Contracts, compliance, data protection, terms.
@@ -61,6 +64,9 @@ intent_spaces:
   - budget
   - procurement
   - tax
+  - travel
+  - travel expenses
+  - meal allowance
 - slug: operations
   name: Operations
   description: Internal processes, tooling, facilities, IT requests.
@@ -82,7 +88,7 @@ intent_spaces:
   - NVIDIA
   - tech
   - design
-  - architecutre
+  - architecture
   - dynamo
   - nccl
 channels:
@@ -104,9 +110,4 @@ storage:
   sqlite_path: ./data/intelliknow.db
   faiss_dir: ./data/faiss
   upload_dir: ./data/uploads
-secret_store:
-  provider: macos-keychain
-  keychain_service: IntelliKnow
-  azure_vault_url: null
-  cache_ttl_seconds: 300
 public_base_url: null

@@ -120,6 +120,8 @@ check_files_and_secrets() {
   [[ -f config.yaml ]] || die "config.yaml is missing."
   [[ -x .venv/bin/python ]] || die "Dependencies are not installed. Run: ./scripts/laptop-demo install"
 
+  ensure_credential_encryption_key
+
   "$ROOT_DIR/.venv/bin/python" <<'PY'
 from pathlib import Path
 import os
@@ -128,7 +130,7 @@ import yaml
 from dotenv import dotenv_values
 
 values = {**dotenv_values(".env"), **os.environ}
-required = ["ADMIN_PASSWORD"]
+required = ["ADMIN_PASSWORD", "CREDENTIAL_ENCRYPTION_KEY"]
 provider = (yaml.safe_load(Path("config.yaml").read_text()) or {}).get("llm", {}).get("provider")
 if provider == "anthropic":
     required.append("ANTHROPIC_API_KEY")
@@ -142,7 +144,47 @@ if missing:
 if len(str(values["ADMIN_PASSWORD"])) < 12:
     raise SystemExit("ADMIN_PASSWORD must contain at least 12 characters for the demo")
 
+from cryptography.fernet import Fernet
+try:
+    Fernet(str(values["CREDENTIAL_ENCRYPTION_KEY"]).encode("ascii"))
+except (TypeError, ValueError) as exc:
+    raise SystemExit("CREDENTIAL_ENCRYPTION_KEY is invalid") from exc
+
 print(f"Configuration and required secrets: OK ({provider} LLM)")
+PY
+}
+
+ensure_credential_encryption_key() {
+  [[ -f .env ]] || return 0
+  "${PYTHON:-python3}" <<'PY'
+import base64
+import os
+import secrets
+from pathlib import Path
+
+path = Path(".env")
+text = path.read_text()
+environment_value = os.environ.get("CREDENTIAL_ENCRYPTION_KEY")
+configured_value = None
+for line in text.splitlines():
+    if line.startswith("CREDENTIAL_ENCRYPTION_KEY="):
+        configured_value = line.partition("=")[2].strip()
+        break
+if environment_value or configured_value:
+    raise SystemExit(0)
+
+key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii")
+replacement = f"CREDENTIAL_ENCRYPTION_KEY={key}"
+if "CREDENTIAL_ENCRYPTION_KEY=" in text:
+    lines = [
+        replacement if line.startswith("CREDENTIAL_ENCRYPTION_KEY=") else line
+        for line in text.splitlines()
+    ]
+    path.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""))
+else:
+    path.write_text(text + ("" if text.endswith("\n") else "\n") + replacement + "\n")
+path.chmod(0o600)
+print("Generated CREDENTIAL_ENCRYPTION_KEY in .env")
 PY
 }
 
@@ -311,16 +353,18 @@ INTELLIKNOW_CA_CERT=$CA_CERT
 EOF
 
   say "Starting the API on $API_URL..."
-  local api_tls_args=()
-  local ui_tls_args=()
   if [[ "$HTTPS_ENABLED" == "1" ]]; then
-    api_tls_args=(--ssl-certfile "$TLS_CERT" --ssl-keyfile "$TLS_KEY")
-    ui_tls_args=(--server.sslCertFile "$TLS_CERT" --server.sslKeyFile "$TLS_KEY")
+    start_managed_process "$API_JOB" "$API_PID_FILE" "$API_LOG" \
+      env INTELLIKNOW_CA_CERT="$CA_CERT" \
+      "$ROOT_DIR/.venv/bin/python" -m uvicorn app.main:app \
+      --host "$API_HOST" --port "$API_PORT" \
+      --ssl-certfile "$TLS_CERT" --ssl-keyfile "$TLS_KEY"
+  else
+    start_managed_process "$API_JOB" "$API_PID_FILE" "$API_LOG" \
+      env INTELLIKNOW_CA_CERT="$CA_CERT" \
+      "$ROOT_DIR/.venv/bin/python" -m uvicorn app.main:app \
+      --host "$API_HOST" --port "$API_PORT"
   fi
-  start_managed_process "$API_JOB" "$API_PID_FILE" "$API_LOG" \
-    env INTELLIKNOW_CA_CERT="$CA_CERT" \
-    "$ROOT_DIR/.venv/bin/python" -m uvicorn app.main:app \
-    --host "$API_HOST" --port "$API_PORT" "${api_tls_args[@]}"
   trap 'stop >/dev/null 2>&1 || true' ERR INT TERM
   if ! wait_for_api; then
     stop
@@ -328,12 +372,20 @@ EOF
   fi
 
   say "Starting the admin console on $UI_URL..."
-  start_managed_process "$UI_JOB" "$UI_PID_FILE" "$UI_LOG" \
-    env INTELLIKNOW_API_URL="$API_URL" INTELLIKNOW_CA_CERT="$CA_CERT" \
-    "$ROOT_DIR/.venv/bin/python" -m streamlit run streamlit_app.py \
-    --server.address "$UI_HOST" --server.port "$UI_PORT" \
-    --server.headless true --browser.gatherUsageStats false \
-    "${ui_tls_args[@]}"
+  if [[ "$HTTPS_ENABLED" == "1" ]]; then
+    start_managed_process "$UI_JOB" "$UI_PID_FILE" "$UI_LOG" \
+      env INTELLIKNOW_API_URL="$API_URL" INTELLIKNOW_CA_CERT="$CA_CERT" \
+      "$ROOT_DIR/.venv/bin/python" -m streamlit run streamlit_app.py \
+      --server.address "$UI_HOST" --server.port "$UI_PORT" \
+      --server.headless true --browser.gatherUsageStats false \
+      --server.sslCertFile "$TLS_CERT" --server.sslKeyFile "$TLS_KEY"
+  else
+    start_managed_process "$UI_JOB" "$UI_PID_FILE" "$UI_LOG" \
+      env INTELLIKNOW_API_URL="$API_URL" INTELLIKNOW_CA_CERT="$CA_CERT" \
+      "$ROOT_DIR/.venv/bin/python" -m streamlit run streamlit_app.py \
+      --server.address "$UI_HOST" --server.port "$UI_PORT" \
+      --server.headless true --browser.gatherUsageStats false
+  fi
   if ! wait_for_ui; then
     stop
     die "Console did not become ready within 30 seconds. See $UI_LOG"
@@ -353,7 +405,18 @@ stop_one() {
   local marker="$3"
   local label="$4"
   if [[ "$(uname -s)" == "Darwin" ]] && launchctl list "$label" >/dev/null 2>&1; then
+    local managed_pid
+    managed_pid="$(launch_job_pid "$label")"
     launchctl remove "$label"
+    if [[ "$managed_pid" =~ ^[0-9]+$ ]]; then
+      for _ in $(seq 1 50); do
+        kill -0 "$managed_pid" 2>/dev/null || break
+        sleep 0.1
+      done
+      if kill -0 "$managed_pid" 2>/dev/null; then
+        kill -9 "$managed_pid" 2>/dev/null || true
+      fi
+    fi
     rm -f "$pid_file"
     say "$name stopped."
     return

@@ -39,9 +39,9 @@ from fastapi.testclient import TestClient
 
 import app.main
 from app.bootstrap import Application
+from app.channels.store import CredentialError
 from app.config_service import ConfigService
 from app.rag.retrieve.rerank import Reranker
-from app.secrets import MemorySecretStore
 from tests.doubles import FakeEmbeddingProvider, FakeLLMProvider
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -218,12 +218,12 @@ def test_i5_cross_encoder_loads_eagerly_during_app_composition_not_on_first_quer
     )
 
 
-def test_production_composition_does_not_require_a_legacy_encryption_key(
+def test_production_composition_requires_the_credential_encryption_key(
     application: Application, monkeypatch
 ):
     without_key = replace(application, credential_encryption_key=None)
     monkeypatch.setattr(app.main, "bootstrap", lambda: without_key)
-    monkeypatch.setattr(app.main, "build_secret_store", lambda cfg: MemorySecretStore())
     monkeypatch.setattr(app.main.Reranker, "score", lambda self, query, documents: [])
 
-    assert app.main.__getattr__("app").title == "IntelliKnow KMS"
+    with pytest.raises(CredentialError, match="CREDENTIAL_ENCRYPTION_KEY is required"):
+        app.main.__getattr__("app")

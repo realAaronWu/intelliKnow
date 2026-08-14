@@ -9,7 +9,6 @@ from app.channels.handler import HandlerResult
 from app.channels.store import ChannelStore
 from app.channels.tester import ChannelTestService
 from app.db import create_engine_for, init_schema
-from app.secrets import MemorySecretStore
 
 
 class FakeHandler:
@@ -54,11 +53,10 @@ def _store(tmp_path):
     return ChannelStore(
         engine,
         Fernet.generate_key().decode("ascii"),
-        secret_store=MemorySecretStore(),
     )
 
 
-def _teams_reference():
+def _teams_reference(service_url="https://smba.trafficmanager.net/amer/"):
     return json.dumps(
         {
             "activityId": "activity-1",
@@ -66,7 +64,7 @@ def _teams_reference():
             "bot": {"id": "bot-1"},
             "conversation": {"id": "conversation-1"},
             "channelId": "msteams",
-            "serviceUrl": "https://smba.trafficmanager.net/amer/",
+            "serviceUrl": service_url,
         }
     )
 
@@ -122,16 +120,45 @@ def test_telegram_test_uses_saved_chat_and_full_handler(tmp_path):
     assert result.ok is True
     assert result.stage == "complete"
     assert result.latency_ms == 321
+    assert result.latency_gate_passed is True
+    assert result.platform_mode == "real"
     message, adapter = handler.calls[0]
     assert message.reply_ref == "chat-456"
     assert message.text == "What is the leave policy?"
     assert adapter.profile.name == "telegram"
 
 
+def test_telegram_test_reuses_active_poller_api(tmp_path):
+    store = _store(tmp_path)
+    store.save_credentials("telegram", {"token": "secret-token"})
+    store.set_enabled("telegram", True)
+    store.mark_connected("telegram", "chat-456")
+    active_api = FakeTelegramAPI()
+
+    def must_not_open_new_api():
+        raise AssertionError("active poller API should be reused")
+
+    tester = ChannelTestService(
+        store,
+        FakeHandler(),
+        telegram_api_factory=must_not_open_new_api,
+        telegram_api_provider=lambda: active_api,
+    )
+
+    result = asyncio.run(tester.run("telegram", "Question"))
+
+    assert result.ok is True
+
+
 def test_teams_test_uses_saved_conversation_reference(tmp_path):
     store = _store(tmp_path)
     store.save_credentials(
-        "teams", {"app_id": "app-id", "app_password": "secret"}
+        "teams",
+        {
+            "app_id": "app-id",
+            "app_password": "secret",
+            "tenant_id": "tenant-id",
+        },
     )
     store.set_enabled("teams", True)
     store.mark_connected("teams", _teams_reference())
@@ -140,16 +167,42 @@ def test_teams_test_uses_saved_conversation_reference(tmp_path):
     tester = ChannelTestService(
         store,
         handler,
-        teams_adapter_factory=lambda app_id, password: sdk,
+        teams_adapter_factory=lambda app_id, password, tenant_id: sdk,
     )
 
     result = asyncio.run(tester.run("teams", "What is the leave policy?"))
 
     assert result.ok is True
+    assert result.platform_mode == "real"
     reference, bot_id = sdk.references[0]
     assert reference.conversation.id == "conversation-1"
     assert bot_id == "app-id"
     assert handler.calls[0][0].reply_ref == store.get("teams").last_reply_ref
+
+
+def test_teams_test_marks_loopback_destination_as_local(tmp_path):
+    store = _store(tmp_path)
+    store.save_credentials(
+        "teams",
+        {
+            "app_id": "app-id",
+            "app_password": "secret",
+            "tenant_id": "tenant-id",
+        },
+    )
+    store.set_enabled("teams", True)
+    store.mark_connected("teams", _teams_reference("http://localhost:3978"))
+    sdk = FakeTeamsSDK()
+    tester = ChannelTestService(
+        store,
+        FakeHandler(),
+        teams_adapter_factory=lambda app_id, password, tenant_id: sdk,
+    )
+
+    result = asyncio.run(tester.run("teams", "Question"))
+
+    assert result.ok is True
+    assert result.platform_mode == "local"
 
 
 def test_handler_failure_stage_is_preserved(tmp_path):

@@ -361,7 +361,7 @@ def test_c3_success_outcome_carries_classification_reasoning_through(
 
     assert outcome.status == "success"
     assert outcome.classified_by == "llm"
-    assert outcome.reasoning == "mentions leave, an HR topic"
+    assert outcome.reasoning == "LLM selected hr at 95% confidence."
     assert outcome.classification_failed is False
 
 

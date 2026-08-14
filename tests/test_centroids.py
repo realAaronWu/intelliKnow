@@ -260,6 +260,21 @@ def test_8a_9_sync_adopts_a_live_temperature_even_without_a_rebuild():
     assert softer < sharper
 
 
+def test_reviewed_examples_rebuild_the_affected_centroid():
+    cfg = _cfg()
+    embedder = _embedder_with_defaults(cfg)
+    index = CentroidIndex(embedder, cfg)
+    embedder.set_vector("Which travel form?", _HR_VEC_V2)
+    before = index.score(_QUERY_ALIGNED_WITH_HR)["hr"]
+    calls_before = len(embedder.calls)
+
+    index.sync(cfg, {"hr": ("Which travel form?",)})
+
+    assert len(embedder.calls) == calls_before + 1
+    assert "Which travel form?" in embedder.calls[-1]
+    assert index.score(_QUERY_ALIGNED_WITH_HR)["hr"] < before
+
+
 def test_softmax_math_is_temperature_scaled(monkeypatch):
     """Direct check against a hand-computed softmax, so the formula itself
     (not just its qualitative sharpening behaviour) is pinned down.

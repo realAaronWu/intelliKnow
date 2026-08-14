@@ -168,6 +168,25 @@ def dashboard() -> None:
             ("Failed documents", data["failed_documents"], None),
         ]
     )
+    latency_channels = data.get("latency_gate_by_channel", {})
+    if latency_channels:
+        with st.container(border=True):
+            section_title("Channel latency gate", "P95 target: 3,000 ms")
+            st.dataframe(
+                [
+                    {
+                        "Channel": channel.title(),
+                        "Queries": metrics["count"],
+                        "P50": f"{metrics['p50_ms']} ms",
+                        "P95": f"{metrics['p95_ms']} ms",
+                        "Within target": f"{metrics['pass_rate']:.0%}",
+                        "Gate": "Pass" if metrics["passed"] else "Fail",
+                    }
+                    for channel, metrics in latency_channels.items()
+                ],
+                hide_index=True,
+                width="stretch",
+            )
     left, right = st.columns([1.25, 1])
     with left:
         with st.container(border=True):
@@ -236,6 +255,7 @@ def _credential_fields(channel: str) -> dict[str, str]:
     return {
         "app_id": st.text_input("Application ID", key="teams-id"),
         "app_password": st.text_input("Application password", type="password", key="teams-password"),
+        "tenant_id": st.text_input("Directory (tenant) ID", key="teams-tenant-id"),
     }
 
 
@@ -331,7 +351,15 @@ def frontend_integration() -> None:
                     )
                 if result:
                     message = f"{result['stage'].title()} · {result['latency_ms']} ms"
-                    (st.success if result["ok"] else st.error)(result.get("error") or message)
+                    if not result["ok"]:
+                        st.error(result.get("error") or message)
+                    elif result.get("latency_gate_passed"):
+                        mode = result.get("platform_mode") or "unknown"
+                        st.success(
+                            f"{message} · 3-second gate passed · {mode.title()} platform"
+                        )
+                    else:
+                        st.warning(f"{message} · 3-second gate failed")
             if action_cols[1].button("Clear", key=f"clear-{channel}", icon=":material/delete:"):
                 st.session_state[f"confirm-clear-{channel}"] = True
             if st.session_state.get(f"confirm-clear-{channel}"):
@@ -686,7 +714,8 @@ def _classification_review(intents: list[dict]) -> None:
             if result:
                 verdict = "correct" if result["reviewed_correct"] else "incorrect"
                 st.session_state["classification-review-saved"] = (
-                    f"Expected intent saved. The original classification was {verdict}."
+                    f"Expected intent saved. The original classification was {verdict}; "
+                    "the label now informs future routing."
                 )
                 st.rerun()
 

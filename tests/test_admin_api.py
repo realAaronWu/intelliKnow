@@ -17,7 +17,6 @@ from app.main import create_app
 from app.orchestrator.errors import ClassificationError
 from app.rag.index_writer import IndexWriter
 from app.rag.vector_store import VectorStore
-from app.secrets import MemorySecretStore
 from tests.doubles import FakeEmbeddingProvider, FakeLLMProvider
 
 
@@ -48,7 +47,6 @@ def _setup(tmp_path: Path, *, intent_validator=None):
     channel_store = ChannelStore(
         engine,
         Fernet.generate_key().decode("ascii"),
-        secret_store=MemorySecretStore(),
     )
     channel_store.initialize("telegram", enabled=False)
     channel_store.initialize("teams", enabled=False)
@@ -92,13 +90,15 @@ def _insert_query(
     confidence=0.91,
     best_relevance=0.82,
     status="success",
+    latency_ms=220,
+    channel="telegram",
 ) -> int:
     snapshots = [] if doc_id is None else [{"document_id": doc_id, "document_title": "handbook.pdf"}]
     with engine.begin() as conn:
         result = conn.execute(
             insert(query_log).values(
                 created_at="2026-08-11T12:00:00Z",
-                channel="telegram",
+                channel=channel,
                 user_ref="u1",
                 question="How much leave?",
                 intent_slug=intent,
@@ -110,7 +110,7 @@ def _insert_query(
                 citations_json=json.dumps([]),
                 retrieved_doc_ids_json=json.dumps([] if doc_id is None else [doc_id]),
                 retrieved_documents_json=json.dumps(snapshots),
-                latency_ms=220,
+                latency_ms=latency_ms,
                 best_relevance=best_relevance,
                 timings_json=json.dumps({"generation": 180, "pipeline_total": 210}),
                 expected_intent_slug=intent if correct is not None else None,
@@ -255,6 +255,37 @@ def test_query_history_feedback_accuracy_and_detail(tmp_path):
         "value": 0.0,
     }
     assert analytics["high_confidence_share"] == 1.0
+    assert analytics["latency_gate_by_channel"] == {
+        "telegram": {
+            "count": 1,
+            "target_ms": 3000,
+            "p50_ms": 220,
+            "p95_ms": 220,
+            "max_ms": 220,
+            "pass_rate": 1.0,
+            "passed": True,
+        }
+    }
+
+
+def test_analytics_reports_per_channel_p95_latency_gate(tmp_path):
+    client, _, engine = _setup(tmp_path)
+    for latency in (900, 1200, 2400, 3100):
+        _insert_query(engine, latency_ms=latency)
+    _insert_query(engine, latency_ms=800, channel="admin")
+
+    metrics = client.get("/admin/analytics").json()["latency_gate_by_channel"]
+
+    assert metrics["telegram"] == {
+        "count": 4,
+        "target_ms": 3000,
+        "p50_ms": 1200,
+        "p95_ms": 3100,
+        "max_ms": 3100,
+        "pass_rate": 0.75,
+        "passed": False,
+    }
+    assert "admin" not in metrics
 
 
 def test_usage_snapshot_survives_document_deletion_and_empty_csv_has_headers(tmp_path):

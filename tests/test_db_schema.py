@@ -68,13 +68,9 @@ def test_integration_table_has_handler_persistence_columns(engine):
     columns = {column["name"] for column in inspect(engine).get_columns("integrations")}
 
     assert {
+        "credentials_encrypted",
         "last_reply_ref",
         "last_error_at",
-        "secret_name",
-        "active_secret_version",
-        "previous_secret_version",
-        "pending_secret_version",
-        "credential_status",
     } <= columns
 
 
@@ -104,9 +100,6 @@ def test_init_schema_adds_handler_columns_to_an_existing_integration_table(tmp_p
     assert {
         "last_reply_ref",
         "last_error_at",
-        "secret_name",
-        "active_secret_version",
-        "credential_status",
     } <= columns
 
 

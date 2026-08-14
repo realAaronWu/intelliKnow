@@ -10,7 +10,6 @@ from app.channels.store import ChannelStore
 from app.db import create_engine_for, init_schema
 from app.orchestrator.pipeline import QueryOutcome
 from app.rag.generate import ChannelProfile
-from app.secrets import MemorySecretStore
 
 
 class FakeAdapter:
@@ -22,11 +21,19 @@ class FakeAdapter:
         self.sent: list[tuple[str, str]] = []
         self.typing_error: Exception | None = None
         self.send_error: Exception | None = None
+        self.typing_gate: asyncio.Event | None = None
+        self.typing_cancelled = False
 
     async def typing(self, reply_ref: str) -> None:
         self.events.append("typing")
         if self.typing_error:
             raise self.typing_error
+        if self.typing_gate is not None:
+            try:
+                await self.typing_gate.wait()
+            except asyncio.CancelledError:
+                self.typing_cancelled = True
+                raise
 
     async def send(self, reply_ref: str, text: str) -> None:
         self.events.append("send")
@@ -77,7 +84,6 @@ def _store(tmp_path):
     store = ChannelStore(
         engine,
         Fernet.generate_key().decode("ascii"),
-        secret_store=MemorySecretStore(),
     )
     store.set_enabled("telegram", True)
     return store
@@ -121,6 +127,26 @@ def test_typing_failure_is_retained_but_does_not_block_delivery(tmp_path):
     assert result.delivered is True
     assert store.get("telegram").status == "connected"
     assert "typing unavailable" in store.get("telegram").last_error
+
+
+def test_slow_typing_request_is_cancelled_before_answer_delivery(tmp_path):
+    events: list[str] = []
+    adapter = FakeAdapter(events)
+    adapter.typing_gate = asyncio.Event()
+    handler = ChannelHandler(
+        _store(tmp_path),
+        lambda question, profile: _outcome(),
+        FakeLogger(events),
+        typing_timeout_seconds=0.01,
+    )
+
+    result = asyncio.run(
+        handler.handle(InboundMessage("telegram", "user", "Question", "chat-1"), adapter)
+    )
+
+    assert result.delivered is True
+    assert adapter.typing_cancelled is True
+    assert events[-2:] == ["send", "log"]
 
 
 def test_non_text_message_gets_a_reply_without_pipeline_or_log(tmp_path):

@@ -108,19 +108,8 @@ integrations = Table(
     Column("channel", String, primary_key=True),
     Column("display_name", String, nullable=False),
     Column("enabled", Boolean, nullable=False, default=False),
-    # Legacy migration source only. New credential writes use the external
-    # secret store and persist references in the columns below.
+    # Fernet ciphertext; the key is supplied separately through the environment.
     Column("credentials_encrypted", Text, nullable=True),
-    Column("secret_name", String, nullable=True),
-    Column("active_secret_version", String, nullable=True),
-    Column("previous_secret_version", String, nullable=True),
-    Column("pending_secret_version", String, nullable=True),
-    Column("credential_type", String, nullable=True),
-    Column("credential_status", String, nullable=True),
-    Column("external_identity", String, nullable=True),
-    Column("credential_configured_at", String, nullable=True),
-    Column("credential_verified_at", String, nullable=True),
-    Column("credential_verification_error", Text, nullable=True),
     Column("status", String, nullable=True),
     Column("last_ok_at", String, nullable=True),
     Column("last_error", Text, nullable=True),
@@ -244,16 +233,6 @@ def init_schema(engine: Engine) -> None:
         for name, sql_type in (
             ("last_error_at", "TEXT"),
             ("last_reply_ref", "TEXT"),
-            ("secret_name", "VARCHAR"),
-            ("active_secret_version", "VARCHAR"),
-            ("previous_secret_version", "VARCHAR"),
-            ("pending_secret_version", "VARCHAR"),
-            ("credential_type", "VARCHAR"),
-            ("credential_status", "VARCHAR"),
-            ("external_identity", "VARCHAR"),
-            ("credential_configured_at", "VARCHAR"),
-            ("credential_verified_at", "VARCHAR"),
-            ("credential_verification_error", "TEXT"),
         ):
             if name not in integration_columns:
                 conn.execute(

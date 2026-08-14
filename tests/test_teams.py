@@ -19,7 +19,6 @@ from app.channels.teams import (
     normalize_activity,
 )
 from app.db import create_engine_for, init_schema
-from app.secrets import MemorySecretStore
 
 
 CAPTURED_ACTIVITY = {
@@ -76,12 +75,15 @@ def _store(tmp_path, *, credentials=True):
     store = ChannelStore(
         engine,
         Fernet.generate_key().decode("ascii"),
-        secret_store=MemorySecretStore(),
     )
     if credentials:
         store.save_credentials(
             "teams",
-            {"app_id": "teams-app-id", "app_password": "teams-secret"},
+            {
+                "app_id": "teams-app-id",
+                "app_password": "teams-secret",
+                "tenant_id": "teams-tenant-id",
+            },
         )
     store.set_enabled("teams", True)
     return store
@@ -144,8 +146,8 @@ def test_endpoint_uses_saved_credentials_and_dispatches_activity(tmp_path):
     sdk = FakeBotFrameworkAdapter()
     built_with = []
 
-    def factory(app_id, password):
-        built_with.append((app_id, password))
+    def factory(app_id, password, tenant_id):
+        built_with.append((app_id, password, tenant_id))
         return sdk
 
     endpoint = TeamsEndpoint(store, handler, adapter_factory=factory)
@@ -156,7 +158,9 @@ def test_endpoint_uses_saved_credentials_and_dispatches_activity(tmp_path):
     )
 
     assert response.status_code == 200
-    assert built_with == [("teams-app-id", "teams-secret")]
+    assert built_with == [
+        ("teams-app-id", "teams-secret", "teams-tenant-id")
+    ]
     assert sdk.calls[0][1] == "Bearer bot-framework-token"
     assert handler.calls[0][0].text == CAPTURED_ACTIVITY["text"]
 
@@ -166,15 +170,15 @@ def test_loopback_emulator_may_run_without_azure_credentials(tmp_path):
     handler = FakeHandler()
     built_with = []
 
-    def factory(app_id, password):
-        built_with.append((app_id, password))
+    def factory(app_id, password, tenant_id):
+        built_with.append((app_id, password, tenant_id))
         return FakeBotFrameworkAdapter()
 
     endpoint = TeamsEndpoint(store, handler, adapter_factory=factory)
     response = _client(endpoint).post("/api/messages", json=CAPTURED_ACTIVITY)
 
     assert response.status_code == 200
-    assert built_with == [("", "")]
+    assert built_with == [("", "", "")]
     assert len(handler.calls) == 1
 
 

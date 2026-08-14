@@ -199,18 +199,27 @@ class TelegramPoller:
         self._stop = asyncio.Event()
         self._offset: int | None = None
         self._token_fingerprint: str | None = None
+        self._active_api: TelegramBotAPI | None = None
 
     @property
     def offset(self) -> int | None:
         return self._offset
 
+    @property
+    def active_api(self) -> TelegramBotAPI | None:
+        return self._active_api
+
     async def run(self) -> None:
         self._stop.clear()
         async with self._api_factory() as api:
-            while not self._stop.is_set():
-                polling_succeeded = await self.poll_once(api)
-                if not polling_succeeded:
-                    await self._pause(self._retry_seconds)
+            self._active_api = api
+            try:
+                while not self._stop.is_set():
+                    polling_succeeded = await self.poll_once(api)
+                    if not polling_succeeded:
+                        await self._pause(self._retry_seconds)
+            finally:
+                self._active_api = None
 
     def stop(self) -> None:
         self._stop.set()

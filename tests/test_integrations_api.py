@@ -12,7 +12,6 @@ from app.api.integrations import build_integrations_router
 from app.channels.store import ChannelStore
 from app.channels.tester import ChannelTestResult
 from app.db import create_engine_for, init_schema, integrations
-from app.secrets import MemorySecretStore
 
 
 class FakeTester:
@@ -33,7 +32,6 @@ def _app(tmp_path):
     store = ChannelStore(
         engine,
         Fernet.generate_key().decode("ascii"),
-        secret_store=MemorySecretStore(),
     )
     store.initialize("telegram", enabled=False)
     store.initialize("teams", enabled=False)
@@ -71,7 +69,7 @@ def test_all_integration_routes_require_admin_bearer(tmp_path):
     )
 
 
-def test_save_returns_masked_credential_and_persists_only_a_reference(tmp_path):
+def test_save_returns_masked_credential_and_persists_only_ciphertext(tmp_path):
     app, engine, _, _ = _app(tmp_path)
     client = _client(app)
 
@@ -87,16 +85,13 @@ def test_save_returns_masked_credential_and_persists_only_a_reference(tmp_path):
     assert body["credentials"] == {"token": "****7890", "source": "stored"}
     assert "telegram-secret-7890" not in response.text
     with engine.connect() as conn:
-        row = conn.execute(
-            select(
-                integrations.c.credentials_encrypted,
-                integrations.c.secret_name,
-                integrations.c.active_secret_version,
-            ).where(integrations.c.channel == "telegram")
-        ).one()
-    assert row.credentials_encrypted is None
-    assert row.secret_name == "intelliknow-telegram-credentials"
-    assert row.active_secret_version
+        encrypted = conn.execute(
+            select(integrations.c.credentials_encrypted).where(
+                integrations.c.channel == "telegram"
+            )
+        ).scalar_one()
+    assert encrypted is not None
+    assert "telegram-secret-7890" not in encrypted
 
 
 def test_list_never_returns_the_reply_reference_or_plaintext(tmp_path):
@@ -176,6 +171,9 @@ def test_test_endpoint_returns_stage_and_latency(tmp_path):
         "stage": "complete",
         "latency_ms": 234,
         "error": None,
+        "latency_target_ms": 3000,
+        "latency_gate_passed": None,
+        "platform_mode": None,
     }
     assert tester.calls == [("telegram", "What is the policy?")]
 

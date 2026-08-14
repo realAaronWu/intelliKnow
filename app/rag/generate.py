@@ -30,7 +30,7 @@ Markup = Literal["markdownv2", "html", "plain"]
 # KB answers should be quick to scan in chat. This also bounds generation
 # latency: the provider cannot spend seconds producing an essay for a simple
 # employee question.
-_ANSWER_MAX_TOKENS = 256
+_ANSWER_MAX_TOKENS = 128
 
 
 @dataclass(frozen=True)

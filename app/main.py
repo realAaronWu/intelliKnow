@@ -34,8 +34,8 @@ from app.api.integrations import build_integrations_router
 from app.api.query import build_query_router
 from app.bootstrap import Application, bootstrap
 from app.channels.handler import ChannelHandler
-from app.channels.store import ChannelStore
-from app.channels.telegram import TelegramPoller
+from app.channels.store import ChannelStore, ensure_no_legacy_secret_references
+from app.channels.telegram import TelegramBotAPI, TelegramPoller
 from app.channels.teams import TeamsEndpoint, build_teams_router
 from app.channels.tester import ChannelTestService
 from app.db import create_engine_for, init_schema, recover_interrupted_documents
@@ -44,11 +44,11 @@ from app.ingest.classify_doc import preflight_classifier
 from app.orchestrator.centroids import CentroidIndex
 from app.orchestrator.pipeline import PipelineDeps, answer_question
 from app.orchestrator.errors import ClassificationError
+from app.orchestrator.feedback import load_classification_examples
 from app.providers.base import ProviderError
 from app.rag.index_writer import IndexWriter
 from app.rag.retrieve.rerank import Reranker
 from app.rag.vector_store import VectorStore
-from app.secrets.factory import build_secret_store
 
 
 def create_app(
@@ -212,6 +212,7 @@ def _build_pipeline_deps(
         vector_store=vector_store,
         centroids=centroids,
         reranker=reranker,
+        get_classification_examples=lambda: load_classification_examples(engine),
     )
 
 
@@ -227,12 +228,11 @@ def __getattr__(name: str):
         cfg = application.config
         engine = create_engine_for(Path(cfg.storage.sqlite_path))
         init_schema(engine)
+        ensure_no_legacy_secret_references(engine)
         recover_interrupted_documents(engine)
         channel_store = ChannelStore(
             engine,
             application.credential_encryption_key,
-            secret_store=build_secret_store(cfg.secret_store),
-            cache_ttl_seconds=cfg.secret_store.cache_ttl_seconds,
         )
         channel_store.initialize(
             "telegram", enabled=cfg.channels.telegram.enabled
@@ -263,10 +263,14 @@ def __getattr__(name: str):
             ),
             query_logger,
         )
+        telegram_api_factory = lambda: TelegramBotAPI(
+            proxy_url=application.telegram_proxy_url
+        )
         telegram_poller = TelegramPoller(
             channel_store,
             channel_handler,
             max_message_chars=cfg.channels.telegram.max_message_chars,
+            api_factory=telegram_api_factory,
         )
         teams_endpoint = TeamsEndpoint(
             channel_store,
@@ -278,6 +282,8 @@ def __getattr__(name: str):
             channel_handler,
             telegram_max_chars=cfg.channels.telegram.max_message_chars,
             teams_max_chars=cfg.channels.teams.max_message_chars,
+            telegram_api_factory=telegram_api_factory,
+            telegram_api_provider=lambda: telegram_poller.active_api,
         )
 
         def validate_intents(proposed_config) -> None:

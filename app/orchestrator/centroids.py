@@ -1,9 +1,10 @@
 """Centroid index — one vector per intent space, no documents required.
 
-Each intent space gets a **centroid**: the embedding of its name,
-description, and keywords concatenated. `CentroidIndex.score` compares a
-query vector against every centroid and turns the cosine similarities into
-a probability distribution with a temperature-scaled softmax — see
+Each intent space gets a **centroid**: the normalized mean of its definition
+embedding and its bounded admin-reviewed example embeddings.
+`CentroidIndex.score` compares a query vector against every centroid and turns
+the cosine similarities into a probability distribution with a
+temperature-scaled softmax — see
 `openspec/changes/add-intelliknow-kms/design.md` § "Classification without
 an LLM on the common path".
 
@@ -23,11 +24,10 @@ separate normalization step is needed here.
 `ConfigService` for changes on its own — a caller that holds a live
 config calls `sync(new_cfg)` on every query (`app/orchestrator/
 pipeline.py::answer_question` does exactly this), which rebuilds only
-when `intent_spaces` actually changed and otherwise just adopts the new
-config for its other live-reloadable fields (`centroid_temperature`).
-That is what makes "a keyword edit moves the centroid with no restart and
-no re-indexing" true without this index polling anything or re-embedding
-on every single query regardless of whether anything changed.
+when `intent_spaces` or the reviewed examples actually changed and otherwise
+just adopts the new config for its other live-reloadable fields
+(`centroid_temperature`). That is what makes keyword edits and admin feedback
+affect the next query without re-embedding on every request.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from __future__ import annotations
 import math
 
 from app.config import AppConfig, IntentSpace
-from app.providers.base import EmbeddingProvider
+from app.providers.base import EmbeddingProvider, normalize
 
 
 def _space_text(space: IntentSpace) -> str:
@@ -48,6 +48,13 @@ def _space_text(space: IntentSpace) -> str:
     if space.keywords:
         parts.append(" ".join(space.keywords))
     return " ".join(parts)
+
+
+def _mean_unit(vectors: list[list[float]]) -> list[float]:
+    if not vectors:
+        return []
+    mean = [sum(values) / len(vectors) for values in zip(*vectors)]
+    return normalize([mean])[0]
 
 
 def _dot(a: list[float], b: list[float]) -> float:
@@ -82,9 +89,14 @@ class CentroidIndex:
         self._embedder = embedder
         self._cfg = cfg
         self._centroids: dict[str, list[float]] = {}
+        self._reviewed_questions: dict[str, tuple[str, ...]] = {}
         self.rebuild()
 
-    def rebuild(self, cfg: AppConfig | None = None) -> None:
+    def rebuild(
+        self,
+        cfg: AppConfig | None = None,
+        reviewed_questions: dict[str, tuple[str, ...]] | None = None,
+    ) -> None:
         """Recompute every space's centroid.
 
         `cfg`, when supplied, replaces the config this index was built
@@ -95,14 +107,31 @@ class CentroidIndex:
         """
         if cfg is not None:
             self._cfg = cfg
+        if reviewed_questions is not None:
+            self._reviewed_questions = dict(reviewed_questions)
         spaces = self._cfg.intent_spaces
-        texts = [_space_text(space) for space in spaces]
-        vectors = self._embedder.embed(texts) if texts else []
-        self._centroids = {space.slug: vector for space, vector in zip(spaces, vectors)}
+        texts: list[str] = []
+        group_sizes: list[int] = []
+        for space in spaces:
+            group = [_space_text(space), *self._reviewed_questions.get(space.slug, ())]
+            texts.extend(group)
+            group_sizes.append(len(group))
 
-    def sync(self, cfg: AppConfig) -> None:
+        vectors = self._embedder.embed(texts) if texts else []
+        centroids: dict[str, list[float]] = {}
+        offset = 0
+        for space, size in zip(spaces, group_sizes):
+            centroids[space.slug] = _mean_unit(vectors[offset : offset + size])
+            offset += size
+        self._centroids = centroids
+
+    def sync(
+        self,
+        cfg: AppConfig,
+        reviewed_questions: dict[str, tuple[str, ...]] | None = None,
+    ) -> None:
         """Adopt `cfg` as this index's current config, rebuilding centroids
-        only if `intent_spaces` actually changed since the last build.
+        only if `intent_spaces` or reviewed examples changed since the last build.
 
         This is the seam a caller holding a *live* config source calls on
         every query (`app/orchestrator/pipeline.py::answer_question`),
@@ -118,10 +147,19 @@ class CentroidIndex:
         this index holds — `score()` reads `centroid_temperature` from it
         on every call, so a temperature-only edit (no `intent_spaces`
         change at all) takes effect on the very next query too, without
-        this method needing to special-case it.
+        this method needing to special-case it. Reviewed examples are already
+        bounded by the feedback loader; comparing them here is in-memory only.
         """
-        if cfg.intent_spaces != self._cfg.intent_spaces:
-            self.rebuild(cfg)
+        examples = (
+            self._reviewed_questions
+            if reviewed_questions is None
+            else dict(reviewed_questions)
+        )
+        if (
+            cfg.intent_spaces != self._cfg.intent_spaces
+            or examples != self._reviewed_questions
+        ):
+            self.rebuild(cfg, examples)
         else:
             self._cfg = cfg
 

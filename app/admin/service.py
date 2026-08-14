@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
@@ -44,6 +45,13 @@ def _json_dict(value: str | None) -> dict[str, Any]:
     except (TypeError, json.JSONDecodeError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _nearest_rank(values: list[int], percentile: float) -> int | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(percentile * len(ordered)) - 1)]
 
 
 class AdminService:
@@ -334,6 +342,7 @@ class AdminService:
         correct = 0
         high_confidence = 0
         latency_values: list[int] = []
+        channel_latencies: dict[str, list[int]] = {}
         threshold = self.config.orchestrator.confidence_threshold
         for row in rows:
             slug = row["intent_slug"] or "unknown"
@@ -346,6 +355,10 @@ class AdminService:
                 high_confidence += 1
             if row["latency_ms"] is not None:
                 latency_values.append(row["latency_ms"])
+                if row["channel"] in {"telegram", "teams"}:
+                    channel_latencies.setdefault(row["channel"], []).append(
+                        row["latency_ms"]
+                    )
             for doc in self._retrieved_documents(row):
                 key = (int(doc["document_id"]), str(doc["document_title"]))
                 access[key] = access.get(key, 0) + 1
@@ -353,6 +366,18 @@ class AdminService:
             {"document_id": key[0], "document_title": key[1], "access_count": count}
             for key, count in sorted(access.items(), key=lambda item: (-item[1], item[0][1]))
         ]
+        latency_gate_by_channel = {
+            channel: {
+                "count": len(values),
+                "target_ms": 3000,
+                "p50_ms": _nearest_rank(values, 0.50),
+                "p95_ms": _nearest_rank(values, 0.95),
+                "max_ms": max(values),
+                "pass_rate": sum(value <= 3000 for value in values) / len(values),
+                "passed": (_nearest_rank(values, 0.95) or 3001) <= 3000,
+            }
+            for channel, values in sorted(channel_latencies.items())
+        }
         return {
             "query_count": len(rows),
             "intent_distribution": distribution,
@@ -368,6 +393,7 @@ class AdminService:
             "average_latency_ms": (
                 round(sum(latency_values) / len(latency_values)) if latency_values else None
             ),
+            "latency_gate_by_channel": latency_gate_by_channel,
         }
 
     def dashboard(self) -> dict[str, Any]:
