@@ -282,6 +282,24 @@ Follow both logs:
 
 Press **Control-C** to stop following logs. This does not stop IntelliKnow.
 
+### Reset before another demo
+
+With IntelliKnow running, reset it to an empty knowledge base:
+
+```bash
+.venv/bin/python scripts/reset_demo.py --yes
+```
+
+This permanently deletes all documents, chunks, managed upload copies, custom
+intents such as `tech`, query history, analytics source data, and recorded
+integration errors. It preserves the built-in HR, Legal, Finance, Operations,
+and General intents as well as saved Telegram, WhatsApp, and Teams credentials
+and enabled states. Refresh the console after the command finishes.
+
+The command is deliberately refused without `--yes`. It reads the API address
+from `.run/laptop-demo/runtime.env` and the administrator password from `.env`,
+so the normal laptop-demo deployment needs no extra arguments.
+
 ## 8. Build and verify the knowledge base
 
 1. Open **Knowledge Base** in the console.
