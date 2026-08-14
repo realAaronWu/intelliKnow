@@ -257,6 +257,11 @@ class AdminService:
         }
 
     def _query_dict(self, row, *, detail: bool) -> dict[str, Any]:
+        timings = _json_dict(row["timings_json"])
+        processing_latency = timings.get("pipeline_total")
+        if processing_latency is None and row["latency_ms"] is not None:
+            delivery_latency = timings.get("channel_delivery", 0)
+            processing_latency = max(0, row["latency_ms"] - delivery_latency)
         item = {
             "id": row["id"],
             "created_at": row["created_at"],
@@ -269,6 +274,7 @@ class AdminService:
             "fallback_used": bool(row["fallback_used"]),
             "status": row["status"],
             "latency_ms": row["latency_ms"],
+            "processing_latency_ms": processing_latency,
             "expected_intent_slug": row["expected_intent_slug"],
             "reviewed_correct": row["reviewed_correct"],
             "reviewed_at": row["reviewed_at"],
@@ -280,7 +286,7 @@ class AdminService:
                 retrieved_documents=self._retrieved_documents(row),
                 reasoning=row["reasoning"],
                 error=row["error"],
-                timings_ms=_json_dict(row["timings_json"]),
+                timings_ms=timings,
             )
         return item
 

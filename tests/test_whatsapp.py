@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.channels.handler import HandlerResult
 from app.channels.store import ChannelStore
-from app.channels.whatsapp import WhatsAppEndpoint, build_whatsapp_router
+from app.channels.whatsapp import WhatsAppCloudAPI, WhatsAppEndpoint, build_whatsapp_router
 from app.db import create_engine_for, init_schema
 
 
@@ -37,7 +37,23 @@ class FakeAPI:
         self.sent.append((access_token, phone_number_id, recipient, text))
 
 
-def _setup(tmp_path):
+class FakeGraphResponse:
+    def __init__(self, status_code=200):
+        self.status_code = status_code
+        self.is_success = 200 <= status_code < 300
+
+
+class FakeGraphSession:
+    def __init__(self, response=None):
+        self.response = response or FakeGraphResponse()
+        self.calls = []
+
+    async def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return self.response
+
+
+def _setup(tmp_path, *, reuse_active_api: bool = False):
     engine = create_engine_for(tmp_path / "whatsapp.db")
     init_schema(engine)
     store = ChannelStore(engine, Fernet.generate_key().decode("ascii"))
@@ -54,7 +70,18 @@ def _setup(tmp_path):
     store.set_enabled("whatsapp", True)
     handler = FakeHandler()
     api = FakeAPI()
-    endpoint = WhatsAppEndpoint(store, handler, api_factory=lambda: api)
+    endpoint = WhatsAppEndpoint(
+        store,
+        handler,
+        api_factory=(
+            (lambda: (_ for _ in ()).throw(
+                AssertionError("active WhatsApp client should be reused")
+            ))
+            if reuse_active_api
+            else (lambda: api)
+        ),
+        api_provider=(lambda: api) if reuse_active_api else None,
+    )
     app = FastAPI()
     app.include_router(build_whatsapp_router(endpoint))
     return TestClient(app), store, handler, api
@@ -79,6 +106,29 @@ def test_meta_verification_returns_exact_challenge(tmp_path):
 
     assert response.status_code == 200
     assert response.text == "123456"
+
+
+def test_whatsapp_warm_delivery_reads_phone_metadata_without_sending_message():
+    session = FakeGraphSession()
+    api = WhatsAppCloudAPI(
+        session=session,
+        graph_root="https://graph.test",
+    )
+
+    import asyncio
+
+    asyncio.run(api.warm_delivery("access-token", "phone-id"))
+
+    assert session.calls == [
+        (
+            "https://graph.test/phone-id",
+            {
+                "headers": {"Authorization": "Bearer access-token"},
+                "params": {"fields": "id"},
+                "timeout": session.calls[0][1]["timeout"],
+            },
+        )
+    ]
 
 
 def test_meta_verification_rejects_wrong_token(tmp_path):
@@ -183,3 +233,37 @@ def test_status_callback_is_acknowledged_without_query(tmp_path):
 
     assert response.status_code == 200
     assert handler.calls == []
+
+
+def test_webhook_reuses_active_whatsapp_api(tmp_path):
+    client, _, handler, api = _setup(tmp_path, reuse_active_api=True)
+    payload = {
+        "entry": [
+            {
+                "changes": [
+                    {
+                        "field": "messages",
+                        "value": {
+                            "messages": [
+                                {
+                                    "from": "15551234567",
+                                    "type": "text",
+                                    "text": {"body": "Question"},
+                                }
+                            ]
+                        },
+                    }
+                ]
+            }
+        ]
+    }
+    body = json.dumps(payload, separators=(",", ":")).encode()
+
+    response = client.post(
+        "/api/whatsapp/webhook",
+        content=body,
+        headers={"X-Hub-Signature-256": _signature(body)},
+    )
+
+    assert response.status_code == 200
+    assert handler.calls[0][1]._api is api

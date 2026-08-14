@@ -92,6 +92,19 @@ def test_bootstrap_builds_config_service_and_all_three_providers(local_config):
     assert isinstance(result.embedding, SentenceTransformerEmbedding)
 
 
+def test_channel_proxy_urls_are_loaded_from_environment(local_config):
+    result = bootstrap(
+        config_path=local_config,
+        env={
+            "TELEGRAM_PROXY_URL": "socks5://127.0.0.1:8119",
+            "WHATSAPP_PROXY_URL": "http://127.0.0.1:8118",
+        },
+    )
+
+    assert result.telegram_proxy_url == "socks5://127.0.0.1:8119"
+    assert result.whatsapp_proxy_url == "http://127.0.0.1:8118"
+
+
 def test_classify_and_generate_providers_use_their_configured_models(
     local_config,
 ):

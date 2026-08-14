@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import time
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from typing import Callable, Literal, Protocol
 
@@ -111,19 +112,29 @@ class ChannelHandler:
             finally:
                 pipeline_wait_ms = self._elapsed(stage_start)
 
-        # Complete the acknowledgement before using the same platform client
-        # for delivery. The strict timeout prevents a slow typing endpoint from
-        # consuming the answer budget or competing with the actual send.
-        try:
-            typing_result = await asyncio.wait_for(
-                send_typing(), timeout=self._typing_timeout_seconds
-            )
-        except TimeoutError:
-            typing_result = None
+        async def bounded_typing() -> Exception | None:
+            try:
+                return await asyncio.wait_for(
+                    send_typing(), timeout=self._typing_timeout_seconds
+                )
+            except TimeoutError:
+                return None
+
+        # Typing is a courtesy signal, not part of the answer dependency
+        # chain. Overlap it with the blocking pipeline and cancel it when a
+        # faster pipeline has already produced the answer.
+        typing_task = asyncio.create_task(bounded_typing())
         try:
             pipeline_result: QueryOutcome | Exception = await run_pipeline()
         except Exception as exc:
             pipeline_result = exc
+        if typing_task.done():
+            typing_result = typing_task.result()
+        else:
+            typing_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await typing_task
+            typing_result = None
 
         if isinstance(typing_result, Exception):
             logger.warning(

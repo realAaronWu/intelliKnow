@@ -18,6 +18,7 @@ for testing has none of those side effects.
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
@@ -38,7 +39,7 @@ from app.channels.store import ChannelStore, ensure_no_legacy_secret_references
 from app.channels.telegram import TelegramBotAPI, TelegramPoller
 from app.channels.teams import TeamsEndpoint, build_teams_router
 from app.channels.tester import ChannelTestService
-from app.channels.whatsapp import WhatsAppEndpoint, build_whatsapp_router
+from app.channels.whatsapp import WhatsAppCloudAPI, WhatsAppEndpoint, build_whatsapp_router
 from app.db import create_engine_for, init_schema, recover_interrupted_documents
 from app.ingest.worker import IngestDeps
 from app.ingest.classify_doc import preflight_classifier
@@ -104,19 +105,51 @@ def create_app(
     return fastapi_app
 
 
-def _poller_lifespan(poller: TelegramPoller):
+def _channel_lifespan(
+    poller: TelegramPoller,
+    whatsapp_api: WhatsAppCloudAPI | None = None,
+    channel_store: ChannelStore | None = None,
+):
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        task = asyncio.create_task(poller.run(), name="telegram-poller")
-        try:
-            yield
-        finally:
-            poller.stop()
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
+        if whatsapp_api is None:
+            task = asyncio.create_task(poller.run(), name="telegram-poller")
+            try:
+                yield
+            finally:
+                poller.stop()
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+        else:
+            async with whatsapp_api:
+                if channel_store is not None and channel_store.is_enabled("whatsapp"):
+                    try:
+                        credentials = channel_store.load_credentials("whatsapp")
+                        if credentials is not None:
+                            await whatsapp_api.warm_delivery(
+                                credentials.values["access_token"],
+                                credentials.values["phone_number_id"],
+                            )
+                    except Exception as exc:
+                        # Warm-up is an optimization. The endpoint still gets
+                        # its normal delivery attempt and actionable error.
+                        logging.getLogger(__name__).warning(
+                            "WhatsApp delivery warm-up failed: %s", exc
+                        )
+                task = asyncio.create_task(poller.run(), name="telegram-poller")
+                try:
+                    yield
+                finally:
+                    poller.stop()
+                    task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
 
     return lifespan
+
+
+_poller_lifespan = _channel_lifespan
 
 
 def _build_default_deps(
@@ -282,10 +315,12 @@ def __getattr__(name: str):
             channel_handler,
             max_message_chars=cfg.channels.teams.max_message_chars,
         )
+        whatsapp_api = WhatsAppCloudAPI(proxy_url=application.whatsapp_proxy_url)
         whatsapp_endpoint = WhatsAppEndpoint(
             channel_store,
             channel_handler,
             max_message_chars=cfg.channels.whatsapp.max_message_chars,
+            api_provider=lambda: whatsapp_api,
         )
         channel_tester = ChannelTestService(
             channel_store,
@@ -295,6 +330,7 @@ def __getattr__(name: str):
             whatsapp_max_chars=cfg.channels.whatsapp.max_message_chars,
             telegram_api_factory=telegram_api_factory,
             telegram_api_provider=lambda: telegram_poller.active_api,
+            whatsapp_api_provider=lambda: whatsapp_api,
         )
 
         def validate_intents(proposed_config) -> None:
@@ -320,7 +356,9 @@ def __getattr__(name: str):
             deps,
             pipeline_deps,
             admin_password=application.admin_password,
-            lifespan=_poller_lifespan(telegram_poller),
+            lifespan=_channel_lifespan(
+                telegram_poller, whatsapp_api, channel_store
+            ),
             teams_endpoint=teams_endpoint,
             whatsapp_endpoint=whatsapp_endpoint,
             integration_store=channel_store,

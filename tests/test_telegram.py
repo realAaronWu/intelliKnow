@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+import httpx
 import pytest
 from cryptography.fernet import Fernet
 
@@ -52,9 +53,12 @@ class FakeSession:
         self.responses = list(responses)
         self.calls = []
 
-    async def post(self, url, *, json):
+    async def post(self, url, *, json, timeout=None):
         self.calls.append((url, json))
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 class FakeAPI:
@@ -63,7 +67,11 @@ class FakeAPI:
         self.polls = []
         self.actions = []
         self.messages = []
+        self.warmups = []
         self.error: Exception | None = None
+
+    async def warm_delivery(self, token):
+        self.warmups.append(token)
 
     async def get_updates(self, token, *, offset, timeout):
         self.polls.append((token, offset, timeout))
@@ -150,11 +158,7 @@ def test_bot_api_sends_expected_payloads_without_reformatting():
         ),
         (
             "https://telegram.test/botsecret-token/sendMessage",
-            {
-                "chat_id": "-456",
-                "text": "already\\-escaped",
-                "parse_mode": "MarkdownV2",
-            },
+            {"chat_id": "-456", "text": "already\\-escaped"},
         ),
     ]
 
@@ -173,6 +177,17 @@ def test_bot_api_get_updates_sends_offset_timeout_and_message_filter():
             "https://telegram.test/bottoken/getUpdates",
             {"offset": 42, "timeout": 20, "allowed_updates": ["message"]},
         )
+    ]
+
+
+def test_bot_api_warm_delivery_uses_get_me():
+    session = FakeSession([FakeResponse({"ok": True, "result": {"id": 1}})])
+    api = TelegramBotAPI(session=session, api_root="https://telegram.test")
+
+    asyncio.run(api.warm_delivery("token"))
+
+    assert session.calls == [
+        ("https://telegram.test/bottoken/getMe", {})
     ]
 
 
@@ -198,6 +213,32 @@ def test_bot_api_errors_never_include_the_token():
     assert "do-not-leak" not in str(captured.value)
 
 
+def test_send_message_retries_one_connection_failure():
+    request = httpx.Request("POST", "https://telegram.test")
+    session = FakeSession(
+        [
+            httpx.ConnectError("proxy dropped connection", request=request),
+            FakeResponse({"ok": True, "result": {"message_id": 10}}),
+        ]
+    )
+    api = TelegramBotAPI(session=session, api_root="https://telegram.test")
+
+    asyncio.run(api.send_message("token", "chat", "text"))
+
+    assert len(session.calls) == 2
+
+
+def test_send_message_does_not_retry_read_timeout_to_avoid_duplicates():
+    request = httpx.Request("POST", "https://telegram.test")
+    session = FakeSession([httpx.ReadTimeout("uncertain delivery", request=request)])
+    api = TelegramBotAPI(session=session, api_root="https://telegram.test")
+
+    with pytest.raises(TelegramAPIError, match="request failed"):
+        asyncio.run(api.send_message("token", "chat", "text"))
+
+    assert len(session.calls) == 1
+
+
 def test_poller_advances_offset_and_skips_a_duplicate_update(tmp_path):
     store = _store(tmp_path)
     handler = FakeHandler()
@@ -211,6 +252,7 @@ def test_poller_advances_offset_and_skips_a_duplicate_update(tmp_path):
     asyncio.run(exercise())
 
     assert [call[1] for call in api.polls] == [None, 42]
+    assert api.warmups == ["token-one"]
     assert len(handler.calls) == 1
     assert poller.offset == 42
 
@@ -298,3 +340,53 @@ def test_application_lifespan_starts_and_stops_the_poller():
     poller = asyncio.run(exercise())
 
     assert poller.stopped is True
+
+
+def test_application_lifespan_warms_enabled_whatsapp(tmp_path):
+    class LifespanPoller:
+        def __init__(self):
+            self.started = asyncio.Event()
+
+        async def run(self):
+            self.started.set()
+            await asyncio.Event().wait()
+
+        def stop(self):
+            return None
+
+    class LifespanWhatsAppAPI:
+        def __init__(self):
+            self.warmups = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return None
+
+        async def warm_delivery(self, access_token, phone_number_id):
+            self.warmups.append((access_token, phone_number_id))
+
+    async def exercise():
+        poller = LifespanPoller()
+        api = LifespanWhatsAppAPI()
+        store = _store(tmp_path)
+        store.initialize("whatsapp", enabled=True)
+        store.save_credentials(
+            "whatsapp",
+            {
+                "access_token": "wa-token",
+                "phone_number_id": "phone-id",
+                "app_secret": "app-secret",
+                "verify_token": "verify-token",
+            },
+        )
+        store.set_enabled("whatsapp", True)
+        lifespan = _poller_lifespan(poller, api, store)
+        async with lifespan(None):
+            await asyncio.wait_for(poller.started.wait(), timeout=1)
+        return api
+
+    api = asyncio.run(exercise())
+
+    assert api.warmups == [("wa-token", "phone-id")]

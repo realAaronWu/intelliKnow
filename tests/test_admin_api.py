@@ -238,6 +238,8 @@ def test_query_history_feedback_accuracy_and_detail(tmp_path):
     page = client.get("/admin/queries", params={"limit": 1})
     assert page.json()["total"] == 1
     assert page.json()["items"][0]["id"] == query_id
+    assert page.json()["items"][0]["latency_ms"] == 220
+    assert page.json()["items"][0]["processing_latency_ms"] == 210
     detail = client.get(f"/admin/queries/{query_id}").json()
     assert detail["answer"] == "Twenty days. [1]"
 

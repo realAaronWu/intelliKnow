@@ -34,20 +34,49 @@ class WhatsAppCloudAPI:
         *,
         session: httpx.AsyncClient | None = None,
         graph_root: str = WHATSAPP_GRAPH_ROOT,
+        proxy_url: str | None = None,
     ) -> None:
         self._session = session
         self._owns_session = session is None
         self._graph_root = graph_root.rstrip("/")
+        self._proxy_url = proxy_url
 
     async def __aenter__(self) -> "WhatsAppCloudAPI":
         if self._session is None:
-            self._session = httpx.AsyncClient(timeout=30)
+            self._session = httpx.AsyncClient(
+                proxy=self._proxy_url,
+                timeout=10,
+                trust_env=False,
+                limits=httpx.Limits(
+                    max_connections=10,
+                    max_keepalive_connections=5,
+                    keepalive_expiry=300,
+                ),
+            )
         return self
 
     async def __aexit__(self, exc_type, exc, traceback) -> None:
         if self._owns_session and self._session is not None:
             await self._session.aclose()
             self._session = None
+
+    async def warm_delivery(
+        self, access_token: str, phone_number_id: str
+    ) -> None:
+        """Validate credentials and establish the Graph API connection."""
+        if self._session is None:
+            raise RuntimeError("WhatsApp API client is not open")
+        response = await self._session.get(
+            f"{self._graph_root}/{phone_number_id}",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"fields": "id"},
+            timeout=httpx.Timeout(8, connect=4),
+        )
+        if response.is_success:
+            return
+        raise WhatsAppAPIError(
+            f"WhatsApp connection warm-up failed ({response.status_code})"
+        )
 
     async def send_message(
         self, access_token: str, phone_number_id: str, recipient: str, text: str
@@ -163,11 +192,13 @@ class WhatsAppEndpoint:
         *,
         max_message_chars: int = 4096,
         api_factory=WhatsAppCloudAPI,
+        api_provider=None,
     ) -> None:
         self._store = store
         self._handler = handler
         self._max_message_chars = max_message_chars
         self._api_factory = api_factory
+        self._api_provider = api_provider or (lambda: None)
 
     def _credentials(self) -> dict[str, str]:
         try:
@@ -217,7 +248,8 @@ class WhatsAppEndpoint:
         self, message: InboundMessage, credentials: Mapping[str, str]
     ) -> None:
         try:
-            async with self._api_factory() as api:
+            api = self._api_provider()
+            if api is not None:
                 adapter = WhatsAppAdapter(
                     api,
                     credentials["access_token"],
@@ -225,6 +257,15 @@ class WhatsAppEndpoint:
                     max_message_chars=self._max_message_chars,
                 )
                 await self._handler.handle(message, adapter)
+            else:
+                async with self._api_factory() as api:
+                    adapter = WhatsAppAdapter(
+                        api,
+                        credentials["access_token"],
+                        credentials["phone_number_id"],
+                        max_message_chars=self._max_message_chars,
+                    )
+                    await self._handler.handle(message, adapter)
         except Exception as exc:
             logger.exception("WhatsApp message processing failed")
             self._store.mark_disconnected(WHATSAPP_CHANNEL, str(exc))

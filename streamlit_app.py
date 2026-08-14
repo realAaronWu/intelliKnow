@@ -942,7 +942,11 @@ def analytics() -> None:
                     else ""
                 ),
                 "Status": item["status"].replace("_", " ").title(),
-                "Latency": f"{item['latency_ms']} ms" if item["latency_ms"] is not None else "",
+                "Processing latency": (
+                    f"{item['processing_latency_ms']} ms"
+                    if item.get("processing_latency_ms") is not None
+                    else ""
+                ),
             }
             for item in history["items"]
         ]

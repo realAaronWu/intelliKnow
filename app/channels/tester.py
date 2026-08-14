@@ -55,6 +55,7 @@ class ChannelTestService:
         telegram_api_provider=None,
         teams_adapter_factory=None,
         whatsapp_api_factory=WhatsAppCloudAPI,
+        whatsapp_api_provider=None,
     ) -> None:
         self._store = store
         self._handler = handler
@@ -65,6 +66,7 @@ class ChannelTestService:
         self._telegram_api_provider = telegram_api_provider or (lambda: None)
         self._teams_adapter_factory = teams_adapter_factory or self._build_teams_adapter
         self._whatsapp_api_factory = whatsapp_api_factory
+        self._whatsapp_api_provider = whatsapp_api_provider or (lambda: None)
 
     @staticmethod
     def _build_teams_adapter(
@@ -213,7 +215,8 @@ class ChannelTestService:
         phone_number_id: str,
     ) -> ChannelTestResult:
         try:
-            async with self._whatsapp_api_factory() as api:
+            api = self._whatsapp_api_provider()
+            if api is not None:
                 adapter = WhatsAppAdapter(
                     api,
                     access_token,
@@ -223,6 +226,17 @@ class ChannelTestService:
                 result = await self._handler.handle(
                     InboundMessage("whatsapp", None, question, reply_ref), adapter
                 )
+            else:
+                async with self._whatsapp_api_factory() as api:
+                    adapter = WhatsAppAdapter(
+                        api,
+                        access_token,
+                        phone_number_id,
+                        max_message_chars=self._whatsapp_max_chars,
+                    )
+                    result = await self._handler.handle(
+                        InboundMessage("whatsapp", None, question, reply_ref), adapter
+                    )
         except Exception as exc:
             self._store.mark_disconnected("whatsapp", str(exc))
             stage: TestStage = "credentials" if _credential_failure(str(exc)) else "delivery"

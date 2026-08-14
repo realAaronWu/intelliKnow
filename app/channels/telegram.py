@@ -27,6 +27,8 @@ class TelegramAPIError(RuntimeError):
 
 
 class TelegramAPI(Protocol):
+    async def warm_delivery(self, token: str) -> None: ...
+
     async def get_updates(
         self, token: str, *, offset: int | None, timeout: int
     ) -> list[Mapping[str, Any]]: ...
@@ -48,6 +50,8 @@ class TelegramBotAPI:
     ) -> None:
         self._session = session
         self._owns_session = session is None
+        self._poll_session: httpx.AsyncClient | None = None
+        self._typing_session: httpx.AsyncClient | None = None
         self._api_root = api_root.rstrip("/")
         self._proxy_url = proxy_url
 
@@ -58,17 +62,35 @@ class TelegramBotAPI:
                 or os.environ.get("ALL_PROXY")
                 or os.environ.get("HTTP_PROXY")
             )
-            self._session = httpx.AsyncClient(
-                proxy=proxy_url,
-                timeout=30,
-                trust_env=proxy_url is None,
-            )
+            client_options = {
+                "proxy": proxy_url,
+                "timeout": 30,
+                "trust_env": proxy_url is None,
+                "limits": httpx.Limits(
+                    max_connections=5,
+                    max_keepalive_connections=2,
+                    keepalive_expiry=300,
+                ),
+            }
+            # Long polling and the cancellable typing indicator must not
+            # consume or invalidate the warm connection used for answers.
+            self._session = httpx.AsyncClient(**client_options)
+            self._poll_session = httpx.AsyncClient(**client_options)
+            self._typing_session = httpx.AsyncClient(**client_options)
         return self
 
     async def __aexit__(self, exc_type, exc, traceback) -> None:
-        if self._owns_session and self._session is not None:
-            await self._session.aclose()
+        if self._owns_session:
+            for session in (
+                self._session,
+                self._poll_session,
+                self._typing_session,
+            ):
+                if session is not None:
+                    await session.aclose()
             self._session = None
+            self._poll_session = None
+            self._typing_session = None
 
     async def get_updates(
         self, token: str, *, offset: int | None, timeout: int
@@ -79,41 +101,87 @@ class TelegramBotAPI:
         }
         if offset is not None:
             payload["offset"] = offset
-        result = await self._request(token, "getUpdates", payload)
+        result = await self._request(
+            token,
+            "getUpdates",
+            payload,
+            timeout=httpx.Timeout(timeout + 5, connect=5),
+            session=self._poll_session,
+        )
         if not isinstance(result, list) or not all(
             isinstance(update, Mapping) for update in result
         ):
             raise TelegramAPIError("Telegram getUpdates returned an invalid result")
         return result
 
+    async def warm_delivery(self, token: str) -> None:
+        """Validate credentials and establish the answer connection early."""
+        await self._request(
+            token,
+            "getMe",
+            {},
+            timeout=httpx.Timeout(6, connect=4),
+            connect_retries=3,
+        )
+
     async def send_chat_action(self, token: str, chat_id: str) -> None:
         await self._request(
             token,
             "sendChatAction",
             {"chat_id": chat_id, "action": "typing"},
+            timeout=httpx.Timeout(5, connect=3),
+            session=self._typing_session,
         )
 
     async def send_message(self, token: str, chat_id: str, text: str) -> None:
         await self._request(
             token,
             "sendMessage",
-            {"chat_id": chat_id, "text": text, "parse_mode": "MarkdownV2"},
+            {"chat_id": chat_id, "text": text},
+            timeout=httpx.Timeout(10, connect=5),
+            connect_retries=1,
         )
 
-    async def _request(self, token: str, method: str, payload: Mapping[str, Any]) -> Any:
-        if self._session is None:
+    async def _request(
+        self,
+        token: str,
+        method: str,
+        payload: Mapping[str, Any],
+        *,
+        timeout: httpx.Timeout | None = None,
+        connect_retries: int = 0,
+        session: httpx.AsyncClient | None = None,
+    ) -> Any:
+        active_session = session or self._session
+        if active_session is None:
             raise RuntimeError("TelegramBotAPI must be used as an async context manager")
         url = f"{self._api_root}/bot{token}/{method}"
-        try:
-            response = await self._session.post(url, json=dict(payload))
+        for attempt in range(connect_retries + 1):
             try:
-                body = response.json()
-            except ValueError as exc:
+                response = await active_session.post(
+                    url,
+                    json=dict(payload),
+                    timeout=timeout,
+                )
+                try:
+                    body = response.json()
+                except ValueError as exc:
+                    raise TelegramAPIError(
+                        f"Telegram {method} returned an invalid response"
+                    ) from exc
+                break
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ProxyError) as exc:
+                if attempt < connect_retries:
+                    logger.warning(
+                        "Telegram %s connection failed; retrying once", method
+                    )
+                    await asyncio.sleep(0.1)
+                    continue
                 raise TelegramAPIError(
-                    f"Telegram {method} returned an invalid response"
+                    f"Telegram {method} could not connect through the configured network"
                 ) from exc
-        except (httpx.HTTPError, asyncio.TimeoutError) as exc:
-            raise TelegramAPIError(f"Telegram {method} request failed") from exc
+            except (httpx.HTTPError, asyncio.TimeoutError) as exc:
+                raise TelegramAPIError(f"Telegram {method} request failed") from exc
 
         description = body.get("description") if isinstance(body, Mapping) else None
         if (
@@ -162,7 +230,7 @@ class TelegramAdapter:
         self.profile = ChannelProfile(
             name=TELEGRAM_CHANNEL,
             max_chars=max_message_chars,
-            markup="markdownv2",
+            markup="plain",
             supports_lists=False,
         )
 
@@ -244,6 +312,14 @@ class TelegramPoller:
         if fingerprint != self._token_fingerprint:
             self._token_fingerprint = fingerprint
             self._offset = None
+            try:
+                await api.warm_delivery(token)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # Polling may still work even if this optional connection
+                # warm-up hits a transient proxy failure.
+                logger.warning("Telegram delivery warm-up failed: %s", exc)
 
         try:
             updates = await api.get_updates(

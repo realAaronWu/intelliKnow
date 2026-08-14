@@ -41,6 +41,7 @@ class Application:
     admin_password: str | None = None
     credential_encryption_key: str | None = None
     telegram_proxy_url: str | None = None
+    whatsapp_proxy_url: str | None = None
 
     @property
     def config(self) -> AppConfig:
@@ -107,4 +108,5 @@ def bootstrap(
         admin_password=env.get("ADMIN_PASSWORD"),
         credential_encryption_key=env.get("CREDENTIAL_ENCRYPTION_KEY"),
         telegram_proxy_url=env.get("TELEGRAM_PROXY_URL"),
+        whatsapp_proxy_url=env.get("WHATSAPP_PROXY_URL"),
     )

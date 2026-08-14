@@ -89,7 +89,7 @@ def _store(tmp_path):
     return store
 
 
-def test_handler_orders_typing_pipeline_send_then_log_and_does_not_reformat(tmp_path):
+def test_handler_overlaps_typing_with_pipeline_then_sends_and_logs(tmp_path):
     events: list[str] = []
     adapter = FakeAdapter(events)
     logger = FakeLogger(events)
@@ -103,7 +103,8 @@ def test_handler_orders_typing_pipeline_send_then_log_and_does_not_reformat(tmp_
 
     result = asyncio.run(handler.handle(message, adapter))
 
-    assert events == ["typing", "pipeline", "send", "log"]
+    assert events[:2] in (["typing", "pipeline"], ["pipeline", "typing"])
+    assert events[-2:] == ["send", "log"]
     assert adapter.sent == [("chat-1", "already\\-formatted answer")]
     assert result.delivered is True
     assert result.status == "success"
@@ -129,7 +130,7 @@ def test_typing_failure_is_retained_but_does_not_block_delivery(tmp_path):
     assert "typing unavailable" in store.get("telegram").last_error
 
 
-def test_slow_typing_request_is_cancelled_before_answer_delivery(tmp_path):
+def test_slow_typing_request_is_cancelled_when_pipeline_finishes_first(tmp_path):
     events: list[str] = []
     adapter = FakeAdapter(events)
     adapter.typing_gate = asyncio.Event()
@@ -137,7 +138,7 @@ def test_slow_typing_request_is_cancelled_before_answer_delivery(tmp_path):
         _store(tmp_path),
         lambda question, profile: _outcome(),
         FakeLogger(events),
-        typing_timeout_seconds=0.01,
+        typing_timeout_seconds=10,
     )
 
     result = asyncio.run(
@@ -201,7 +202,8 @@ def test_pipeline_exception_sends_user_error_and_records_failure(tmp_path):
 
     assert result.status == "failed"
     assert result.delivered is True
-    assert events == ["typing", "pipeline", "send", "log_failure"]
+    assert events[:2] in (["typing", "pipeline"], ["pipeline", "typing"])
+    assert events[-2:] == ["send", "log_failure"]
     assert "try again" in adapter.sent[0][1].lower()
 
 
