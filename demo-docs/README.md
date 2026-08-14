@@ -10,6 +10,7 @@ For a normal manual upload demo, use these fixtures:
 | --- | --- | --- |
 | `expense_policy.docx` | Finance | Which form should I submit for travel expenses? What is the daily meal limit? What happens if I lose a receipt? |
 | `budget.xlsx` | Finance | What is the FY2026 travel budget? Is total YTD spending over budget? Who approves a purchase above USD 25,000? |
+| `project_lantern_approval_policy.docx` | Finance | Does a Project Lantern request need Level-2 approval? Which form is required? |
 | `handbook.pdf` | HR | How many annual-leave days do employees receive? When does carried leave expire? How do I request parental leave? |
 | `salary_bands.pdf` | HR | What is the Band 6 midpoint? What approvals are needed above a band maximum? How does a promotion affect salary? |
 | `nda.docx` | Legal | How quickly must a security incident be reported? How long do confidentiality duties last? Can confidential data be used with public AI services? |
