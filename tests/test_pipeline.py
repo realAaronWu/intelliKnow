@@ -1,6 +1,6 @@
 """Test-plan §11 — query pipeline.
 
-Source: docs/superpowers/test-plans/04-rag-read-path-tests.md §11
+Source: superpowers/test-plans/04-rag-read-path-tests.md §11
 
 Everything is a fake or a real-but-local store: `FakeEmbeddingProvider`
 and `FakeLLMProvider` (`tests/doubles.py`) for the AI-shaped calls, a real

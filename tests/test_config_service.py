@@ -1,6 +1,6 @@
 """Test-plan §2 — ConfigService.
 
-Source: docs/superpowers/test-plans/01-foundation-tests.md §2
+Source: superpowers/test-plans/01-foundation-tests.md §2
 
 Each test copies the shipped `config.yaml` into a pytest `tmp_path` rather
 than mutating the repo-root file, per the task-2 brief.

@@ -1,6 +1,6 @@
 """Tests for document intent suggestion at ingest.
 
-Covers docs/superpowers/test-plans/03-rag-write-path-tests.md §9.5-9.7.
+Covers superpowers/test-plans/03-rag-write-path-tests.md §9.5-9.7.
 """
 
 from __future__ import annotations

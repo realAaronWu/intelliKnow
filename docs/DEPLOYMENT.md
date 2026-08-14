@@ -1,12 +1,9 @@
-# IntelliKnow Cross-Platform Deployment Guide
+# IntelliKnow Deployment Guide
 
 This guide deploys the IntelliKnow MVP from a clean clone on macOS, Linux, or
 Windows. The recommended evaluator path uses local HTTP bound to `127.0.0.1`.
 That path is portable, avoids local-certificate trust differences, and still
 allows WhatsApp or Teams callbacks through a public HTTPS tunnel.
-
-For the existing managed HTTPS laptop workflow, see
-[Laptop Demo Deployment](LAPTOP-DEMO-DEPLOYMENT.md).
 
 ## 1. Deployment model
 
@@ -170,7 +167,7 @@ available at [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs).
 Open a second terminal in the same repository:
 
 ```text
-uv run streamlit run streamlit_app.py --server.address 127.0.0.1 --server.port 8501
+uv run streamlit run app/ui/streamlit_app.py --server.address 127.0.0.1 --server.port 8501
 ```
 
 Open [http://127.0.0.1:8501](http://127.0.0.1:8501). On the login screen:
@@ -235,51 +232,11 @@ Low-confidence user questions fall back to the configured General intent.
 
 ## 9. Connect messaging channels
 
-Channel credentials are entered under **Frontend Integration** after the API is
-running. IntelliKnow encrypts them in SQLite with
-`CREDENTIAL_ENCRYPTION_KEY` and returns only masked values.
-
-### Telegram
-
-Telegram uses long polling and needs no public endpoint:
-
-1. Create a bot with the verified `@BotFather` account.
-2. Save its bot token under **Frontend Integration > Telegram**.
-3. Enable the integration and restart the API if polling was disabled in
-   `config.yaml`.
-4. Open the bot link, select **Start**, and ask a question.
-
-Run only one IntelliKnow API instance for a bot token. Two polling processes
-cause Telegram's `terminated by other getUpdates request` conflict.
-
-### WhatsApp
-
-WhatsApp needs a Meta app, business sender, access token, phone-number ID, app
-secret, verify token, and a public HTTPS webhook. For an MVP tunnel, install
-`cloudflared`, keep the API running on local HTTP, and run:
-
-```text
-cloudflared tunnel --url http://127.0.0.1:8000
-```
-
-Cloudflare prints a temporary public HTTPS URL. Configure Meta's callback as:
-
-```text
-https://YOUR-TUNNEL.trycloudflare.com/api/whatsapp/webhook
-```
-
-Quick Tunnels are for demonstrations, not production. See Cloudflare's
-[Quick Tunnel documentation](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/).
-
-### Microsoft Teams
-
-Use Bot Framework Emulator and `/api/messages` for a local account-free demo.
-Real Teams requires an Azure Bot registration, Microsoft 365 tenant approval,
-and a public HTTPS messaging endpoint.
-
-Follow [Frontend Integrations](FRONTEND-INTEGRATIONS.md) for complete Telegram,
-WhatsApp, and Teams steps and [Local Teams Demo](LOCAL-TEAMS-DEMO.md) for the
-Emulator workflow.
+After the local application is verified, follow
+[Messaging Integrations](INTEGRATIONS.md) to connect Telegram, WhatsApp, or
+Microsoft Teams. That guide covers employee use, encrypted administrator
+credentials, public webhook tunnels, the account-free Teams Emulator flow,
+real Teams deployment, security, and troubleshooting.
 
 ## 10. Data, backup, and reset
 

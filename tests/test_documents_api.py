@@ -1,6 +1,6 @@
 """Tests for the document admin API.
 
-Covers docs/superpowers/test-plans/03-rag-write-path-tests.md §12.1-12.10.
+Covers superpowers/test-plans/03-rag-write-path-tests.md §12.1-12.10.
 `TestClient` runs FastAPI `BackgroundTasks` synchronously within the same
 call, so by the time `client.post(...)` returns, a scheduled ingestion has
 already completed (or failed) — tests that need to assert on the

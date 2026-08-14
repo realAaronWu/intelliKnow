@@ -1,6 +1,6 @@
 """Tests for the synthetic document fixture generator.
 
-Covers docs/superpowers/test-plans/02-test-corpus-tests.md §1.
+Covers superpowers/test-plans/02-test-corpus-tests.md §1.
 """
 
 from __future__ import annotations

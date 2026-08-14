@@ -1,6 +1,6 @@
 """Tests for the ingestion worker.
 
-Covers docs/superpowers/test-plans/03-rag-write-path-tests.md §10, plus the
+Covers superpowers/test-plans/03-rag-write-path-tests.md §10, plus the
 carry-forward assertion that ragged-table repair is actually wired into the
 pipeline: ingesting `ragged_salary_grid.pdf` triggers a repair call and
 ingesting `salary_bands.pdf` (a clean, ruled table) does not.

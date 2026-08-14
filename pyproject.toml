@@ -46,5 +46,5 @@ pythonpath = ["."]
 # explicit `-m` override) still opts back in deliberately.
 addopts = "-m \"not slow\""
 markers = [
-    "slow: loads a real model or hits real infra (see docs/superpowers/test-plans/04-rag-read-path-tests.md L2); excluded by `-m \"not slow\"`.",
+    "slow: loads a real model or hits real infra (see superpowers/test-plans/04-rag-read-path-tests.md L2); excluded by `-m \"not slow\"`.",
 ]

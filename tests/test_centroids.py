@@ -1,6 +1,6 @@
 """Test-plan §8a — centroid index.
 
-Source: docs/superpowers/test-plans/04-rag-read-path-tests.md §8a
+Source: superpowers/test-plans/04-rag-read-path-tests.md §8a
 
 Every test pins centroid-source text to exact vectors via
 `FakeEmbeddingProvider.set_vector` so cosine similarities — and therefore

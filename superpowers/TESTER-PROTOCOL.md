@@ -11,7 +11,7 @@ A **clean tester** is a fresh agent that has never seen the implementation plan 
 **May read:**
 - `openspec/changes/add-intelliknow-kms/specs/*/spec.md` — the requirements, the source of truth
 - `openspec/changes/add-intelliknow-kms/design.md` — for architectural context
-- `docs/superpowers/test-plans/<NN>-*-tests.md` — the test plan for this increment
+- `superpowers/test-plans/<NN>-*-tests.md` — the test plan for this increment
 - The **Interfaces** block of the execution plan — public signatures only, so imports and call shapes are correct
 - `tests/doubles.py` — the shared test doubles
 - Test failure output, tracebacks, and any file a traceback points into

@@ -44,7 +44,9 @@ def _runtime_api_url() -> str:
 def main() -> None:
     values = {**dotenv_values(ROOT / ".env"), **os.environ}
     parser = argparse.ArgumentParser()
-    parser.add_argument("--channel", required=True, choices=("telegram", "teams"))
+    parser.add_argument(
+        "--channel", required=True, choices=("telegram", "whatsapp", "teams")
+    )
     parser.add_argument("--api-url", default=_runtime_api_url())
     parser.add_argument("--admin-password", default=values.get("ADMIN_PASSWORD"))
     parser.add_argument("--ca-cert", type=Path, default=ROOT / ".run/laptop-demo/tls/rootCA.pem")
@@ -109,7 +111,7 @@ def main() -> None:
     if failures:
         print(f"FAILED: {len(failures)} delivery trial(s) did not complete")
     if local_platform:
-        print("FAILED: the stored destination is local Emulator, not real Teams")
+        print("FAILED: the stored destination is local Emulator, not a real platform")
     if unknown_platform:
         print("FAILED: the successful destination could not be verified as real")
     if p95 is not None and p95 > args.target_ms:

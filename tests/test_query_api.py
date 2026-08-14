@@ -1,6 +1,6 @@
 """Test-plan §12 — admin test-query endpoint.
 
-Source: docs/superpowers/test-plans/04-rag-read-path-tests.md §12
+Source: superpowers/test-plans/04-rag-read-path-tests.md §12
 
 `TestClient` drives the FastAPI app the same way `tests/test_documents_api.py`
 does, built from `create_app(deps, pipeline_deps)` with every dependency a

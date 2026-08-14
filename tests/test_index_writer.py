@@ -1,6 +1,6 @@
 """Test-plan §8 — index writer.
 
-Source: docs/superpowers/test-plans/03-rag-write-path-tests.md §8
+Source: superpowers/test-plans/03-rag-write-path-tests.md §8
 
 `IndexWriter` keeps three stores in step: the `chunks` row, the `chunk_fts`
 row (populated automatically by the triggers in `app/db.py` — never

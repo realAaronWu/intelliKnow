@@ -9,6 +9,8 @@ uploads/
 .run/
 backups/
 dist/
+.tmp/
+*.bak
 
 # Python
 __pycache__/
@@ -28,6 +30,10 @@ models/
 .DS_Store
 .idea/
 .vscode/
+~$*.docx
+
+# Local copy of the interview brief; intentionally not part of the repository
+/AD, Tech Lead, AKP.docx
 
 # Worktrees
 .worktrees/

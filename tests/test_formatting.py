@@ -1,6 +1,6 @@
 """Test-plan §8 — channel formatting.
 
-Source: docs/superpowers/test-plans/04-rag-read-path-tests.md §8
+Source: superpowers/test-plans/04-rag-read-path-tests.md §8
 
 The prompt-side length instruction in `app/rag/generate.py` is best-effort
 — nothing stops a model from ignoring it. `format_for_channel` is the

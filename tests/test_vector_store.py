@@ -1,6 +1,6 @@
 """Test-plan §6 — FAISS vector store.
 
-Source: docs/superpowers/test-plans/03-rag-write-path-tests.md §6
+Source: superpowers/test-plans/03-rag-write-path-tests.md §6
 
 `VectorStore` wraps one `IndexFlatIP` (exact inner-product search) per intent
 space, keyed by `chunk.id`. Vectors used here are already unit-normalized by

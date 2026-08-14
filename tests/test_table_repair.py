@@ -1,6 +1,6 @@
 """Tests for ragged table detection and AI restructuring.
 
-Covers docs/superpowers/test-plans/03-rag-write-path-tests.md §4.
+Covers superpowers/test-plans/03-rag-write-path-tests.md §4.
 """
 
 from __future__ import annotations

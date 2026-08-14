@@ -1,6 +1,6 @@
 """Test-plan §3 — reciprocal rank fusion.
 
-Source: docs/superpowers/test-plans/04-rag-read-path-tests.md §3
+Source: superpowers/test-plans/04-rag-read-path-tests.md §3
 
 `fuse` combines a dense hit list and a keyword hit list into one ranked
 list using RRF: `score = sum(1 / (k + rank))` over whichever lists a chunk

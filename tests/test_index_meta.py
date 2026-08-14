@@ -1,6 +1,6 @@
 """Test-plan §7 — index metadata and embedding immutability.
 
-Source: docs/superpowers/test-plans/03-rag-write-path-tests.md §7
+Source: superpowers/test-plans/03-rag-write-path-tests.md §7
 
 `assert_compatible` is the loud-failure seam for `spec: configuration` §
 "Immutable embedding settings once documents exist": vectors from different

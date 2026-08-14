@@ -1,6 +1,6 @@
 """Tests for the DOCX loader.
 
-Covers docs/superpowers/test-plans/03-rag-write-path-tests.md §3 (DOCX rows).
+Covers superpowers/test-plans/03-rag-write-path-tests.md §3 (DOCX rows).
 """
 
 from __future__ import annotations

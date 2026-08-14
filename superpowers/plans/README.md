@@ -1,4 +1,4 @@
-# IntelliKnow KMS — implementation plans
+# IntelliKnow KMS - implementation plans
 
 Source of truth for *what* to build: `openspec/changes/add-intelliknow-kms/` (proposal, design, 9 capability specs, traceability, test-plan). These plans are *how* to build it.
 
@@ -14,21 +14,26 @@ Source of truth for *what* to build: `openspec/changes/add-intelliknow-kms/` (pr
 
 ## Plan status
 
-Plans 01-04 are implemented on `main`. The remaining path starts with a small stabilization gate, then implements channels and the console. OpenSpec is the behavioral source of truth; these files describe implementation order and boundaries.
+Plans 00-06 are implemented on `main`. WhatsApp support and later demo
+hardening were added through follow-up OpenSpec updates and focused commits.
+OpenSpec is the behavioral source of truth; these files preserve the planned
+implementation order and boundaries.
 
 | # | Plan | Produces | Depends on |
 |---|---|---|---|
 | 01 | [Foundation](2026-08-08-01-foundation.md) | Config service, provider layer, test doubles, DB schema | Complete |
-| 02 | [Test corpus](2026-08-08-02-test-corpus.md) | Synthetic fixtures; labelled question set remains | Partial |
+| 02 | [Test corpus](2026-08-08-02-test-corpus.md) | Synthetic fixtures and test inputs | Complete |
 | 03 | [RAG write path](2026-08-08-03-rag-write-path.md) | Loaders, chunker, vector store, ingestion | Complete |
 | 04 | [RAG read path](2026-08-08-04-rag-read-path.md) | Retrieval, generation, citations, classification | Complete |
-| 00 | [Stabilization](2026-08-11-00-stabilization.md) | Auth, concurrency, config boundaries, recovery, grounding fixes | Next |
-| 05 | [Channels](2026-08-08-05-channels.md) | Encrypted credentials, Telegram polling, Teams, delivery logging | 00 |
-| 06 | [Admin and delivery](2026-08-08-06-admin-console.md) | One admin router, five views, feedback, acceptance evidence | 05 |
+| 00 | [Stabilization](2026-08-11-00-stabilization.md) | Auth, concurrency, config boundaries, recovery, grounding fixes | Complete |
+| 05 | [Channels](2026-08-08-05-channels.md) | Encrypted credentials, Telegram polling, Teams, delivery logging | Complete |
+| 06 | [Admin and delivery](2026-08-08-06-admin-console.md) | One admin router, five views, feedback, acceptance evidence | Complete |
 
 ## Execution order
 
-`00 -> 05 -> 06 -> final delivery`. The labelled question set from plan 02 must be completed before model-quality accuracy is reported, but it does not block deterministic channel or console development.
+The executed order was `00 -> 05 -> 06 -> final delivery`. A larger independent
+labelled set remains necessary before claiming production classifier accuracy;
+the included corpus supports deterministic acceptance and bounded calibration.
 
 ## The loop, per increment
 

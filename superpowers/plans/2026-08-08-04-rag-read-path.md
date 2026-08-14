@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax.
 >
-> **No implementation code in this plan.** Test expectations: `docs/superpowers/test-plans/04-rag-read-path-tests.md`.
+> **No implementation code in this plan.** Test expectations: `superpowers/test-plans/04-rag-read-path-tests.md`.
 
 **Goal:** Answer a question — classify it into an intent space, retrieve from that space with hybrid search, and generate a grounded, cited answer or an honest no-match.
 

@@ -1,6 +1,6 @@
 """Test-plan §5 — context builder.
 
-Source: docs/superpowers/test-plans/04-rag-read-path-tests.md §5
+Source: superpowers/test-plans/04-rag-read-path-tests.md §5
 
 `build_context` is the seam between retrieval (which scores chunks) and
 generation (which reads them as a document). It deliberately throws away

@@ -1,6 +1,6 @@
 """Test-plan §9 — intent classification.
 
-Source: docs/superpowers/test-plans/04-rag-read-path-tests.md §9
+Source: superpowers/test-plans/04-rag-read-path-tests.md §9
 
 `classify()` takes an already-built `CentroidIndex` and an already-embedded
 `query_vector` — never touches an `EmbeddingProvider` itself — and an

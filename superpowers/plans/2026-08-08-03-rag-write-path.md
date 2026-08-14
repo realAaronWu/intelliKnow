@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax.
 >
-> **No implementation code in this plan.** Test expectations: `docs/superpowers/test-plans/03-rag-write-path-tests.md`.
+> **No implementation code in this plan.** Test expectations: `superpowers/test-plans/03-rag-write-path-tests.md`.
 
 **Goal:** Turn an uploaded document into retrievable knowledge — loaded into structured blocks, chunked with structural awareness, embedded, and written to both a dense vector index and a keyword index.
 
@@ -28,7 +28,7 @@
 
 **Interfaces:** Produces `build_all(out_dir: Path) -> list[Path]` and module-level constants (`SALARY_BANDS`, `ANNUAL_LEAVE_DAYS`, …) that tests import rather than duplicating.
 
-**Behaviour:** see `docs/superpowers/plans/2026-08-08-02-test-corpus.md` § Task 1 for the nine-document table and the byte-reproducibility requirement. Test expectations are in `docs/superpowers/test-plans/02-test-corpus-tests.md` § 1.
+**Behaviour:** see `superpowers/plans/2026-08-08-02-test-corpus.md` § Task 1 for the nine-document table and the byte-reproducibility requirement. Test expectations are in `superpowers/test-plans/02-test-corpus-tests.md` § 1.
 
 **Byte reproducibility is a hard requirement** — fix document metadata and suppress embedded timestamps. Without it `duplicate.pdf` stops matching `salary_bands.pdf` and the duplicate-rejection test in Task 9 becomes flaky.
 

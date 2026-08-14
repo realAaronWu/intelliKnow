@@ -59,7 +59,7 @@ pid_is_running() {
   if [[ "$(uname -s)" == "Darwin" ]]; then
     case "$marker" in
       "uvicorn app.main:app") pid="$(launch_job_pid "$API_JOB")" ;;
-      "streamlit run streamlit_app.py") pid="$(launch_job_pid "$UI_JOB")" ;;
+      "streamlit run app/ui/streamlit_app.py") pid="$(launch_job_pid "$UI_JOB")" ;;
     esac
     if [[ "$pid" =~ ^[0-9]+$ ]]; then
       echo "$pid" >"$pid_file"
@@ -306,7 +306,7 @@ PY
 wait_for_ui() {
   local attempt
   for attempt in $(seq 1 30); do
-    if ! pid_is_running "$UI_PID_FILE" "streamlit run streamlit_app.py"; then
+    if ! pid_is_running "$UI_PID_FILE" "streamlit run app/ui/streamlit_app.py"; then
       tail -n 30 "$UI_LOG" >&2 || true
       return 1
     fi
@@ -326,7 +326,7 @@ start() {
   check_https
 
   if pid_is_running "$API_PID_FILE" "uvicorn app.main:app" \
-    || pid_is_running "$UI_PID_FILE" "streamlit run streamlit_app.py"; then
+    || pid_is_running "$UI_PID_FILE" "streamlit run app/ui/streamlit_app.py"; then
     die "IntelliKnow is already managed by this script. Run: ./scripts/laptop-demo status"
   fi
   rm -f "$API_PID_FILE" "$UI_PID_FILE"
@@ -375,14 +375,14 @@ EOF
   if [[ "$HTTPS_ENABLED" == "1" ]]; then
     start_managed_process "$UI_JOB" "$UI_PID_FILE" "$UI_LOG" \
       env INTELLIKNOW_API_URL="$API_URL" INTELLIKNOW_CA_CERT="$CA_CERT" \
-      "$ROOT_DIR/.venv/bin/python" -m streamlit run streamlit_app.py \
+      "$ROOT_DIR/.venv/bin/python" -m streamlit run app/ui/streamlit_app.py \
       --server.address "$UI_HOST" --server.port "$UI_PORT" \
       --server.headless true --browser.gatherUsageStats false \
       --server.sslCertFile "$TLS_CERT" --server.sslKeyFile "$TLS_KEY"
   else
     start_managed_process "$UI_JOB" "$UI_PID_FILE" "$UI_LOG" \
       env INTELLIKNOW_API_URL="$API_URL" INTELLIKNOW_CA_CERT="$CA_CERT" \
-      "$ROOT_DIR/.venv/bin/python" -m streamlit run streamlit_app.py \
+      "$ROOT_DIR/.venv/bin/python" -m streamlit run app/ui/streamlit_app.py \
       --server.address "$UI_HOST" --server.port "$UI_PORT" \
       --server.headless true --browser.gatherUsageStats false
   fi
@@ -444,7 +444,7 @@ stop_one() {
 }
 
 stop() {
-  stop_one "Admin console" "$UI_PID_FILE" "streamlit run streamlit_app.py" "$UI_JOB"
+  stop_one "Admin console" "$UI_PID_FILE" "streamlit run app/ui/streamlit_app.py" "$UI_JOB"
   stop_one "API" "$API_PID_FILE" "uvicorn app.main:app" "$API_JOB"
 }
 
@@ -456,7 +456,7 @@ status() {
     say "API:     stopped"
     failed=1
   fi
-  if pid_is_running "$UI_PID_FILE" "streamlit run streamlit_app.py"; then
+  if pid_is_running "$UI_PID_FILE" "streamlit run app/ui/streamlit_app.py"; then
     say "Console: running (PID $(cat "$UI_PID_FILE"), $UI_URL)"
   else
     say "Console: stopped"

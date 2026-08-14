@@ -1,6 +1,6 @@
 """Tests for document lifecycle operations: re-parse, delete, full re-index.
 
-Covers docs/superpowers/test-plans/03-rag-write-path-tests.md §11.1-11.4.
+Covers superpowers/test-plans/03-rag-write-path-tests.md §11.1-11.4.
 Reassign (§ "Reassign does not re-embed" / "moves vectors") is exercised
 directly against `IndexWriter.reassign_document` in tests/test_index_writer.py
 (§8.4-8.5); `app/ingest/lifecycle.py`'s `reassign_document` is a thin,

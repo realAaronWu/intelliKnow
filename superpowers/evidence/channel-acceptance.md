@@ -1,8 +1,8 @@
 # Channel Acceptance
 
-This is the release check for the three-second response requirement and the two
-real chat frontends. Unit tests and the Bot Framework Emulator remain useful,
-but neither substitutes for user-visible delivery through the real platform.
+This is the release check for the three-second response requirement and real
+chat frontends. Unit tests and the Bot Framework Emulator remain useful, but
+neither substitutes for user-visible delivery through a real platform.
 
 ## What the timer includes
 
@@ -18,21 +18,25 @@ documents so generation and citation work are included.
 
 ## Run the gate
 
-First send the bot one message in the real Telegram or Teams app. This records
-the destination used by the authenticated admin test. Then run:
+First send the bot one message in the real Telegram, WhatsApp, or Teams app.
+This records the destination used by the authenticated admin test. Then run:
 
 ```bash
 .venv/bin/python scripts/check_channel_acceptance.py \
   --channel telegram \
-  --questions-file docs/acceptance-questions.txt \
+  --questions-file superpowers/evidence/acceptance-questions.txt \
   --runs 4
 
 .venv/bin/python scripts/check_channel_acceptance.py \
-  --channel teams \
+  --channel whatsapp \
   --require-real-platform \
-  --questions-file docs/acceptance-questions.txt \
+  --questions-file superpowers/evidence/acceptance-questions.txt \
   --runs 4
 ```
+
+Use `--channel teams` instead of `whatsapp` when a Microsoft 365 tenant is
+available. Telegram plus WhatsApp satisfy the MVP's two-real-frontend gate;
+Teams Emulator remains a local adapter demonstration only.
 
 The runner prints every trial plus p50, p95, and maximum latency. It exits with
 status 1 if delivery fails, p95 exceeds three seconds, or a Teams run uses a

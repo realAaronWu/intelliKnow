@@ -1,6 +1,6 @@
 """Tests for upload validation.
 
-Covers docs/superpowers/test-plans/03-rag-write-path-tests.md §9.1-9.4.
+Covers superpowers/test-plans/03-rag-write-path-tests.md §9.1-9.4.
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """Tests for the PDF loader.
 
-Covers docs/superpowers/test-plans/03-rag-write-path-tests.md §2.
+Covers superpowers/test-plans/03-rag-write-path-tests.md §2.
 """
 
 from __future__ import annotations

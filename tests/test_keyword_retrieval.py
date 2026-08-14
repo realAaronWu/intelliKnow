@@ -1,6 +1,6 @@
 """Test-plan §2 — keyword retrieval.
 
-Source: docs/superpowers/test-plans/04-rag-read-path-tests.md §2
+Source: superpowers/test-plans/04-rag-read-path-tests.md §2
 
 `keyword_search` runs BM25 over `chunk_fts`, filtered to the supplied
 spaces by SQL join. Rare exact tokens — a band label, a form number, a

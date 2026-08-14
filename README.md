@@ -64,7 +64,7 @@ Streamlit is an API client and does not access storage directly.
 
 For complete macOS, Linux, and Windows instructions, including HTTPS, proxy,
 model-download, reset, and troubleshooting steps, read the
-[Cross-Platform Deployment Guide](docs/CROSS-PLATFORM-DEPLOYMENT.md).
+[Deployment Guide](docs/DEPLOYMENT.md).
 
 Prerequisites: Git, `uv`, an x64 or supported ARM computer, network access to
 the configured AI provider, and about 1 GB of free disk space.
@@ -98,7 +98,7 @@ the configured AI provider, and about 1 GB of free disk space.
 5. Start the console in a second terminal:
 
    ```bash
-   uv run streamlit run streamlit_app.py --server.address 127.0.0.1 --server.port 8501
+   uv run streamlit run app/ui/streamlit_app.py --server.address 127.0.0.1 --server.port 8501
    ```
 
 Open [http://127.0.0.1:8501](http://127.0.0.1:8501), keep the default API
@@ -132,9 +132,9 @@ INTELLIKNOW_HTTPS=0 ./scripts/laptop-demo start
 
 Credentials are entered on **Frontend Integration**, encrypted before they are
 stored in SQLite, and returned to the UI only in masked form. Employee and
-administrator steps are in [Frontend Integrations](docs/FRONTEND-INTEGRATIONS.md),
-with a tenant-free Teams walkthrough in
-[Local Microsoft Teams Demo](docs/LOCAL-TEAMS-DEMO.md).
+administrator steps are in the consolidated
+[Messaging Integrations Guide](docs/INTEGRATIONS.md), including a tenant-free
+Teams Emulator walkthrough.
 
 ## Configuration and Data
 
@@ -174,16 +174,16 @@ The default pytest configuration excludes tests marked `slow`; run them with
 - Local files are not replicated or backed up automatically.
 - The three-second channel target includes provider and public-network time.
 
-See [Requirements Audit](docs/REQUIREMENTS-AUDIT.md) for the implementation
+See [Requirements Audit](openspec/changes/add-intelliknow-kms/requirements-audit.md) for the implementation
 assessment and production gaps.
 
 ## Documentation
 
-- [Cross-platform deployment guide](docs/CROSS-PLATFORM-DEPLOYMENT.md)
-- [Laptop demo deployment runbook](docs/LAPTOP-DEMO-DEPLOYMENT.md)
-- [Telegram, WhatsApp, and Teams guide](docs/FRONTEND-INTEGRATIONS.md)
-- [Local Teams demo](docs/LOCAL-TEAMS-DEMO.md)
-- [Channel acceptance evidence](docs/CHANNEL-ACCEPTANCE.md)
+- [Deployment guide](docs/DEPLOYMENT.md)
+- [Telegram, WhatsApp, and Teams guide](docs/INTEGRATIONS.md)
 - [AI usage reflection](docs/AI_USAGE.md)
-- [Requirements audit and hiring review](docs/REQUIREMENTS-AUDIT.md)
-- [OpenSpec design](openspec/changes/add-intelliknow-kms/design.md)
+
+Engineering artifacts are intentionally separate from user documentation:
+
+- [OpenSpec design and requirements traceability](openspec/changes/add-intelliknow-kms/)
+- [Superpowers plans, test plans, and acceptance evidence](superpowers/)

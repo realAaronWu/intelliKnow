@@ -1,6 +1,6 @@
 """Test-plan §4 — relevance gate.
 
-Source: docs/superpowers/test-plans/04-rag-read-path-tests.md §4
+Source: superpowers/test-plans/04-rag-read-path-tests.md §4
 
 `passes_gate` is what stops a confident misroute from producing a fluent,
 wrong, fully-cited answer: it compares the best *normalized reranker

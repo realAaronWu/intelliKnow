@@ -1,6 +1,6 @@
 """Test-plan §10 — routing decision.
 
-Source: docs/superpowers/test-plans/04-rag-read-path-tests.md §10
+Source: superpowers/test-plans/04-rag-read-path-tests.md §10
 
 `decide_spaces` takes a `Classification` directly — constructed by hand in
 every test here, not produced by `classify()` — so each row of the

@@ -1,6 +1,6 @@
 """Test-plan §3a — cross-encoder reranker.
 
-Source: docs/superpowers/test-plans/04-rag-read-path-tests.md §3a
+Source: superpowers/test-plans/04-rag-read-path-tests.md §3a
 
 Every test here injects a fake scorer (`_FakeCrossEncoder`), so nothing
 downloads or runs the real `cross-encoder/ms-marco-MiniLM-L-6-v2` model.

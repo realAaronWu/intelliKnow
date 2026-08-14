@@ -129,7 +129,7 @@ operation without a restart. Missing, invalid, or mismatched keys fail closed.
 This intentionally small design protects a copied database and avoids
 platform-specific or cloud infrastructure in the seven-day MVP. It does not
 claim protection after full host compromise or theft of both SQLite and `.env`.
-See `docs/PRODUCTION-INTEGRATION-CREDENTIALS.md`.
+See `credential-storage.md`.
 
 ### 9. Use one admin router and one Streamlit application
 

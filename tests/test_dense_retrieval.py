@@ -1,6 +1,6 @@
 """Test-plan §1 — dense retrieval.
 
-Source: docs/superpowers/test-plans/04-rag-read-path-tests.md §1
+Source: superpowers/test-plans/04-rag-read-path-tests.md §1
 
 `dense_search` fans a single query vector out across the supplied spaces'
 `VectorStore` indexes and merges the results into one score-ranked list.

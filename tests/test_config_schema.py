@@ -1,6 +1,6 @@
 """Test-plan §1 — Configuration schema.
 
-Source: docs/superpowers/test-plans/01-foundation-tests.md §1
+Source: superpowers/test-plans/01-foundation-tests.md §1
 
 NOTE on 1.1 relevance_floor: the test-plan table lists 0.35 for
 `rag.relevance_floor`, but the authoritative config content in

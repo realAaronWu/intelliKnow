@@ -1,6 +1,6 @@
 """Test-plan §7 — citation verification.
 
-Source: docs/superpowers/test-plans/04-rag-read-path-tests.md §7
+Source: superpowers/test-plans/04-rag-read-path-tests.md §7
 
 `verify_citations` is the last line of defense against the main failure
 mode of a small RAG system: a fluent answer confidently citing a document

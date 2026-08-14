@@ -2,7 +2,7 @@
 
 > Historical review of the original plan. Resolved decisions and current
 > implementation status live in `design.md`, `traceability.md`, and
-> `docs/REQUIREMENTS-AUDIT.md`; this file is retained as review history.
+> `requirements-audit.md`; this file is retained as review history.
 
 Reviewed against `AD, Tech Lead, AKP.docx` and the seven-day, solo-developer MVP constraint.
 

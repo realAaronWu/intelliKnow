@@ -1,6 +1,6 @@
 """Tests for the XLSX loader.
 
-Covers docs/superpowers/test-plans/03-rag-write-path-tests.md §3 (XLSX rows).
+Covers superpowers/test-plans/03-rag-write-path-tests.md §3 (XLSX rows).
 """
 
 from __future__ import annotations

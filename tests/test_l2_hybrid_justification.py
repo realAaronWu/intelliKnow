@@ -1,6 +1,6 @@
 """Test-plan §L2.2 — hybrid justification (`slow`).
 
-Source: docs/superpowers/test-plans/04-rag-read-path-tests.md L2.2
+Source: superpowers/test-plans/04-rag-read-path-tests.md L2.2
 
 "L2.2 is designed to be able to falsify its own feature. If it passes in
 both configurations on the real corpus, BM25 is contributing nothing and

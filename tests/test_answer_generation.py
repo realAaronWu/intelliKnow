@@ -1,6 +1,6 @@
 """Test-plan §6 — answer generation.
 
-Source: docs/superpowers/test-plans/04-rag-read-path-tests.md §6
+Source: superpowers/test-plans/04-rag-read-path-tests.md §6
 
 `generate_answer` makes exactly one call to the injected `LLMProvider` and
 asserts on what it *recorded* — `FakeLLMProvider.calls` — rather than on

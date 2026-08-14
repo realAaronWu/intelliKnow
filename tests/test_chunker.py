@@ -1,6 +1,6 @@
 """Tests for the structural chunker.
 
-Covers docs/superpowers/test-plans/03-rag-write-path-tests.md §5.
+Covers superpowers/test-plans/03-rag-write-path-tests.md §5.
 """
 
 from __future__ import annotations
