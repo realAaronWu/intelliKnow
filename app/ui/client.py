@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,13 +20,15 @@ class APIClient:
     timeout: float = 30.0
 
     def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
-        headers = {"Authorization": f"Bearer {self.token}"}
+        headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
+        verify: bool | str = os.getenv("INTELLIKNOW_CA_CERT") or True
         try:
             with httpx.Client(
                 base_url=self.base_url.rstrip("/"),
                 headers=headers,
                 timeout=self.timeout,
                 trust_env=False,
+                verify=verify,
             ) as client:
                 response = client.request(method, path, **kwargs)
         except httpx.RequestError as exc:

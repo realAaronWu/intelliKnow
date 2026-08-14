@@ -12,6 +12,10 @@ if [[ "${1:-}" != "start" && -f "$SETTINGS_FILE" ]]; then
       INTELLIKNOW_API_PORT) [[ -n "${INTELLIKNOW_API_PORT+x}" ]] || INTELLIKNOW_API_PORT="$value" ;;
       INTELLIKNOW_UI_HOST) [[ -n "${INTELLIKNOW_UI_HOST+x}" ]] || INTELLIKNOW_UI_HOST="$value" ;;
       INTELLIKNOW_UI_PORT) [[ -n "${INTELLIKNOW_UI_PORT+x}" ]] || INTELLIKNOW_UI_PORT="$value" ;;
+      INTELLIKNOW_HTTPS) [[ -n "${INTELLIKNOW_HTTPS+x}" ]] || INTELLIKNOW_HTTPS="$value" ;;
+      INTELLIKNOW_TLS_CERT) [[ -n "${INTELLIKNOW_TLS_CERT+x}" ]] || INTELLIKNOW_TLS_CERT="$value" ;;
+      INTELLIKNOW_TLS_KEY) [[ -n "${INTELLIKNOW_TLS_KEY+x}" ]] || INTELLIKNOW_TLS_KEY="$value" ;;
+      INTELLIKNOW_CA_CERT) [[ -n "${INTELLIKNOW_CA_CERT+x}" ]] || INTELLIKNOW_CA_CERT="$value" ;;
     esac
   done <"$SETTINGS_FILE"
 fi
@@ -19,12 +23,23 @@ API_HOST="${INTELLIKNOW_API_HOST:-127.0.0.1}"
 API_PORT="${INTELLIKNOW_API_PORT:-8000}"
 UI_HOST="${INTELLIKNOW_UI_HOST:-127.0.0.1}"
 UI_PORT="${INTELLIKNOW_UI_PORT:-8501}"
-API_URL="http://${API_HOST}:${API_PORT}"
-UI_URL="http://${UI_HOST}:${UI_PORT}"
+HTTPS_ENABLED="${INTELLIKNOW_HTTPS:-1}"
+TLS_DIR="$RUN_DIR/tls"
+TLS_CERT="${INTELLIKNOW_TLS_CERT:-$TLS_DIR/localhost.pem}"
+TLS_KEY="${INTELLIKNOW_TLS_KEY:-$TLS_DIR/localhost-key.pem}"
+CA_CERT="${INTELLIKNOW_CA_CERT:-$TLS_DIR/rootCA.pem}"
+SCHEME="https"
+if [[ "$HTTPS_ENABLED" == "0" ]]; then
+  SCHEME="http"
+fi
+API_URL="${SCHEME}://${API_HOST}:${API_PORT}"
+UI_URL="${SCHEME}://${UI_HOST}:${UI_PORT}"
 API_PID_FILE="$RUN_DIR/api.pid"
 UI_PID_FILE="$RUN_DIR/ui.pid"
 API_LOG="$RUN_DIR/api.log"
 UI_LOG="$RUN_DIR/ui.log"
+API_JOB="com.intelliknow.api"
+UI_JOB="com.intelliknow.ui"
 
 cd "$ROOT_DIR"
 
@@ -40,12 +55,50 @@ die() {
 pid_is_running() {
   local pid_file="$1"
   local marker="$2"
-  [[ -f "$pid_file" ]] || return 1
-  local pid
-  pid="$(cat "$pid_file")"
+  local pid=""
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    case "$marker" in
+      "uvicorn app.main:app") pid="$(launch_job_pid "$API_JOB")" ;;
+      "streamlit run streamlit_app.py") pid="$(launch_job_pid "$UI_JOB")" ;;
+    esac
+    if [[ "$pid" =~ ^[0-9]+$ ]]; then
+      echo "$pid" >"$pid_file"
+    fi
+  fi
+  if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+    [[ -f "$pid_file" ]] || return 1
+    pid="$(cat "$pid_file")"
+  fi
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   kill -0 "$pid" 2>/dev/null || return 1
   ps -p "$pid" -o command= 2>/dev/null | grep -F -- "$marker" >/dev/null
+}
+
+launch_job_pid() {
+  launchctl list 2>/dev/null | awk -v label="$1" '$3 == label {print $1; exit}'
+}
+
+start_managed_process() {
+  local label="$1"
+  local pid_file="$2"
+  local log_file="$3"
+  shift 3
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    launchctl remove "$label" 2>/dev/null || true
+    launchctl submit -l "$label" -o "$log_file" -e "$log_file" -- \
+      /bin/zsh -c 'cd "$1" && shift && exec "$@"' intelliknow "$ROOT_DIR" "$@"
+    local pid=""
+    for _ in $(seq 1 30); do
+      pid="$(launch_job_pid "$label")"
+      [[ "$pid" =~ ^[0-9]+$ ]] && break
+      sleep 0.1
+    done
+    [[ "$pid" =~ ^[0-9]+$ ]] || die "Failed to start macOS service $label"
+    echo "$pid" >"$pid_file"
+  else
+    nohup "$@" >"$log_file" 2>&1 &
+    echo "$!" >"$pid_file"
+  fi
 }
 
 port_is_listening() {
@@ -72,11 +125,10 @@ from pathlib import Path
 import os
 
 import yaml
-from cryptography.fernet import Fernet
 from dotenv import dotenv_values
 
 values = {**dotenv_values(".env"), **os.environ}
-required = ["ADMIN_PASSWORD", "CREDENTIAL_ENCRYPTION_KEY"]
+required = ["ADMIN_PASSWORD"]
 provider = (yaml.safe_load(Path("config.yaml").read_text()) or {}).get("llm", {}).get("provider")
 if provider == "anthropic":
     required.append("ANTHROPIC_API_KEY")
@@ -86,11 +138,6 @@ elif provider == "openai":
 missing = [name for name in required if not values.get(name)]
 if missing:
     raise SystemExit("Missing required .env value(s): " + ", ".join(missing))
-
-try:
-    Fernet(str(values["CREDENTIAL_ENCRYPTION_KEY"]).encode("ascii"))
-except Exception as exc:
-    raise SystemExit("CREDENTIAL_ENCRYPTION_KEY is not a valid Fernet key") from exc
 
 if len(str(values["ADMIN_PASSWORD"])) < 12:
     raise SystemExit("ADMIN_PASSWORD must contain at least 12 characters for the demo")
@@ -106,6 +153,48 @@ validate_bindings() {
     || die "INTELLIKNOW_API_PORT must be between 1 and 65535."
   [[ "$UI_PORT" =~ ^[0-9]+$ ]] && ((UI_PORT >= 1 && UI_PORT <= 65535)) \
     || die "INTELLIKNOW_UI_PORT must be between 1 and 65535."
+  [[ "$HTTPS_ENABLED" == "0" || "$HTTPS_ENABLED" == "1" ]] \
+    || die "INTELLIKNOW_HTTPS must be 0 or 1."
+}
+
+setup_https() {
+  command -v mkcert >/dev/null 2>&1 \
+    || die "mkcert is missing. Install it with: brew install mkcert"
+  mkdir -p "$TLS_DIR"
+  local caroot
+  caroot="$(mkcert -CAROOT)"
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    say "Trusting the local development CA in the macOS login keychain..."
+    security add-trusted-cert -d -r trustRoot \
+      -k "$HOME/Library/Keychains/login.keychain-db" "$caroot/rootCA.pem"
+  else
+    say "Installing the local development CA..."
+    mkcert -install
+  fi
+  say "Generating a certificate for localhost and loopback addresses..."
+  mkcert -cert-file "$TLS_CERT" -key-file "$TLS_KEY" \
+    localhost 127.0.0.1 ::1
+  cp "$caroot/rootCA.pem" "$CA_CERT"
+  chmod 600 "$TLS_KEY"
+  say "HTTPS certificate ready: $TLS_CERT"
+}
+
+check_https() {
+  [[ "$HTTPS_ENABLED" == "1" ]] || return 0
+  if [[ ! -r "$TLS_CERT" || ! -r "$TLS_KEY" || ! -r "$CA_CERT" ]]; then
+    say "Local HTTPS files are missing; creating them now..."
+    setup_https
+  fi
+  "$ROOT_DIR/.venv/bin/python" - "$TLS_CERT" "$TLS_KEY" "$CA_CERT" <<'PY'
+import ssl
+import sys
+
+cert, key, ca = sys.argv[1:]
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.load_cert_chain(cert, key)
+ssl.create_default_context(cafile=ca)
+print("Local HTTPS certificate and CA: OK")
+PY
 }
 
 install() {
@@ -147,7 +236,7 @@ wait_for_api() {
       tail -n 30 "$API_LOG" >&2 || true
       return 1
     fi
-    if "$ROOT_DIR/.venv/bin/python" - "$API_URL" >/dev/null 2>&1 <<'PY'
+    if "$ROOT_DIR/.venv/bin/python" - "$API_URL" "$CA_CERT" "$HTTPS_ENABLED" >/dev/null 2>&1 <<'PY'
 import os
 import sys
 
@@ -159,6 +248,7 @@ response = httpx.get(
     sys.argv[1] + "/admin/session",
     headers={"Authorization": "Bearer " + str(values["ADMIN_PASSWORD"])},
     timeout=2,
+    verify=sys.argv[2] if sys.argv[3] == "1" else True,
 )
 raise SystemExit(0 if response.status_code == 200 else 1)
 PY
@@ -191,6 +281,7 @@ start() {
   check_files_and_secrets
   validate_bindings
   mkdir -p "$RUN_DIR"
+  check_https
 
   if pid_is_running "$API_PID_FILE" "uvicorn app.main:app" \
     || pid_is_running "$UI_PID_FILE" "streamlit run streamlit_app.py"; then
@@ -213,12 +304,23 @@ INTELLIKNOW_API_HOST=$API_HOST
 INTELLIKNOW_API_PORT=$API_PORT
 INTELLIKNOW_UI_HOST=$UI_HOST
 INTELLIKNOW_UI_PORT=$UI_PORT
+INTELLIKNOW_HTTPS=$HTTPS_ENABLED
+INTELLIKNOW_TLS_CERT=$TLS_CERT
+INTELLIKNOW_TLS_KEY=$TLS_KEY
+INTELLIKNOW_CA_CERT=$CA_CERT
 EOF
 
   say "Starting the API on $API_URL..."
-  nohup "$ROOT_DIR/.venv/bin/python" -m uvicorn app.main:app \
-    --host "$API_HOST" --port "$API_PORT" >"$API_LOG" 2>&1 &
-  echo "$!" >"$API_PID_FILE"
+  local api_tls_args=()
+  local ui_tls_args=()
+  if [[ "$HTTPS_ENABLED" == "1" ]]; then
+    api_tls_args=(--ssl-certfile "$TLS_CERT" --ssl-keyfile "$TLS_KEY")
+    ui_tls_args=(--server.sslCertFile "$TLS_CERT" --server.sslKeyFile "$TLS_KEY")
+  fi
+  start_managed_process "$API_JOB" "$API_PID_FILE" "$API_LOG" \
+    env INTELLIKNOW_CA_CERT="$CA_CERT" \
+    "$ROOT_DIR/.venv/bin/python" -m uvicorn app.main:app \
+    --host "$API_HOST" --port "$API_PORT" "${api_tls_args[@]}"
   trap 'stop >/dev/null 2>&1 || true' ERR INT TERM
   if ! wait_for_api; then
     stop
@@ -226,11 +328,12 @@ EOF
   fi
 
   say "Starting the admin console on $UI_URL..."
-  nohup env INTELLIKNOW_API_URL="$API_URL" \
+  start_managed_process "$UI_JOB" "$UI_PID_FILE" "$UI_LOG" \
+    env INTELLIKNOW_API_URL="$API_URL" INTELLIKNOW_CA_CERT="$CA_CERT" \
     "$ROOT_DIR/.venv/bin/python" -m streamlit run streamlit_app.py \
     --server.address "$UI_HOST" --server.port "$UI_PORT" \
-    --server.headless true --browser.gatherUsageStats false >"$UI_LOG" 2>&1 &
-  echo "$!" >"$UI_PID_FILE"
+    --server.headless true --browser.gatherUsageStats false \
+    "${ui_tls_args[@]}"
   if ! wait_for_ui; then
     stop
     die "Console did not become ready within 30 seconds. See $UI_LOG"
@@ -248,6 +351,13 @@ stop_one() {
   local name="$1"
   local pid_file="$2"
   local marker="$3"
+  local label="$4"
+  if [[ "$(uname -s)" == "Darwin" ]] && launchctl list "$label" >/dev/null 2>&1; then
+    launchctl remove "$label"
+    rm -f "$pid_file"
+    say "$name stopped."
+    return
+  fi
   if ! pid_is_running "$pid_file" "$marker"; then
     rm -f "$pid_file"
     say "$name is not running."
@@ -271,8 +381,8 @@ stop_one() {
 }
 
 stop() {
-  stop_one "Admin console" "$UI_PID_FILE" "streamlit run streamlit_app.py"
-  stop_one "API" "$API_PID_FILE" "uvicorn app.main:app"
+  stop_one "Admin console" "$UI_PID_FILE" "streamlit run streamlit_app.py" "$UI_JOB"
+  stop_one "API" "$API_PID_FILE" "uvicorn app.main:app" "$API_JOB"
 }
 
 status() {
@@ -305,6 +415,7 @@ Usage: ./scripts/laptop-demo COMMAND
 
 Commands:
   install     Install exact dependencies from uv.lock
+  setup-https Install a trusted local CA and generate the laptop certificate
   download-models  Download and validate the embedding and reranker models
   preflight   Validate secrets, the real LLM, and both cached local models
   start       Preflight, then start the API and admin console
@@ -315,11 +426,14 @@ Commands:
 
 Optional port overrides:
   INTELLIKNOW_API_PORT=8012 INTELLIKNOW_UI_PORT=8502 ./scripts/laptop-demo start
+
+HTTPS is enabled by default. Set INTELLIKNOW_HTTPS=0 only for an HTTP-only demo.
 EOF
 }
 
 case "${1:-}" in
   install) install ;;
+  setup-https) setup_https ;;
   download-models) download_models ;;
   preflight) preflight ;;
   start) start ;;
