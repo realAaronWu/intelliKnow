@@ -50,7 +50,7 @@ Volume: ~9.4k lines `app/`, 933 lines Streamlit, ~13.9k lines tests, ~5.7k lines
 | Analytics & history + export | timestamp, channel, question, intent, confidence, status, latency, per-stage timings, citations, error; intent distribution, most-accessed documents, CSV export. |
 | 5 admin screens | Dashboard, Frontend Integration, Knowledge Base, Intent Configuration, Analytics. |
 | §2 visual guidance | 12px radius, 16px padding, neutral base, blue/green/purple accents, document table with the exact columns the brief lists, drag-drop upload with progress, search + format/intent/date filters, intent card view with doc count + accuracy, classification log, integration cards with `****last4` masking and a Test button. Close to a literal implementation of §2. |
-| AI Usage Reflection | `docs/AI_USAGE.md` covers key moments, iteration speed, and adjustments to AI output. |
+| AI Usage Reflection | `AI_USAGE.md` covers key moments, iteration speed, and adjustments to AI output. |
 
 Three things deserve specific credit:
 

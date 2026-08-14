@@ -189,6 +189,9 @@ does not delete documents, configuration, credentials, or analytics.
 The Bash helper adds model preflight, process management, health checks, logs,
 and optional trusted localhost HTTPS:
 
+The complete command reference, including maintenance and diagnostic tools, is
+in the [Script Usage Manual](../scripts/README.md).
+
 ```bash
 INTELLIKNOW_HTTPS=0 ./scripts/laptop-demo install
 INTELLIKNOW_HTTPS=0 ./scripts/laptop-demo download-models
@@ -198,6 +201,18 @@ INTELLIKNOW_HTTPS=0 ./scripts/laptop-demo start
 ./scripts/laptop-demo stop
 ```
 
+If either default port is already used by another application, keep the same
+workflow and override only the conflicting port:
+
+```bash
+INTELLIKNOW_HTTPS=0 INTELLIKNOW_API_PORT=8012 INTELLIKNOW_UI_PORT=8502 \
+  ./scripts/laptop-demo start
+```
+
+Use the API and console addresses printed by the script. The selected values
+are saved in `.run/laptop-demo/runtime.env`, so later `status`, `logs`, `stop`,
+and `restart` commands reuse them without repeating the overrides.
+
 Use the native two-terminal commands in section 6 on Windows. The application
 itself is portable; this convenience script requires Bash and uses Unix process
 management.
@@ -206,11 +221,14 @@ For trusted local HTTPS on macOS, run:
 
 ```bash
 ./scripts/laptop-demo setup-https
-./scripts/laptop-demo restart
+INTELLIKNOW_HTTPS=1 ./scripts/laptop-demo restart
 ```
 
 Then open `https://127.0.0.1:8501`. Certificate installation modifies the
-local trust store and may require an operating-system password.
+local trust store and may require an operating-system password. The explicit
+HTTPS override replaces any HTTP setting remembered from an earlier start.
+Fully quit and reopen browsers that were running while the local CA was
+installed so they reload the macOS trust store.
 
 ## 8. Verify a clean deployment
 

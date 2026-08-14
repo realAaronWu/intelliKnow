@@ -251,4 +251,4 @@ Recorded so the gaps are deliberate and visible.
 
 ## 11. Tooling
 
-`pytest` with `pytest-asyncio`; markers `slow` (real embeddings) and `live` (real LLM, L3). Default run excludes both. Fixtures in `tests/conftest.py` provide a temp-directory app instance with fakes wired in, so no test touches developer state. FastAPI endpoints tested through `TestClient`. L3 emits a markdown report (`tests/reports/`) with the confusion matrix and gate results — that report is the evidence for the brief's "classification accuracy" deliverable, and doubles as source material for `docs/AI_USAGE.md`.
+`pytest` with `pytest-asyncio`; markers `slow` (real embeddings) and `live` (real LLM, L3). Default run excludes both. Fixtures in `tests/conftest.py` provide a temp-directory app instance with fakes wired in, so no test touches developer state. FastAPI endpoints tested through `TestClient`. L3 emits a markdown report (`tests/reports/`) with the confusion matrix and gate results — that report is the evidence for the brief's "classification accuracy" deliverable, and doubles as source material for `AI_USAGE.md`.

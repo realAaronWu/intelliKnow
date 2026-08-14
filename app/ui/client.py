@@ -1,16 +1,23 @@
-"""HTTP-only client for the IntelliKnow administration API."""
+"""HTTP/HTTPS client for the IntelliKnow administration API."""
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
 
 class APIError(RuntimeError):
     pass
+
+
+def _verify_for_url(base_url: str) -> bool | str:
+    if urlparse(base_url).scheme.lower() != "https":
+        return True
+    return os.getenv("INTELLIKNOW_CA_CERT") or True
 
 
 @dataclass(frozen=True)
@@ -21,14 +28,13 @@ class APIClient:
 
     def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
-        verify: bool | str = os.getenv("INTELLIKNOW_CA_CERT") or True
         try:
             with httpx.Client(
                 base_url=self.base_url.rstrip("/"),
                 headers=headers,
                 timeout=self.timeout,
                 trust_env=False,
-                verify=verify,
+                verify=_verify_for_url(self.base_url),
             ) as client:
                 response = client.request(method, path, **kwargs)
         except httpx.RequestError as exc:

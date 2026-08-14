@@ -181,7 +181,8 @@ assessment and production gaps.
 
 - [Deployment guide](docs/DEPLOYMENT.md)
 - [Telegram, WhatsApp, and Teams guide](docs/INTEGRATIONS.md)
-- [AI usage reflection](docs/AI_USAGE.md)
+- [AI usage reflection](AI_USAGE.md)
+- [Script usage manual](scripts/README.md)
 
 Engineering artifacts are intentionally separate from user documentation:
 

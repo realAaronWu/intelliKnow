@@ -170,7 +170,7 @@ accountability for scope, architecture, security, evidence, and user outcomes.
 
 ## Evidence
 
-- [OpenSpec design and capability specs](../openspec/changes/add-intelliknow-kms/)
-- [Superpowers plans and independent test protocol](../superpowers/)
-- [Requirements audit](../openspec/changes/add-intelliknow-kms/requirements-audit.md)
-- [Deployment guide](DEPLOYMENT.md)
+- [OpenSpec design and capability specs](openspec/changes/add-intelliknow-kms/)
+- [Superpowers plans and independent test protocol](superpowers/)
+- [Requirements audit](openspec/changes/add-intelliknow-kms/requirements-audit.md)
+- [Deployment guide](docs/DEPLOYMENT.md)

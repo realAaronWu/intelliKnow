@@ -37,7 +37,7 @@ Use one authenticated FastAPI `/admin` router backed by existing services, and o
 
 - Label the routing/retrieval question set before reporting accuracy.
 - Run automated tests, strict OpenSpec validation, real-channel checks, full workflow checks, and measured latency.
-- Finish README setup/configuration/integration/troubleshooting and `docs/AI_USAGE.md`.
+- Finish README setup/configuration/integration/troubleshooting and `AI_USAGE.md`.
 
 ## Exit Gate
 

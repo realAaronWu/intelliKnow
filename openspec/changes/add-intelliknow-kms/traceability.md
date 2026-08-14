@@ -34,7 +34,7 @@ Every clause of the source document is listed below with where it is covered. `s
 | Timeline: 7 calendar days | design § Context; tasks.md is ordered as a 7-day plan |
 | Solo work | design § Context |
 | MVP-focused, no over-engineering | design § Goals / Non-Goals; § Security kept minimal |
-| AI guidance — leverage AI for parsing, classification, response generation; document strategic usage | spec: document-ingestion (table restructuring), query-orchestration (classification), knowledge-retrieval (generation); tasks.md — `docs/AI_USAGE.md` |
+| AI guidance — leverage AI for parsing, classification, response generation; document strategic usage | spec: document-ingestion (table restructuring), query-orchestration (classification), knowledge-retrieval (generation); tasks.md — `AI_USAGE.md` |
 
 ## §2 Visual Reference Guidance
 
@@ -98,7 +98,7 @@ Every clause of the source document is listed below with where it is covered. `s
 | Public GitHub repo (code, docs, AI Usage Reflection) | tasks.md — final group |
 | Working demo (deployed/local) with 2 frontend integrations, 2+ sample docs, testable query flow | tasks.md — demo verification; design § Migration Plan |
 | Detailed README (setup, tech stack, integration guide) | tasks.md — README task |
-| AI Usage Reflection: key moments, faster iteration, adjustments to AI output | tasks.md — `docs/AI_USAGE.md` |
+| AI Usage Reflection: key moments, faster iteration, adjustments to AI output | tasks.md — `AI_USAGE.md` |
 | AI scenario 1: PDF tables (HR salary grids) → structured data, searchable | spec: document-ingestion — AI-assisted recovery of poorly extracted tables; design § RAG write path |
 | AI scenario 2: adapt responses to each frontend's format constraints | spec: knowledge-retrieval — Channel-aware answer formatting; design § Decision 8 |
 
