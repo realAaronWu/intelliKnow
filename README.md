@@ -1,158 +1,189 @@
 # IntelliKnow KMS
 
-IntelliKnow is a lightweight, document-backed knowledge management system. It ingests PDF, DOCX, and XLSX files, classifies questions into intent spaces, retrieves relevant passages with FAISS and SQLite FTS5, and returns concise answers with verified citations through Telegram, WhatsApp, Microsoft Teams, or the admin console.
+IntelliKnow is an AI-assisted knowledge management system for small internal
+knowledge bases. Administrators upload PDF, DOCX, and XLSX documents; the
+system classifies them into intent spaces, retrieves relevant passages, and
+returns concise, source-backed answers through the admin console, Telegram,
+WhatsApp, or Microsoft Teams.
 
-## What is included
+This repository is an MVP designed to run on one laptop with one API worker.
+It favors a reproducible local deployment and observable behavior over cloud
+infrastructure.
 
-- Five-view Streamlit admin console: Dashboard, Frontend Integration, Knowledge Base, Intent Configuration, and Analytics
-- PDF, DOCX, and XLSX ingestion with background processing, re-parsing, reassignment, and deletion
-- HR, Legal, Finance, Operations, and protected General intent spaces, plus custom intent CRUD
-- Hybrid semantic and keyword retrieval, reranking, relevance gating, and verified citations
-- Telegram long polling, a WhatsApp Cloud API webhook, and a Microsoft Teams Bot Framework endpoint
-- Encrypted integration credentials, connection status, retained errors, and delivery tests
-- Query history, reviewed classification accuracy, KB usage analytics, and CSV export
+## Capabilities
+
+- Five-view admin console: Dashboard, Frontend Integration, Knowledge Base,
+  Intent Configuration, and Analytics
+- Background document parsing, AI classification, chunking, indexing,
+  reassignment, reprocessing, and deletion
+- Hybrid FAISS and SQLite FTS5 retrieval, reciprocal-rank fusion, local
+  cross-encoder reranking, relevance gating, and verified citations
+- Configurable intent confidence with General fallback and admin-reviewed
+  expected-intent examples
+- Telegram long polling, WhatsApp Cloud API webhooks, and Microsoft Teams Bot
+  Framework messages
+- Encrypted channel credentials, eight-hour admin sessions, query history,
+  latency metrics, usage analytics, and CSV export
 
 ## Architecture
 
 ```text
-Telegram polling ----\
-                       ChannelHandler -> QueryPipeline -> cited response
-Teams /api/messages --/                       |
+ Telegram polling -----\
+ WhatsApp webhook ------> ChannelHandler -> QueryPipeline -> cited answer
+ Teams /api/messages ---/                       |
                                                 +-> SQLite query history
 
-Streamlit console -> authenticated FastAPI admin API
-                         |-> config and intents
-                         |-> ingestion and FAISS/FTS5
-                         |-> integrations
-                         +-> analytics and review feedback
+ Streamlit console -> authenticated FastAPI admin API
+                          |-> document ingestion and lifecycle
+                          |-> intent configuration and review labels
+                          |-> FAISS vectors + SQLite FTS5
+                          |-> encrypted integration credentials
+                          +-> analytics and delivery tests
 ```
 
-The application is intentionally one process and one API worker. Streamlit is an HTTP client only; it never opens the database, edits configuration, or accesses FAISS directly.
+The API is the only owner of SQLite, FAISS, ingestion, and channel state.
+Streamlit is an API client and does not access storage directly.
 
-## Setup
+## Tech Stack
 
-Requirements: Python 3.12 and `uv`.
+| Layer | Technology |
+|---|---|
+| Admin UI | Streamlit |
+| API and validation | FastAPI, Uvicorn, Pydantic |
+| LLM providers | Anthropic by default; OpenAI and local OpenAI-compatible providers supported |
+| Embeddings | Sentence Transformers, `all-MiniLM-L6-v2` |
+| Retrieval | FAISS, SQLite FTS5, reciprocal-rank fusion |
+| Reranking | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
+| Persistence | SQLite, local FAISS indexes, managed upload directory |
+| Document parsing | pypdf/pdfplumber, python-docx, openpyxl |
+| Messaging | Telegram Bot API, WhatsApp Cloud API, Microsoft Bot Framework |
+| Credential storage | Fernet-encrypted channel secrets; key supplied separately through `.env` |
+| Packaging and tests | `uv`, locked dependencies, pytest, OpenSpec |
+
+## Quick Start
+
+For complete macOS, Linux, and Windows instructions, including HTTPS, proxy,
+model-download, reset, and troubleshooting steps, read the
+[Cross-Platform Deployment Guide](docs/CROSS-PLATFORM-DEPLOYMENT.md).
+
+Prerequisites: Git, `uv`, an x64 or supported ARM computer, network access to
+the configured AI provider, and about 1 GB of free disk space.
+
+1. Clone the repository and install the locked Python 3.12 environment:
+
+   ```bash
+   git clone https://github.com/realAaronWu/intelliKnow.git
+   cd intelliKnow
+   uv python install 3.12
+   uv sync --frozen --python 3.12
+   ```
+
+2. Copy `.env.example` to `.env` (`Copy-Item .env.example .env` in Windows
+   PowerShell), then set `ANTHROPIC_API_KEY`, `ADMIN_PASSWORD`, and a generated
+   `CREDENTIAL_ENCRYPTION_KEY`. The deployment guide provides exact commands.
+
+3. Download and validate the two local retrieval models:
+
+   ```bash
+   uv run python scripts/download_models.py
+   uv run python scripts/smoke_provider.py
+   ```
+
+4. Start the API in one terminal:
+
+   ```bash
+   uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+   ```
+
+5. Start the console in a second terminal:
+
+   ```bash
+   uv run streamlit run streamlit_app.py --server.address 127.0.0.1 --server.port 8501
+   ```
+
+Open [http://127.0.0.1:8501](http://127.0.0.1:8501), keep the default API
+address `http://127.0.0.1:8000`, and sign in with `ADMIN_PASSWORD`.
+
+The Bash lifecycle helper remains available for macOS and Linux:
 
 ```bash
-git clone https://github.com/realAaronWu/intelliKnow.git
-cd intelliKnow
-uv sync
-cp .env.example .env
+INTELLIKNOW_HTTPS=0 ./scripts/laptop-demo install
+INTELLIKNOW_HTTPS=0 ./scripts/laptop-demo download-models
+INTELLIKNOW_HTTPS=0 ./scripts/laptop-demo start
 ```
 
-Set at least these values in `.env`:
+## First Demo
 
-```dotenv
-ANTHROPIC_API_KEY=your-anthropic-api-key
-HF_TOKEN=your-hugging-face-read-token
-HF_HUB_DISABLE_XET=1
-ADMIN_PASSWORD=choose-a-private-password
-# Leave this empty; laptop-demo generates it once on first start.
-CREDENTIAL_ENCRYPTION_KEY=
-```
+1. Open **Knowledge Base** and upload documents from `demo-docs`.
+2. Wait until every selected file is marked **Processed**.
+3. Open **Dashboard** and ask a question answered explicitly in one document.
+4. Confirm the intent, confidence, answer, source citation, and latency.
+5. Open **Intent Configuration**, select a query, and record its expected
+   intent to demonstrate admin-guided classifier improvement.
+6. Open **Analytics** to inspect history, source usage, and CSV export.
 
-Each laptop creates its own `.env` from the credential-free template; never copy
-or commit another operator's file. `HF_TOKEN` is recommended for authenticated,
-higher-limit model downloads. The complete credential source and database
-transfer guidance is in [Configure secrets on each laptop](docs/LAPTOP-DEMO-DEPLOYMENT.md#4-configure-secrets-on-each-laptop).
+## Frontend Integrations
 
-Telegram, WhatsApp, and Teams credentials entered in the console are encrypted in SQLite
-with `CREDENTIAL_ENCRYPTION_KEY`. The key stays in the private `.env`, separate
-from the database, and the API returns only masked values.
+| Channel | MVP transport | What the administrator needs |
+|---|---|---|
+| Telegram | Long polling | Bot token from BotFather; no public endpoint required |
+| WhatsApp | Cloud API webhook | Meta app, business sender, access token, phone-number ID, app secret, verify token, and public HTTPS tunnel |
+| Teams | Bot Framework endpoint | Bot Framework Emulator for a local demo, or Azure Bot registration and Microsoft 365 approval for real Teams |
 
-The shipped demo uses Anthropic's `claude-haiku-4-5` for classification and generation, plus local sentence-transformer embeddings. A zero-cost Ollama-compatible path remains available by changing the provider, model names, and `llm.base_url` in `config.yaml`.
+Credentials are entered on **Frontend Integration**, encrypted before they are
+stored in SQLite, and returned to the UI only in masked form. Employee and
+administrator steps are in [Frontend Integrations](docs/FRONTEND-INTEGRATIONS.md),
+with a tenant-free Teams walkthrough in
+[Local Microsoft Teams Demo](docs/LOCAL-TEAMS-DEMO.md).
 
-## Run
+## Configuration and Data
 
-For the recommended laptop deployment, follow [IntelliKnow Laptop Demo Deployment](docs/LAPTOP-DEMO-DEPLOYMENT.md). Its lifecycle helper validates the provider, downloads and exercises both local models, and starts both components with health checks:
+- `config.yaml`: providers, models, thresholds, intents, channel modes, and
+  storage paths
+- `.env`: private provider keys, admin password, encryption key, and optional
+  proxy settings; never commit this file
+- `data/intelliknow.db`: documents, chunks, analytics, labels, and encrypted
+  integration credentials
+- `data/faiss`: vector indexes
+- `data/uploads`: managed copies of uploaded documents
 
-```bash
-./scripts/laptop-demo install
-./scripts/laptop-demo download-models
-./scripts/laptop-demo start
-```
+Keep `CREDENTIAL_ENCRYPTION_KEY` separate from database backups. Losing it
+makes saved channel credentials unreadable; changing it requires clearing and
+re-entering those credentials.
 
-`start` never downloads models. Run `download-models` once and wait for both
-models to report ready; interrupted transfers can be resumed with the same
-command.
-
-The equivalent HTTPS commands are below after running
-`./scripts/laptop-demo setup-https`.
-
-Start the API with one worker:
-
-```bash
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 \
-  --ssl-certfile .run/laptop-demo/tls/localhost.pem \
-  --ssl-keyfile .run/laptop-demo/tls/localhost-key.pem
-```
-
-In a second terminal, start the console:
-
-```bash
-INTELLIKNOW_API_URL=https://127.0.0.1:8000 \
-INTELLIKNOW_CA_CERT=.run/laptop-demo/tls/rootCA.pem \
-uv run streamlit run streamlit_app.py \
-  --server.sslCertFile .run/laptop-demo/tls/localhost.pem \
-  --server.sslKeyFile .run/laptop-demo/tls/localhost-key.pem
-```
-
-Open [https://127.0.0.1:8501](https://127.0.0.1:8501) and sign in with
-`ADMIN_PASSWORD`. The console keeps that browser signed in for eight hours across
-page refreshes. **Sign out** clears the session immediately; the password itself
-is never stored in the browser cookie.
-
-## First demo
-
-1. Open **Knowledge Base** and upload at least two PDF, DOCX, or XLSX documents.
-2. Wait until their status is **Processed**.
-3. Open **Dashboard** and ask a question answered by one of those documents.
-4. Confirm the result shows an intent, confidence, response, source, and latency.
-5. Open **Intent Configuration** to record expected intents and tune keywords or thresholds. Reviewed labels inform subsequent routing.
-6. Open **Analytics** to inspect history, document usage, and CSV export.
-
-Employee and administrator setup is covered in [Frontend Integrations](docs/FRONTEND-INTEGRATIONS.md). A tenant-free adapter demonstration is covered in [Local Microsoft Teams Demo](docs/LOCAL-TEAMS-DEMO.md).
-
-Measured channel acceptance and the generated Teams app package are covered in
-[Channel Acceptance](docs/CHANNEL-ACCEPTANCE.md).
-
-## Tests
+## Verification
 
 ```bash
 uv run pytest
-uv run openspec validate add-intelliknow-kms --strict
+openspec validate add-intelliknow-kms --strict --no-interactive
 ```
 
-Slow tests that load real models are intentionally excluded by the default pytest configuration. Run them explicitly with `uv run pytest -m slow`.
+The default pytest configuration excludes tests marked `slow`; run them with
+`uv run pytest -m slow` when local model execution is required.
 
-## Operational notes
+## MVP Operating Boundaries
 
-- Run exactly one API worker; the FAISS synchronization lock is process-local.
-- Keep `.env` private. The API and console never return plaintext channel credentials.
-- Telegram currently has no user allowlist. Use only documents suitable for anyone who can discover the bot.
-- Real Teams delivery requires an Azure Bot registration, public HTTPS endpoint, and Microsoft 365 tenant approval.
-- Reviewed classification accuracy is shown only after an admin labels query outcomes. Confidence is reported separately and is not called accuracy.
-- The three-second channel target is measured through outbound delivery and depends on the selected provider and model.
+- Run exactly one API worker. The SQLite/FAISS coordination lock is
+  process-local.
+- The admin password is an MVP bootstrap credential, not production identity
+  management or role-based access control.
+- Telegram has no user allowlist. Use non-sensitive material unless an access
+  control layer is added.
+- WhatsApp and real Teams require externally managed platform accounts and a
+  public HTTPS callback.
+- Local files are not replicated or backed up automatically.
+- The three-second channel target includes provider and public-network time.
 
-## Troubleshooting
-
-**API will not start:** ensure `ADMIN_PASSWORD`, `CREDENTIAL_ENCRYPTION_KEY`, and the configured AI-provider key are set. `./scripts/laptop-demo start` creates a valid credential key when the `.env` value is empty.
-
-**Upgrade reports legacy Keychain credentials:** run `.venv/bin/python scripts/migrate_keychain_credentials.py` once, then start again. The script commits Fernet ciphertext before removing the old Keychain item.
-
-**Console cannot connect:** confirm the API is running and `INTELLIKNOW_API_URL` points to the correct port.
-
-**Local model errors:** start Ollama or the configured OpenAI-compatible server, and confirm `llm.base_url` and model names.
-
-**Document remains Error:** open its detail in Knowledge Base, read the parsing error, then re-parse or replace the source file.
-
-**Telegram, WhatsApp, or Teams is Disconnected:** open Frontend Integration to inspect recent errors and run the destination-aware test.
+See [Requirements Audit](docs/REQUIREMENTS-AUDIT.md) for the implementation
+assessment and production gaps.
 
 ## Documentation
 
+- [Cross-platform deployment guide](docs/CROSS-PLATFORM-DEPLOYMENT.md)
 - [Laptop demo deployment runbook](docs/LAPTOP-DEMO-DEPLOYMENT.md)
-- [AI usage reflection](docs/AI_USAGE.md)
-- [Requirements audit and hiring review](docs/REQUIREMENTS-AUDIT.md)
 - [Telegram, WhatsApp, and Teams guide](docs/FRONTEND-INTEGRATIONS.md)
 - [Local Teams demo](docs/LOCAL-TEAMS-DEMO.md)
+- [Channel acceptance evidence](docs/CHANNEL-ACCEPTANCE.md)
+- [AI usage reflection](docs/AI_USAGE.md)
+- [Requirements audit and hiring review](docs/REQUIREMENTS-AUDIT.md)
 - [OpenSpec design](openspec/changes/add-intelliknow-kms/design.md)
