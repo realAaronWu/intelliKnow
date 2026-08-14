@@ -27,6 +27,11 @@ from app.rag.context import ContextBundle
 
 Markup = Literal["markdownv2", "html", "plain"]
 
+# KB answers should be quick to scan in chat. This also bounds generation
+# latency: the provider cannot spend seconds producing an essay for a simple
+# employee question.
+_ANSWER_MAX_TOKENS = 256
+
 
 @dataclass(frozen=True)
 class ChannelProfile:
@@ -49,6 +54,8 @@ don't have that information") instead of guessing.
 - Cite every factual claim using the bracketed marker(s) exactly as they \
 appear in the context, e.g. [1] or [1][2]. Never cite a marker that is \
 not present in the context.
+- Answer directly in at most 80 words unless the user explicitly asks for \
+more detail. Include only information needed to answer the question.
 
 Delivery channel: {channel_name}. Your reply is limited to {max_chars} \
 characters and will be rendered as {markup}{lists_note}. Write to fit \
@@ -91,5 +98,9 @@ def generate_answer(
     """
     system = _build_system_prompt(channel)
     user = _build_user_prompt(question, bundle)
-    result = llm.complete(system=system, user=user)
+    result = llm.complete(
+        system=system,
+        user=user,
+        max_tokens=_ANSWER_MAX_TOKENS,
+    )
     return result.text

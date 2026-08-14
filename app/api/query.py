@@ -80,6 +80,7 @@ def build_query_router(
             "sources": [_source_dict(c) for c in outcome.citations],
             "retrieved_doc_ids": outcome.retrieved_doc_ids,
             "latency_ms": outcome.latency_ms,
+            "timings_ms": outcome.timings_ms or {},
             "error": outcome.error,
         }
 

@@ -36,6 +36,16 @@ def _json_list(value: str | None) -> list[Any]:
     return parsed if isinstance(parsed, list) else []
 
 
+def _json_dict(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 class AdminService:
     def __init__(
         self,
@@ -261,6 +271,7 @@ class AdminService:
                 retrieved_documents=self._retrieved_documents(row),
                 reasoning=row["reasoning"],
                 error=row["error"],
+                timings_ms=_json_dict(row["timings_json"]),
             )
         return item
 
@@ -414,6 +425,7 @@ class AdminService:
             "id", "created_at", "channel", "question", "intent_slug", "confidence",
             "classified_by", "fallback_used", "status", "answer", "citations_json",
             "retrieved_doc_ids_json", "latency_ms", "error", "expected_intent_slug",
+            "timings_json",
             "reviewed_correct", "reviewed_at",
         ]
         output = io.StringIO(newline="")

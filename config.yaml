@@ -20,9 +20,9 @@ rag:
   keyword_top_n: 20
   rrf_k: 60
   rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2
-  rerank_candidates: 20
-  final_top_k: 5
-  max_context_chars: 6000
+  rerank_candidates: 6
+  final_top_k: 2
+  max_context_chars: 2500
   relevance_floor: 0.45
 orchestrator:
   confidence_threshold: 0.7

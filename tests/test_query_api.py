@@ -220,6 +220,8 @@ def test_12_1_returns_intent_confidence_answer_sources_latency(
     ]
     assert isinstance(body["latency_ms"], int)
     assert body["latency_ms"] >= 0
+    assert body["timings_ms"]["pipeline_total"] == body["latency_ms"]
+    assert "generation" in body["timings_ms"]
 
 
 # --- 12.2 No channel involved ------------------------------------------------------

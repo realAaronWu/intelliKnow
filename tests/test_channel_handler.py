@@ -97,6 +97,9 @@ def test_handler_orders_typing_pipeline_send_then_log_and_does_not_reformat(tmp_
     assert result.delivered is True
     assert result.status == "success"
     assert logger.records[0][2] >= 0
+    timings = logger.records[0][1].timings_ms
+    assert timings is not None
+    assert set(("channel_typing", "channel_pipeline_wait", "channel_delivery", "end_to_end")) <= set(timings)
 
 
 def test_typing_failure_is_retained_but_does_not_block_delivery(tmp_path):

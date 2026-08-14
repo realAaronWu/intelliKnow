@@ -94,6 +94,7 @@ query_log = Table(
     Column("retrieved_doc_ids_json", Text, nullable=True),
     Column("retrieved_documents_json", Text, nullable=True),
     Column("latency_ms", Integer, nullable=True),
+    Column("timings_json", Text, nullable=True),
     Column("error", Text, nullable=True),
     Column("expected_intent_slug", String, nullable=True),
     Column("reviewed_correct", Boolean, nullable=True),
@@ -240,6 +241,7 @@ def init_schema(engine: Engine) -> None:
             ("expected_intent_slug", "TEXT"),
             ("reviewed_correct", "BOOLEAN"),
             ("reviewed_at", "TEXT"),
+            ("timings_json", "TEXT"),
         ):
             if name not in query_columns:
                 conn.execute(text(f"ALTER TABLE query_log ADD COLUMN {name} {sql_type}"))

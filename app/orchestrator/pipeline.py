@@ -31,8 +31,9 @@ Two properties matter more than the rest of the plumbing:
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Callable, Literal
+from typing import Callable, Iterator, Literal
 
 from sqlalchemy.engine import Engine
 
@@ -111,6 +112,7 @@ class QueryOutcome:
     retrieved_doc_ids: list[int]
     latency_ms: int
     error: str | None
+    timings_ms: dict[str, int] | None = None
 
 
 @dataclass
@@ -143,10 +145,31 @@ class QueryTrace:
     fused: list[FusedHit] | None = None
     ranked: list[RankedHit] | None = None
     gate_passed: bool | None = None
+    timings_ms: dict[str, int] | None = None
 
 
 def _elapsed_ms(start: float) -> int:
     return int(round((time.perf_counter() - start) * 1000))
+
+
+@contextmanager
+def _measure(timings: dict[str, int], stage: str) -> Iterator[None]:
+    """Record a stage even when that stage raises a handled exception."""
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        timings[stage] = _elapsed_ms(start)
+
+
+def _finish_timings(
+    timings: dict[str, int], start: float, trace: QueryTrace | None
+) -> tuple[int, dict[str, int]]:
+    total = _elapsed_ms(start)
+    completed = {**timings, "pipeline_total": total}
+    if trace is not None:
+        trace.timings_ms = completed
+    return total, completed
 
 
 def _domain_label(spaces: list[str], cfg: AppConfig) -> str:
@@ -172,6 +195,7 @@ def _no_match_outcome(
     classification_failed: bool,
     fallback_used: bool,
     latency_ms: int,
+    timings_ms: dict[str, int],
 ) -> QueryOutcome:
     domain = _domain_label(routing_spaces, cfg)
     message = (
@@ -192,6 +216,7 @@ def _no_match_outcome(
         retrieved_doc_ids=[],
         latency_ms=latency_ms,
         error=None,
+        timings_ms=timings_ms,
     )
 
 
@@ -201,7 +226,10 @@ def _classification_failure_outcome(
     error: Exception,
     *,
     classified_by: Literal["centroid", "llm"] | None = None,
+    timings: dict[str, int] | None = None,
+    trace: QueryTrace | None = None,
 ) -> QueryOutcome:
+    latency_ms, completed_timings = _finish_timings(timings or {}, start, trace)
     return QueryOutcome(
         answer=format_for_channel(_CLASSIFICATION_FAILURE_MESSAGE, [], channel),
         citations=[],
@@ -213,8 +241,9 @@ def _classification_failure_outcome(
         fallback_used=False,
         status="failed",
         retrieved_doc_ids=[],
-        latency_ms=_elapsed_ms(start),
+        latency_ms=latency_ms,
         error=str(error),
+        timings_ms=completed_timings,
     )
 
 
@@ -246,6 +275,7 @@ def answer_question(
     before `trace` existed.
     """
     start = time.perf_counter()
+    timings: dict[str, int] = {}
     # Read once, here, so every stage below sees one consistent config for
     # this query — never a mix of old and new values from a config that
     # changed mid-request. See `PipelineDeps.get_cfg`'s docstring for why
@@ -253,9 +283,12 @@ def answer_question(
     cfg = deps.get_cfg()
 
     try:
-        [query_vector] = deps.embedding.embed([question])
+        with _measure(timings, "embedding"):
+            [query_vector] = deps.embedding.embed([question])
     except ProviderError as exc:
-        return _classification_failure_outcome(channel, start, exc)
+        return _classification_failure_outcome(
+            channel, start, exc, timings=timings, trace=trace
+        )
     if trace is not None:
         trace.query_vector = query_vector
 
@@ -275,41 +308,63 @@ def answer_question(
         # current `centroid_temperature` too. See `CentroidIndex.sync`'s
         # docstring.
         try:
-            deps.centroids.sync(cfg)
-            classification = classify(
-                question, query_vector, cfg, deps.centroids, deps.classify_llm
-            )
-            routing = decide_spaces(classification, cfg)
+            with _measure(timings, "classification_routing"):
+                deps.centroids.sync(cfg)
+                classification = classify(
+                    question, query_vector, cfg, deps.centroids, deps.classify_llm
+                )
+                routing = decide_spaces(classification, cfg)
         except (ClassificationError, ProviderError) as exc:
             return _classification_failure_outcome(
-                channel, start, exc, classified_by="llm"
+                channel,
+                start,
+                exc,
+                classified_by="llm",
+                timings=timings,
+                trace=trace,
             )
+    if force_space is not None:
+        timings["classification_routing"] = 0
     if trace is not None:
         trace.classification = classification
         trace.routing = routing
 
-    dense_hits = dense_search(query_vector, routing.spaces, cfg.rag.vector_top_n, deps.vector_store)
-    keyword_hits = keyword_search(question, routing.spaces, cfg.rag.keyword_top_n, deps.engine)
+    with _measure(timings, "dense_retrieval"):
+        dense_hits = dense_search(
+            query_vector, routing.spaces, cfg.rag.vector_top_n, deps.vector_store
+        )
+    with _measure(timings, "keyword_retrieval"):
+        keyword_hits = keyword_search(
+            question, routing.spaces, cfg.rag.keyword_top_n, deps.engine
+        )
     if trace is not None:
         trace.dense_hits = dense_hits
         trace.keyword_hits = keyword_hits
-    fused = fuse(dense_hits, keyword_hits, cfg.rag.rrf_k, cfg.rag.rerank_candidates)
+    with _measure(timings, "fusion"):
+        fused = fuse(
+            dense_hits, keyword_hits, cfg.rag.rrf_k, cfg.rag.rerank_candidates
+        )
     if trace is not None:
         trace.fused = fused
     # No-op when the configured model name hasn't changed — otherwise
     # discards the cached cross-encoder client so the next call below
     # loads the newly configured model instead of silently continuing to
     # score with the old one. See `Reranker.set_model`'s docstring.
-    deps.reranker.set_model(cfg.rag.rerank_model)
-    ranked = deps.reranker.rerank(question, fused, deps.engine, cfg.rag.final_top_k)
+    with _measure(timings, "reranking"):
+        deps.reranker.set_model(cfg.rag.rerank_model)
+        ranked = deps.reranker.rerank(
+            question, fused, deps.engine, cfg.rag.final_top_k
+        )
     if trace is not None:
         trace.ranked = ranked
 
-    gate_passed = passes_gate(ranked, cfg.rag.relevance_floor)
+    with _measure(timings, "relevance_gate"):
+        gate_passed = passes_gate(ranked, cfg.rag.relevance_floor)
     if trace is not None:
         trace.gate_passed = gate_passed
 
     if not gate_passed:
+        latency_ms, completed_timings = _finish_timings(timings, start, trace)
         return _no_match_outcome(
             routing.spaces,
             cfg,
@@ -320,14 +375,20 @@ def answer_question(
             reasoning=classification.reasoning,
             classification_failed=classification.failed,
             fallback_used=routing.fallback_used,
-            latency_ms=_elapsed_ms(start),
+            latency_ms=latency_ms,
+            timings_ms=completed_timings,
         )
 
-    bundle = build_context(ranked, deps.engine, cfg.rag)
+    with _measure(timings, "context_assembly"):
+        bundle = build_context(ranked, deps.engine, cfg.rag)
 
     try:
-        raw_answer = generate_answer(question, bundle, channel, deps.generate_llm)
+        with _measure(timings, "generation"):
+            raw_answer = generate_answer(
+                question, bundle, channel, deps.generate_llm
+            )
     except ProviderError as exc:
+        latency_ms, completed_timings = _finish_timings(timings, start, trace)
         return QueryOutcome(
             answer=format_for_channel(_FAILURE_MESSAGE, [], channel),
             citations=[],
@@ -339,12 +400,15 @@ def answer_question(
             fallback_used=routing.fallback_used,
             status="failed",
             retrieved_doc_ids=[],
-            latency_ms=_elapsed_ms(start),
+            latency_ms=latency_ms,
             error=str(exc),
+            timings_ms=completed_timings,
         )
 
-    cleaned_answer, citations = verify_citations(raw_answer, bundle)
+    with _measure(timings, "citation_formatting"):
+        cleaned_answer, citations = verify_citations(raw_answer, bundle)
     if not citations:
+        latency_ms, completed_timings = _finish_timings(timings, start, trace)
         return _no_match_outcome(
             routing.spaces,
             cfg,
@@ -355,10 +419,15 @@ def answer_question(
             reasoning=classification.reasoning,
             classification_failed=classification.failed,
             fallback_used=routing.fallback_used,
-            latency_ms=_elapsed_ms(start),
+            latency_ms=latency_ms,
+            timings_ms=completed_timings,
         )
-    formatted_answer = format_for_channel(cleaned_answer, citations, channel)
-    retrieved_doc_ids = list(dict.fromkeys(source.document_id for source in bundle.sources))
+    with _measure(timings, "channel_formatting"):
+        formatted_answer = format_for_channel(cleaned_answer, citations, channel)
+        retrieved_doc_ids = list(
+            dict.fromkeys(source.document_id for source in bundle.sources)
+        )
+    latency_ms, completed_timings = _finish_timings(timings, start, trace)
 
     return QueryOutcome(
         answer=formatted_answer,
@@ -371,6 +440,7 @@ def answer_question(
         fallback_used=routing.fallback_used,
         status="success",
         retrieved_doc_ids=retrieved_doc_ids,
-        latency_ms=_elapsed_ms(start),
+        latency_ms=latency_ms,
         error=None,
+        timings_ms=completed_timings,
     )

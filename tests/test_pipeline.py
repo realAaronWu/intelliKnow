@@ -595,6 +595,23 @@ def test_i3_trace_captures_every_pre_generation_stage(
     assert trace.fused is not None and len(trace.fused) == 1
     assert trace.ranked is not None and len(trace.ranked) == 1
     assert trace.gate_passed is True
+    assert trace.timings_ms == outcome.timings_ms
+    assert trace.timings_ms is not None
+    assert set(trace.timings_ms) == {
+        "embedding",
+        "classification_routing",
+        "dense_retrieval",
+        "keyword_retrieval",
+        "fusion",
+        "reranking",
+        "relevance_gate",
+        "context_assembly",
+        "generation",
+        "citation_formatting",
+        "channel_formatting",
+        "pipeline_total",
+    }
+    assert all(duration >= 0 for duration in trace.timings_ms.values())
 
 
 def test_i3_trace_is_populated_even_when_the_gate_rejects(

@@ -156,6 +156,17 @@ def dashboard() -> None:
                 cols[0].metric("Intent", result["intent_slug"].title())
                 cols[1].metric("Confidence", f"{result['confidence']:.0%}")
                 cols[2].metric("Latency", f"{result['latency_ms']} ms")
+                timings = result.get("timings_ms") or {}
+                if timings:
+                    with st.expander("Latency breakdown"):
+                        st.dataframe(
+                            [
+                                {"Stage": stage.replace("_", " ").title(), "Time": f"{duration} ms"}
+                                for stage, duration in timings.items()
+                            ],
+                            hide_index=True,
+                            width="stretch",
+                        )
                 if result["status"] == "success":
                     st.success(result["answer"], icon=":material/check_circle:")
                 elif result["status"] == "no_match":
@@ -719,6 +730,16 @@ def analytics() -> None:
             if detail.get("error"):
                 st.error(detail["error"], icon=":material/error:")
             st.caption(f"{detail['intent_slug']} · {detail['latency_ms']} ms · {detail['status']}")
+            timings = detail.get("timings_ms") or {}
+            if timings:
+                st.dataframe(
+                    [
+                        {"Stage": stage.replace("_", " ").title(), "Time": f"{duration} ms"}
+                        for stage, duration in timings.items()
+                    ],
+                    hide_index=True,
+                    width="stretch",
+                )
             for citation in detail.get("citations", []):
                 st.markdown(
                     f"<div class='ik-source'><strong>{escape(citation.get('document_title', 'Source'))}</strong>"

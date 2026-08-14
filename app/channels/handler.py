@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Literal, Protocol
 
 from app.channels.base import ChannelAdapter, InboundMessage
@@ -83,18 +84,49 @@ class ChannelHandler:
             self._store.mark_connected(message.channel, message.reply_ref)
             return HandlerResult(True, True, "unsupported", self._elapsed(start))
 
-        try:
-            await adapter.typing(message.reply_ref)
-        except Exception as exc:
-            logger.warning("%s typing indicator failed: %s", message.channel, exc)
-            self._store.record_error(message.channel, str(exc))
+        typing_ms = 0
+        pipeline_wait_ms = 0
+
+        async def send_typing() -> Exception | None:
+            nonlocal typing_ms
+            stage_start = self._timer()
+            try:
+                await adapter.typing(message.reply_ref)
+            except Exception as exc:
+                return exc
+            finally:
+                typing_ms = self._elapsed(stage_start)
+            return None
+
+        async def run_pipeline() -> QueryOutcome:
+            nonlocal pipeline_wait_ms
+            stage_start = self._timer()
+            try:
+                return await asyncio.to_thread(
+                    self._pipeline, text, adapter.profile
+                )
+            finally:
+                pipeline_wait_ms = self._elapsed(stage_start)
+
+        # These are independent network/compute operations. Starting both
+        # together removes the Telegram typing round trip from the critical
+        # path while preserving the indicator for slower answers.
+        typing_result, pipeline_result = await asyncio.gather(
+            send_typing(), run_pipeline(), return_exceptions=True
+        )
+        if isinstance(typing_result, Exception):
+            logger.warning(
+                "%s typing indicator failed: %s", message.channel, typing_result
+            )
+            self._store.record_error(message.channel, str(typing_result))
+        if isinstance(pipeline_result, Exception):
+            return await self._pipeline_failure(
+                message, adapter, start, pipeline_result
+            )
+        outcome = pipeline_result
 
         try:
-            outcome = await asyncio.to_thread(self._pipeline, text, adapter.profile)
-        except Exception as exc:
-            return await self._pipeline_failure(message, adapter, start, exc)
-
-        try:
+            delivery_start = self._timer()
             await adapter.send(message.reply_ref, outcome.answer)
         except Exception as exc:
             latency = self._elapsed(start)
@@ -105,6 +137,19 @@ class ChannelHandler:
             )
 
         latency = self._elapsed(start)
+        channel_timings = {
+            **(outcome.timings_ms or {}),
+            "channel_typing": typing_ms,
+            "channel_pipeline_wait": pipeline_wait_ms,
+            "channel_delivery": self._elapsed(delivery_start),
+            "end_to_end": latency,
+        }
+        outcome = replace(outcome, timings_ms=channel_timings)
+        logger.info(
+            "%s query latency %s",
+            message.channel,
+            json.dumps(channel_timings, sort_keys=True),
+        )
         self._store.mark_connected(message.channel, message.reply_ref)
         self._safe_log(message, outcome, latency)
         return HandlerResult(True, True, outcome.status, latency, outcome.error)

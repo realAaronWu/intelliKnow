@@ -93,6 +93,7 @@ class QueryLogger:
                     retrieved_doc_ids_json=json.dumps(retrieved_ids),
                     retrieved_documents_json=json.dumps(retrieved_documents),
                     latency_ms=latency_ms,
+                    timings_json=json.dumps(outcome.timings_ms or {}) if outcome else None,
                     error=error,
                 )
             )

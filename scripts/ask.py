@@ -222,13 +222,13 @@ def main(argv: list[str]) -> int:
             f"No match: nothing in {domain} was relevant enough to answer "
             "this question. No generation call was made."
         )
-        print(f"\nLatency: {outcome.latency_ms} ms")
+        _print_timings(outcome)
         return 0
 
     if outcome.status == "failed":
         print("\n--- Result ---")
         print(f"Generation failed: {outcome.error}")
-        print(f"\nLatency: {outcome.latency_ms} ms")
+        _print_timings(outcome)
         return 1
 
     print("\n--- Answer ---")
@@ -241,8 +241,15 @@ def main(argv: list[str]) -> int:
         ref = f" ({citation.source_ref})" if citation.source_ref else ""
         print(f"  {citation.document_title}{ref}")
 
-    print(f"\nLatency: {outcome.latency_ms} ms")
+    _print_timings(outcome)
     return 0
+
+
+def _print_timings(outcome) -> None:
+    print(f"\nLatency: {outcome.latency_ms} ms")
+    print("--- Stage breakdown ---")
+    for stage, duration_ms in (outcome.timings_ms or {}).items():
+        print(f"  {stage:<24} {duration_ms:>5} ms")
 
 
 if __name__ == "__main__":

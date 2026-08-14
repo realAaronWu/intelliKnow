@@ -97,6 +97,7 @@ def _insert_query(engine, *, doc_id=None, intent="hr", correct=None) -> int:
                 retrieved_doc_ids_json=json.dumps([] if doc_id is None else [doc_id]),
                 retrieved_documents_json=json.dumps(snapshots),
                 latency_ms=220,
+                timings_json=json.dumps({"generation": 180, "pipeline_total": 210}),
                 expected_intent_slug=intent if correct is not None else None,
                 reviewed_correct=correct,
                 reviewed_at="2026-08-11T12:01:00Z" if correct is not None else None,
@@ -112,6 +113,19 @@ def test_admin_router_is_authenticated_and_dashboard_handles_empty_data(tmp_path
     assert response.status_code == 200
     assert response.json()["document_count"] == 0
     assert len(response.json()["integrations"]) == 2
+
+
+def test_query_detail_returns_stage_latency_breakdown(tmp_path):
+    client, _, engine = _setup(tmp_path)
+    query_id = _insert_query(engine)
+
+    response = client.get(f"/admin/queries/{query_id}")
+
+    assert response.status_code == 200
+    assert response.json()["timings_ms"] == {
+        "generation": 180,
+        "pipeline_total": 210,
+    }
 
 
 def test_intent_crud_protects_general_and_space_with_documents(tmp_path):
