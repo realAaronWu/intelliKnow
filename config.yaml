@@ -83,7 +83,7 @@ intent_spaces:
   keywords: []
 - slug: tech
   name: Tech
-  description: NVIDIA tech docs for dynamo and nccl
+  description: NVIDIA tech questions for dynamo and nccl
   keywords:
   - NVIDIA
   - tech

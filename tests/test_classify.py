@@ -167,28 +167,34 @@ def test_9_4_keyword_edit_changes_next_escalation_prompt_no_restart():
 # --- 9.5 Escalation disabled ----------------------------------------------------
 
 
-def test_9_5_escalation_disabled_fails_closed_with_zero_llm_calls():
+def test_9_5_escalation_disabled_returns_low_confidence_for_fallback():
     cfg = _cfg(threshold=0.70, escalate=False)
     centroids, _ = _centroids(cfg)
     llm = FakeLLMProvider()
 
-    with pytest.raises(ClassificationError, match="escalation is disabled"):
-        classify("ambiguous", _AMBIGUOUS_QUERY, cfg, centroids, llm)
+    result = classify("ambiguous", _AMBIGUOUS_QUERY, cfg, centroids, llm)
 
     assert len(llm.calls) == 0
+    assert result.confidence < cfg.orchestrator.confidence_threshold
+    assert result.classified_by == "centroid"
+    assert result.failed is False
 
 
 # --- 9.6 Escalated result also below threshold ---------------------------------
 
 
-def test_9_6_escalated_result_below_threshold_fails_closed():
+def test_9_6_escalated_result_below_threshold_is_returned_for_fallback():
     cfg = _cfg(threshold=0.70)
     centroids, _ = _centroids(cfg)
     llm = FakeLLMProvider()
     llm.expect_schema({"slug": "hr", "confidence": 0.40, "reasoning": "not sure"})
 
-    with pytest.raises(ClassificationError, match="below the required"):
-        classify("ambiguous", _AMBIGUOUS_QUERY, cfg, centroids, llm)
+    result = classify("ambiguous", _AMBIGUOUS_QUERY, cfg, centroids, llm)
+
+    assert result.intent_slug == "hr"
+    assert result.confidence == 0.40
+    assert result.classified_by == "llm"
+    assert result.failed is False
 
 
 # --- 9.7 Unknown slug from LLM --------------------------------------------------

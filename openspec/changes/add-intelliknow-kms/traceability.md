@@ -71,7 +71,7 @@ Every clause of the source document is listed below with where it is covered. `s
 | Basic error handling | spec: document-ingestion — Ingestion error handling |
 | **Orchestrator** — 3 default spaces (HR, Legal, Finance) + custom add/edit/delete | spec: intent-management — 5 defaults incl. Operations and General; custom CRUD |
 | AI-powered classification, ≥70% configurable confidence | spec: query-orchestration — embedding-centroid classification with softmax confidence, escalating to an LLM below threshold; spec: intent-management — threshold default 0.70. Confidence is a real probability distribution rather than a model self-report. |
-| Fallback to "General" space | Deliberate safety deviation: General is used only for an explicit above-threshold classification; failed or uncertain classification returns a retryable error before retrieval. See design decision 12. |
+| Fallback to "General" space | spec: query-orchestration — a valid below-threshold classification searches only General and is logged with `fallback_used=true`; provider outages and invalid responses still fail fast. See design decision 12. |
 | Admin-guided accuracy improvement | spec: intent-management — Classification keywords and bounded reviewed-label feedback; design § Decision 10 |
 | Route queries to relevant KB domains post-classification | spec: query-orchestration — Routing hand-off |
 | **Knowledge Retrieval & Response** — concise, cited responses from KB | spec: knowledge-retrieval — Grounded answer generation, Citation verification |
@@ -118,9 +118,9 @@ and protects a database copied without its key. Vault integration, credential
 versioning, rollback, and audit are deliberate production non-goals until a
 concrete hosting target and threat model require them.
 
-The project owner also explicitly replaced the brief's silent General fallback
-with fail-closed classification after observing real misrouting. This is recorded
-in the table above and in design decision 12.
+The General fallback is deliberately limited to valid low-confidence query
+classifications. Provider outages, malformed results, and invalid slugs fail fast,
+and upload or intent-configuration classification failures never silently commit.
 
 ## Items the source does not require, and that this spec does not build
 

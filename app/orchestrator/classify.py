@@ -22,9 +22,9 @@ changes the very next escalation prompt with no restart — the same
 "live config, no restart" property `app/ingest/classify_doc.py::
 suggest_intent` already has for document classification.
 
-Provider failures, malformed responses, and below-threshold results raise
-`ClassificationError`. Retrieval must never broaden its search merely
-because the classifier is unavailable or unsure.
+Provider failures and malformed responses raise `ClassificationError`. A
+valid below-threshold result is returned to routing, which applies the
+configured General fallback without treating uncertainty as an outage.
 """
 
 from __future__ import annotations
@@ -144,13 +144,6 @@ def _escalate(
         raise ClassificationError(
             "Intent classification returned confidence outside 0 to 1. Please retry."
         )
-    if confidence < cfg.orchestrator.confidence_threshold:
-        raise ClassificationError(
-            f"Intent classification confidence {confidence:.0%} is below the required "
-            f"{cfg.orchestrator.confidence_threshold:.0%}. Please clarify the question "
-            "or retry."
-        )
-
     return Classification(
         intent_slug=slug,
         confidence=confidence,
@@ -175,8 +168,8 @@ def classify(
     enforcement in `app/orchestrator/route.py`) returns immediately with
     `classified_by="centroid"` and no LLM call. Below it, this escalates
     to `llm` only when `cfg.orchestrator.escalate_to_llm` is true;
-    otherwise classification fails closed because no accepted routing
-    decision can be made without guessing.
+    otherwise the low-confidence centroid result is returned to routing so
+    the configured fallback space can be used without an LLM call.
     """
     examples = reviewed_examples or []
     valid_slugs = {space.slug for space in cfg.intent_spaces}
@@ -207,10 +200,12 @@ def classify(
         )
 
     if not cfg.orchestrator.escalate_to_llm:
-        raise ClassificationError(
-            f"Intent classification confidence {confidence:.0%} is below the required "
-            f"{threshold:.0%}, and LLM escalation is disabled. Please clarify the "
-            "question or enable escalation."
+        return Classification(
+            intent_slug=slug,
+            confidence=confidence,
+            classified_by="centroid",
+            reasoning="Centroid confidence was below the configured threshold.",
+            failed=False,
         )
 
     return _escalate(question, cfg, llm, examples)

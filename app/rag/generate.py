@@ -27,10 +27,10 @@ from app.rag.context import ContextBundle
 
 Markup = Literal["markdownv2", "html", "plain"]
 
-# KB answers should be quick to scan in chat. This also bounds generation
-# latency: the provider cannot spend seconds producing an essay for a simple
-# employee question.
-_ANSWER_MAX_TOKENS = 128
+# The configured Claude model may use part of this budget for internal
+# reasoning before producing the visible answer. Keep enough headroom for
+# reasoning while the prompt's 80-word limit keeps the delivered answer short.
+_ANSWER_MAX_TOKENS = 1024
 
 
 @dataclass(frozen=True)

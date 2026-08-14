@@ -95,7 +95,7 @@ def test_6_3_channel_length_limit_and_markup_in_prompt():
     assert str(TELEGRAM.max_chars) in system
     assert TELEGRAM.markup in system.lower()
     assert "80 words" in system
-    assert llm.calls[0]["max_tokens"] == 128
+    assert llm.calls[0]["max_tokens"] == 1024
 
 
 def test_6_3_different_channel_profile_changes_the_prompt():

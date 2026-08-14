@@ -13,6 +13,7 @@ For a normal manual upload demo, use these fixtures:
 | `handbook.pdf` | HR | How many annual-leave days do employees receive? When does carried leave expire? How do I request parental leave? |
 | `salary_bands.pdf` | HR | What is the Band 6 midpoint? What approvals are needed above a band maximum? How does a promotion affect salary? |
 | `nda.docx` | Legal | How quickly must a security incident be reported? How long do confidentiality duties last? Can confidential data be used with public AI services? |
+| `salary_nda_vpn_expense_guidance.docx` | Legal | Is VPN expense approval required for a salary NDA? Does signing the NDA grant VPN access? Can an employee purchase a separate VPN? |
 | `wrapped_table.docx` | Determined by classifier | What information is in the table? |
 
 Do not use the following as ordinary demo documents. They intentionally exercise failure or edge cases:

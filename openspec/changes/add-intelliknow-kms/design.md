@@ -171,9 +171,11 @@ Final delivery additionally requires:
 - all five admin views exercised;
 - README, setup guides, and AI-usage notes.
 
-### 12. Fail closed when classification cannot be trusted
+### 12. Separate uncertainty fallback from classifier failure
 
-General remains a real intent space, but it is no longer an operational fallback. A provider outage, malformed model response, unknown slug, or confidence below the configured threshold produces an explicit `unclassified` failure. Query retrieval and generation do not run, and document ingestion writes no chunks or vectors.
+General is both a real intent space and the required uncertainty fallback. When centroid classification and optional LLM escalation produce a valid result below the configured threshold, retrieval searches only General and logs `fallback_used=true` while retaining the observed confidence. It does not search every intent space. This meets the brief without allowing an uncertain classification to expose unrelated specialist content.
+
+A provider outage, timeout, malformed model response, or unknown slug still produces an explicit `unclassified` failure. Query retrieval and generation do not run in those cases. Document ingestion and intent mutations also remain fail-fast because they require a valid classification provider result before committing changes.
 
 Uploads perform one cheap structured-output preflight before the document row and file are created. Intent-space mutations first validate a complete candidate config, build its centroids in isolation, and preflight the classification provider; only then is the config written and the vector-index lifecycle changed. These probes improve failure visibility but do not claim perfect model accuracy. Semantic accuracy still requires the labelled evaluation set and human review described above.
 

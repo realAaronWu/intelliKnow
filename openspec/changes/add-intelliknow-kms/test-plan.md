@@ -96,7 +96,7 @@ Deterministic, no I/O beyond a temp SQLite file. Grouped by the component bounda
 - CitationVerifier: `[S2]` resolves; `[S9]` when only 5 supplied is stripped; multi-document answers list each document once.
 
 ### 4.5 Orchestration (`spec: query-orchestration`)
-- Threshold: above → single space; below → retryable failure with no retrieval; **exactly at threshold → single space** (the boundary case).
+- Threshold: above → classified space; below → General only with fallback logged; **exactly at threshold → classified space** (the boundary case).
 - Classified General with high confidence → General only, fallback flag false.
 - Unknown slug → retryable failure, anomaly recorded.
 - Classification error and timeout → retryable failure, no retrieval or generation, failure logged.

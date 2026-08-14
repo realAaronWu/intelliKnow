@@ -365,7 +365,7 @@ def test_c3_success_outcome_carries_classification_reasoning_through(
     assert outcome.classification_failed is False
 
 
-def test_c3_low_confidence_outcome_fails_before_retrieval(
+def test_c3_low_confidence_outcome_falls_back_to_general(
     engine, cfg, embedder, classify_llm, generate_llm, vector_store, centroids
 ):
     _seed_matching_chunk(engine, vector_store)
@@ -378,9 +378,10 @@ def test_c3_low_confidence_outcome_fails_before_retrieval(
 
     outcome = answer_question(_AMBIGUOUS_QUESTION, _CHANNEL, deps)
 
-    assert outcome.status == "failed"
-    assert outcome.intent_slug == "unclassified"
-    assert outcome.classification_failed is True
+    assert outcome.status == "no_match"
+    assert outcome.intent_slug == "general"
+    assert outcome.classification_failed is False
+    assert outcome.fallback_used is True
     assert outcome.retrieved_doc_ids == []
 
 

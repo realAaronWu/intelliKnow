@@ -17,7 +17,7 @@ class RoutingDecision:
 
 
 def decide_spaces(classification: Classification, cfg: AppConfig) -> RoutingDecision:
-    """Return one space or reject any uncertain/invalid classification."""
+    """Route accepted classifications or send uncertainty to General."""
     valid_slugs = {space.slug for space in cfg.intent_spaces}
 
     if classification.failed:
@@ -28,10 +28,10 @@ def decide_spaces(classification: Classification, cfg: AppConfig) -> RoutingDeci
             f"{classification.intent_slug!r}. Please retry."
         )
     if classification.confidence < cfg.orchestrator.confidence_threshold:
-        raise ClassificationError(
-            f"Intent classification confidence {classification.confidence:.0%} is below "
-            f"the required {cfg.orchestrator.confidence_threshold:.0%}. Please clarify "
-            "the question or retry."
+        return RoutingDecision(
+            spaces=[cfg.orchestrator.fallback_space],
+            logged_slug=cfg.orchestrator.fallback_space,
+            fallback_used=True,
         )
     return RoutingDecision(
         spaces=[classification.intent_slug],

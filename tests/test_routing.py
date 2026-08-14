@@ -64,10 +64,13 @@ def test_10_1_confidence_above_threshold_routes_to_single_space():
 # --- 10.2 Below threshold -------------------------------------------------------
 
 
-def test_10_2_confidence_below_threshold_fails_closed():
+def test_10_2_confidence_below_threshold_routes_to_general():
     cfg = _cfg(threshold=0.70)
-    with pytest.raises(ClassificationError, match="below the required"):
-        decide_spaces(_classification("finance", 0.42), cfg)
+    decision = decide_spaces(_classification("finance", 0.42), cfg)
+
+    assert decision.spaces == ["general"]
+    assert decision.logged_slug == "general"
+    assert decision.fallback_used is True
 
 
 # --- 10.3 Confidence exactly at the threshold -----------------------------------
@@ -124,5 +127,6 @@ def test_10_7_threshold_change_takes_effect_on_next_decision():
     assert decide_spaces(classification, low_threshold_cfg).fallback_used is False
 
     high_threshold_cfg = _cfg(threshold=0.90)
-    with pytest.raises(ClassificationError, match="below the required"):
-        decide_spaces(classification, high_threshold_cfg)
+    decision = decide_spaces(classification, high_threshold_cfg)
+    assert decision.spaces == ["general"]
+    assert decision.fallback_used is True

@@ -38,7 +38,7 @@ The implementation is organized by delivered increments, followed by a stabiliza
 - [x] 0.6 Preserve at least one compact verified source when channel output is truncated
 - [x] 0.7 Mark documents stranded in `pending` or `parsing` as failed and retryable at startup
 - [x] 0.8 Run focused tests, the full suite, and strict OpenSpec validation
-- [x] 0.9 Remove automatic General/all-space fallback; fail closed on unavailable, invalid, or below-threshold classification
+- [x] 0.9 Route valid below-threshold classifications to General only; fail closed on unavailable or invalid classification
 - [x] 0.10 Preflight document uploads and intent-space mutations before persistence
 
 ## 5. Channels

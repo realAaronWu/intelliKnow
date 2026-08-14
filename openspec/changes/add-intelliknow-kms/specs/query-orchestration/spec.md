@@ -1,6 +1,6 @@
 ## Purpose
 
-Decides which knowledge domain answers each incoming question by classifying it into exactly one intent space with a confidence score, then enforcing the configured threshold before retrieval. Unavailable or uncertain classification stops the query with a retryable error instead of broadening retrieval.
+Decides which knowledge domain answers each incoming question by classifying it into exactly one intent space with a confidence score, then enforcing the configured threshold before retrieval. A valid but uncertain classification falls back to General; an unavailable or invalid classifier stops with a retryable error.
 
 ## ADDED Requirements
 
@@ -82,13 +82,14 @@ The system SHALL escalate to an LLM classification call when centroid confidence
 #### Scenario: Escalated result also below threshold
 
 - **WHEN** the LLM's returned confidence is also below the threshold
-- **THEN** the query fails closed with a retryable classification error
-- **AND** retrieval and answer generation are not called
+- **THEN** the query falls back to the configured General space
+- **AND** retrieval is restricted to General
+- **AND** the query is logged with the fallback flag true
 
 #### Scenario: Escalation disabled
 
 - **WHEN** escalation is disabled in configuration and centroid confidence is below the threshold
-- **THEN** the query fails closed with a classification error
+- **THEN** the query falls back to the configured General space
 - **AND** no LLM call is made
 
 #### Scenario: Escalation uses the classification model
@@ -109,8 +110,8 @@ The system SHALL compare the classification confidence against the configured th
 #### Scenario: Confidence below threshold after escalation
 
 - **WHEN** both centroid and escalated confidence fall below the threshold
-- **THEN** retrieval searches no intent space
-- **AND** the query is logged as failed and unclassified with the fallback flag false
+- **THEN** retrieval searches only the configured General space
+- **AND** the query is logged against General with the fallback flag true
 
 #### Scenario: Confidence exactly at the threshold
 
@@ -122,9 +123,16 @@ The system SHALL compare the classification confidence against the configured th
 - **WHEN** an admin raises the threshold and a new query arrives
 - **THEN** the new query is evaluated against the updated threshold
 
-### Requirement: General is an ordinary explicit classification target
+### Requirement: General is the uncertainty fallback
 
-The system SHALL search General only when the classifier explicitly returns General at or above the confidence threshold. It SHALL NOT use General or an all-space search as an automatic substitute for failed or uncertain classification.
+The system SHALL search General when a valid classification remains below the configured confidence threshold. It SHALL search only General, not every intent space, so uncertain routing cannot expose unrelated specialist documents. Provider failures, malformed responses, and invalid intent slugs SHALL NOT trigger fallback.
+
+#### Scenario: Uncertain classification falls back
+
+- **WHEN** a valid classification remains below the configured threshold
+- **THEN** retrieval searches only General
+- **AND** the original confidence is retained in the query log
+- **AND** the fallback flag is true
 
 #### Scenario: Confidently classified as General
 
@@ -134,7 +142,7 @@ The system SHALL search General only when the classifier explicitly returns Gene
 
 ### Requirement: Classification failure stops before retrieval
 
-The system SHALL fail closed when classification fails, times out, returns an invalid intent, or remains below the confidence threshold, and SHALL return a retryable error without retrieval or generation.
+The system SHALL fail closed when classification fails, times out, or returns an invalid intent, and SHALL return a retryable error without retrieval or generation. A valid below-threshold result is uncertainty and SHALL use the General fallback instead.
 
 #### Scenario: Provider error during escalation
 
@@ -150,7 +158,7 @@ The system SHALL fail closed when classification fails, times out, returns an in
 
 ### Requirement: Routing hand-off to retrieval
 
-The system SHALL pass retrieval an explicit one-item list only after classification meets the threshold, so retrieval never makes or broadens the routing decision itself.
+The system SHALL pass retrieval an explicit one-item list containing either the accepted classified space or the configured General fallback, so retrieval never makes or broadens the routing decision itself.
 
 #### Scenario: Single-space routing
 
@@ -159,7 +167,7 @@ The system SHALL pass retrieval an explicit one-item list only after classificat
 
 #### Scenario: No routing on classification failure
 
-- **WHEN** classification fails or remains below threshold
+- **WHEN** classification fails because the provider is unavailable or its result is invalid
 - **THEN** retrieval is not invoked
 
 ### Requirement: Per-query routing record
