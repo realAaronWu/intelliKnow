@@ -108,6 +108,7 @@ HF_TOKEN=your-hugging-face-read-token
 HF_HUB_DISABLE_XET=0
 HF_XET_HIGH_PERFORMANCE=1
 ADMIN_PASSWORD=use-at-least-12-private-characters
+CREDENTIAL_ENCRYPTION_KEY=
 ```
 
 Create the credentials from their official services:
@@ -117,6 +118,7 @@ Create the credentials from their official services:
 | `ANTHROPIC_API_KEY` | The organization's Anthropic Console account | Yes for the checked-in provider configuration |
 | `HF_TOKEN` | A Read token from [Hugging Face access tokens](https://huggingface.co/settings/tokens) | Recommended for authenticated, higher-limit model downloads |
 | `ADMIN_PASSWORD` | A new private password chosen for this deployment | Yes; use at least 12 characters |
+| `CREDENTIAL_ENCRYPTION_KEY` | Generated automatically by `./scripts/laptop-demo start` when empty | Yes; do not replace it after saving channel credentials |
 
 The recommended Xet settings provide visible, resumable transfers and enable
 additional download concurrency. If Xet cannot establish TLS through a
@@ -124,15 +126,14 @@ particular corporate proxy, set `HF_HUB_DISABLE_XET=1` and retry with the
 standard HTTPS downloader.
 
 Enter Telegram and Teams credentials only on the **Frontend Integrations**
-page. The laptop deployment stores them in the signed-in user's macOS Keychain;
-they are not written to `.env` or SQLite.
+page. IntelliKnow encrypts them in SQLite using `CREDENTIAL_ENCRYPTION_KEY` and
+returns only masked values. Plaintext channel credentials are not written to
+`.env`, `config.yaml`, logs, or API responses.
 
-Only an installation created before secret-store support may need
-`CREDENTIAL_ENCRYPTION_KEY`. For a restored legacy `data/intelliknow.db`,
-provide the original key in `.env` for one successful startup. IntelliKnow
-migrates the encrypted channel credentials to Keychain and clears the legacy
-database values. Remove the key from `.env` after confirming both integrations
-remain configured.
+Do not rotate or delete `CREDENTIAL_ENCRYPTION_KEY` casually: existing channel
+credentials cannot be decrypted without it. To rotate safely, clear both
+integrations in the console, replace the key, restart, and enter the channel
+credentials again.
 
 If the laptop uses a local HTTP proxy, set all outbound proxy variables to its
 HTTP URL. For the MonoProxy setup used by this demo:
@@ -141,6 +142,7 @@ HTTP URL. For the MonoProxy setup used by this demo:
 ALL_PROXY=http://127.0.0.1:8118
 HTTPS_PROXY=http://127.0.0.1:8118
 HTTP_PROXY=http://127.0.0.1:8118
+TELEGRAM_PROXY_URL=socks5://127.0.0.1:8119
 ```
 
 Alternatively, for a SOCKS proxy with remote DNS, use:
@@ -149,7 +151,14 @@ Alternatively, for a SOCKS proxy with remote DNS, use:
 ALL_PROXY=socks5h://127.0.0.1:8119
 HTTPS_PROXY=socks5h://127.0.0.1:8119
 HTTP_PROXY=socks5h://127.0.0.1:8119
+TELEGRAM_PROXY_URL=socks5://127.0.0.1:8119
 ```
+
+`TELEGRAM_PROXY_URL` is the explicit route used by both the Telegram poller and
+the admin's measured channel test. Configure it when direct Telegram access is
+blocked or unstable; unlike terminal exports, it remains effective after the
+managed processes restart. On the MonoProxy laptop, SOCKS port 8119 has lower
+and more stable Telegram round-trip latency than HTTP port 8118.
 
 The application loads `.env` itself. Do not run `source .env`, and never commit,
 email, or paste this file into chat. When several administrators need access,
@@ -300,7 +309,7 @@ Telegram is the easiest real chat demo because it uses outbound polling and need
 
 1. Create the bot with Telegram's verified `@BotFather`.
 2. Open **Frontend Integration**, enter the token, and select **Save**. The
-   token is stored in macOS Keychain.
+   token is stored as encrypted SQLite ciphertext.
 3. Restart IntelliKnow only if it is not already running:
 
    ```bash
@@ -374,11 +383,10 @@ mkdir -p backups
 tar -czf "backups/intelliknow-data-$(date +%Y%m%d-%H%M%S).tar.gz" data config.yaml
 ```
 
-Store `.env` separately in an approved password manager or secret store. Back
-up or transfer Keychain credentials using the organization's approved macOS
-device-management procedure; SQLite backups contain references, not usable
-Telegram or Teams credentials. A legacy database that has not yet been
-migrated also needs its original `CREDENTIAL_ENCRYPTION_KEY` for one startup.
+Store `.env` separately in an approved password manager. A database backup
+contains encrypted Telegram or Teams credentials and is unusable without its
+matching `CREDENTIAL_ENCRYPTION_KEY`. Restore the database and matching key
+together, but transfer them through separate approved channels where practical.
 
 To restore, stop IntelliKnow, restore `data/` and `config.yaml` together, restore the matching secrets securely, run `preflight`, then start.
 

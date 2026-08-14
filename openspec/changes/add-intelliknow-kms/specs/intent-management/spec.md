@@ -1,6 +1,6 @@
 ## Purpose
 
-Defines the named knowledge domains that queries are routed into and documents are filed under — their declaration in configuration, the classification keywords that let an admin improve routing accuracy without code changes, protected General, and the per-space vector index lifecycle.
+Defines the named knowledge domains that queries are routed into and documents are filed under — their declaration in configuration, admin-guided classifier feedback, protected General, and the per-space vector index lifecycle.
 
 ## ADDED Requirements
 
@@ -145,6 +145,30 @@ The system SHALL let an admin record the expected intent and whether a logged cl
 - **WHEN** an admin reviews a logged query and records its expected intent
 - **THEN** the feedback is retained with that query
 - **AND** subsequent accuracy calculations include the reviewed outcome
+
+### Requirement: Reviewed labels inform subsequent classification
+
+The system SHALL use a bounded set of recent expected-intent labels in subsequent
+classification, SHALL prefer the expected intent for an exact normalized repeat,
+and SHALL ignore feedback that references an intent space that no longer exists.
+
+#### Scenario: Reviewed question is repeated
+
+- **WHEN** an admin has recorded an expected intent for a query
+- **AND** the same question is asked again with only case or whitespace differences
+- **THEN** the reviewed expected intent is selected without an LLM classification call
+- **AND** the routing record identifies admin review as the mechanism
+
+#### Scenario: Reviewed examples guide similar questions
+
+- **WHEN** reviewed expected-intent labels exist
+- **THEN** a bounded recent set contributes to intent centroids
+- **AND** the same set is supplied as examples during low-confidence LLM escalation
+
+#### Scenario: Stale reviewed label
+
+- **WHEN** a reviewed label names an intent that has since been deleted
+- **THEN** that label is ignored during classification
 
 ### Requirement: Keywords drive both centroid and prompt
 

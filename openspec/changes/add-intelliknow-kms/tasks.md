@@ -43,7 +43,7 @@ The implementation is organized by delivered increments, followed by a stabiliza
 
 ## 5. Channels
 
-- [x] 5.1 Implement Fernet-encrypted integration credentials with masked output ready for the admin API
+- [x] 5.1 Implement secret-backed integration credentials with masked output ready for the admin API
 - [x] 5.2 Persist per-channel status, recent errors, last success, and last reply reference
 - [x] 5.3 Implement normalized inbound contracts and one shared channel handler
 - [x] 5.4 Implement Telegram long polling, typing indication, delivery, and duplicate-offset protection
@@ -51,6 +51,8 @@ The implementation is organized by delivered increments, followed by a stabiliza
 - [x] 5.6 Log query results after delivery and isolate analytics failures from user replies
 - [x] 5.7 Add authenticated integration status/configuration/test endpoints
 - [ ] 5.8 Verify real Telegram and real Teams round trips and measure latency through send completion
+- [x] 5.9 Remove typing from the delivery critical path and bound classifier and answer token budgets
+- [x] 5.10 Add single-tenant Teams credentials, app-package builder, and a real-platform-aware latency gate
 
 ## 6. Admin console and delivery
 
@@ -62,12 +64,14 @@ The implementation is organized by delivered increments, followed by a stabiliza
 - [x] 6.6 Complete Analytics, query detail, filters, and CSV export
 - [ ] 6.7 Run full demo, labelled quality checks, latency checks, and five-view acceptance
 - [x] 6.8 Complete README, integration/setup guides, troubleshooting, and AI usage notes
+- [x] 6.9 Feed bounded expected-intent review labels into subsequent classification
+- [x] 6.10 Verify the laptop lifecycle helper can restart cleanly in both HTTPS and HTTP modes
 
-## 7. Production frontend integration credentials
+## 7. MVP frontend integration credentials
 
-- [x] 7.1 Add versioned SecretStore implementations for Azure Key Vault, macOS Keychain, and tests
-- [x] 7.2 Store only secret references and lifecycle metadata in the application database
-- [x] 7.3 Migrate legacy Fernet ciphertext to the configured secret store and clear it atomically
-- [ ] 7.4 Stage and provider-validate Telegram and Teams replacements before activation
-- [ ] 7.5 Add rotation, rollback, emergency disable, bounded caching, and credential audit records
-- [ ] 7.6 Add Teams certificate authentication and remove the legacy ciphertext migration path
+- [x] 7.1 Encrypt Telegram and Teams credential bundles with Fernet before SQLite persistence
+- [x] 7.2 Require and validate a database-external `CREDENTIAL_ENCRYPTION_KEY`
+- [x] 7.3 Return masked values only and fail closed on decryption errors
+- [x] 7.4 Save, replace, clear, and use credentials without a service restart
+- [x] 7.5 Remove the platform-specific/cloud provider subsystem and optional Azure dependencies
+- [x] 7.6 Provide a retry-safe migration for the short-lived Keychain-backed build

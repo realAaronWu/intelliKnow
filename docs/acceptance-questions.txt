@@ -1,0 +1,6 @@
+# Replace or extend these with questions whose answers exist in uploaded documents.
+How many days of annual leave do full-time employees receive?
+Which form should I submit for travel expenses?
+What is the meal reimbursement limit?
+What does the NDA say about confidential information?
+How do I request VPN access?

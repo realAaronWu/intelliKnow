@@ -6,7 +6,7 @@ Decides which knowledge domain answers each incoming question by classifying it 
 
 ### Requirement: Intent space centroids
 
-The system SHALL maintain one centroid vector per intent space, computed by embedding that space's name, description, and keywords, and SHALL rebuild a centroid whenever its space's configuration changes.
+The system SHALL maintain one centroid vector per intent space, computed as the normalized mean of that space's definition embedding and bounded recent admin-reviewed example embeddings, and SHALL rebuild centroids whenever those inputs change.
 
 #### Scenario: Centroids available on an empty knowledge base
 
@@ -29,6 +29,12 @@ The system SHALL maintain one centroid vector per intent space, computed by embe
 
 - **WHEN** centroids are computed
 - **THEN** they are produced by the same embedding provider used for chunks and queries
+
+#### Scenario: Reviewed examples change centroids
+
+- **WHEN** an admin records or corrects an expected intent
+- **THEN** the next query rebuilds the affected classifier inputs from the bounded review set
+- **AND** no document re-indexing is required
 
 ### Requirement: Centroid-based classification
 
@@ -71,6 +77,7 @@ The system SHALL escalate to an LLM classification call when centroid confidence
 
 - **WHEN** an escalation call is made
 - **THEN** the prompt includes every intent space's name, description, and keywords as currently configured
+- **AND** it includes the bounded valid admin-reviewed examples when any exist
 
 #### Scenario: Escalated result also below threshold
 
@@ -157,7 +164,7 @@ The system SHALL pass retrieval an explicit one-item list only after classificat
 
 ### Requirement: Per-query routing record
 
-The system SHALL record, for every query, the classified intent space, the confidence value, which mechanism produced the classification, the reasoning when an LLM produced it, and whether the fallback was used.
+The system SHALL record, for every query, the classified intent space, the confidence value, which mechanism produced the classification, a concise selection summary when an LLM produced it, and whether the fallback was used. The classification response SHALL be bounded to the slug and confidence fields so audit prose does not consume the interactive latency budget.
 
 #### Scenario: Fast-path query records its mechanism
 
@@ -165,11 +172,17 @@ The system SHALL record, for every query, the classified intent space, the confi
 - **THEN** its log entry records the mechanism as centroid
 - **AND** no reasoning string is present
 
-#### Scenario: Escalated query records reasoning
+#### Scenario: Escalated query records selection summary
 
 - **WHEN** a query is escalated to the LLM
 - **THEN** its log entry records the mechanism as LLM
-- **AND** the reasoning string returned by the model is stored
+- **AND** a concise summary of the model-selected slug and confidence is stored
+
+#### Scenario: Reviewed exact match records its mechanism
+
+- **WHEN** a query exactly matches a normalized admin-reviewed question
+- **THEN** its log entry records the mechanism as review
+- **AND** the expected intent is used without an LLM classification call
 
 #### Scenario: Routing decision is auditable
 

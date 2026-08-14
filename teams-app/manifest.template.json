@@ -1,0 +1,46 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.23/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.23",
+  "version": "1.0.0",
+  "id": "{{APP_ID}}",
+  "developer": {
+    "name": "IntelliKnow",
+    "websiteUrl": "https://github.com/realAaronWu/intelliKnow",
+    "privacyUrl": "https://github.com/realAaronWu/intelliKnow",
+    "termsOfUseUrl": "https://github.com/realAaronWu/intelliKnow"
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "name": {
+    "short": "IntelliKnow",
+    "full": "IntelliKnow Knowledge Assistant"
+  },
+  "description": {
+    "short": "Ask questions grounded in your organization's knowledge base.",
+    "full": "IntelliKnow answers employee questions from approved knowledge-base documents and includes source references with each supported answer."
+  },
+  "accentColor": "#0E7490",
+  "bots": [
+    {
+      "botId": "{{APP_ID}}",
+      "scopes": ["personal", "team", "groupChat"],
+      "supportsFiles": false,
+      "isNotificationOnly": false,
+      "commandLists": [
+        {
+          "scopes": ["personal", "team", "groupChat"],
+          "commands": [
+            {
+              "title": "ask",
+              "description": "Ask IntelliKnow a knowledge-base question"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "permissions": ["identity"],
+  "validDomains": ["{{PUBLIC_HOST}}"]
+}

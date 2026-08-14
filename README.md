@@ -47,12 +47,18 @@ ANTHROPIC_API_KEY=your-anthropic-api-key
 HF_TOKEN=your-hugging-face-read-token
 HF_HUB_DISABLE_XET=1
 ADMIN_PASSWORD=choose-a-private-password
+# Leave this empty; laptop-demo generates it once on first start.
+CREDENTIAL_ENCRYPTION_KEY=
 ```
 
 Each laptop creates its own `.env` from the credential-free template; never copy
 or commit another operator's file. `HF_TOKEN` is recommended for authenticated,
 higher-limit model downloads. The complete credential source and database
 transfer guidance is in [Configure secrets on each laptop](docs/LAPTOP-DEMO-DEPLOYMENT.md#4-configure-secrets-on-each-laptop).
+
+Telegram and Teams credentials entered in the console are encrypted in SQLite
+with `CREDENTIAL_ENCRYPTION_KEY`. The key stays in the private `.env`, separate
+from the database, and the API returns only masked values.
 
 The shipped demo uses Anthropic's `claude-haiku-4-5` for classification and generation, plus local sentence-transformer embeddings. A zero-cost Ollama-compatible path remains available by changing the provider, model names, and `llm.base_url` in `config.yaml`.
 
@@ -102,10 +108,13 @@ is never stored in the browser cookie.
 2. Wait until their status is **Processed**.
 3. Open **Dashboard** and ask a question answered by one of those documents.
 4. Confirm the result shows an intent, confidence, response, source, and latency.
-5. Open **Intent Configuration** to review classifications and tune keywords or thresholds.
+5. Open **Intent Configuration** to record expected intents and tune keywords or thresholds. Reviewed labels inform subsequent routing.
 6. Open **Analytics** to inspect history, document usage, and CSV export.
 
 Channel setup is covered in [Connecting Telegram and Microsoft Teams](docs/CONNECTING-TELEGRAM-AND-TEAMS.md). A tenant-free adapter demonstration is covered in [Local Microsoft Teams Demo](docs/LOCAL-TEAMS-DEMO.md).
+
+Measured channel acceptance and the generated Teams app package are covered in
+[Channel Acceptance](docs/CHANNEL-ACCEPTANCE.md).
 
 ## Tests
 
@@ -127,7 +136,9 @@ Slow tests that load real models are intentionally excluded by the default pytes
 
 ## Troubleshooting
 
-**API will not start:** ensure `ADMIN_PASSWORD` and the configured AI-provider key are set. For a legacy database containing encrypted channel credentials, provide its original `CREDENTIAL_ENCRYPTION_KEY` for one migration startup.
+**API will not start:** ensure `ADMIN_PASSWORD`, `CREDENTIAL_ENCRYPTION_KEY`, and the configured AI-provider key are set. `./scripts/laptop-demo start` creates a valid credential key when the `.env` value is empty.
+
+**Upgrade reports legacy Keychain credentials:** run `.venv/bin/python scripts/migrate_keychain_credentials.py` once, then start again. The script commits Fernet ciphertext before removing the old Keychain item.
 
 **Console cannot connect:** confirm the API is running and `INTELLIKNOW_API_URL` points to the correct port.
 
@@ -141,6 +152,7 @@ Slow tests that load real models are intentionally excluded by the default pytes
 
 - [Laptop demo deployment runbook](docs/LAPTOP-DEMO-DEPLOYMENT.md)
 - [AI usage reflection](docs/AI_USAGE.md)
+- [Requirements audit and hiring review](docs/REQUIREMENTS-AUDIT.md)
 - [Telegram and Teams guide](docs/CONNECTING-TELEGRAM-AND-TEAMS.md)
 - [Local Teams demo](docs/LOCAL-TEAMS-DEMO.md)
 - [OpenSpec design](openspec/changes/add-intelliknow-kms/design.md)

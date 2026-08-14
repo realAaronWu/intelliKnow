@@ -120,7 +120,7 @@ The system SHALL provide a Frontend Integration screen presenting one card per s
 #### Scenario: Credentials entered from the card
 
 - **WHEN** an admin enters a channel's credentials on its card and saves
-- **THEN** the credentials are stored encrypted
+- **THEN** the credentials are encrypted before SQLite persistence
 - **AND** the card redisplays them masked
 
 #### Scenario: Credential shown only as last four characters

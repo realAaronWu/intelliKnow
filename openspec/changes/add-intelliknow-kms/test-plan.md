@@ -101,6 +101,7 @@ Deterministic, no I/O beyond a temp SQLite file. Grouped by the component bounda
 - Unknown slug → retryable failure, anomaly recorded.
 - Classification error and timeout → retryable failure, no retrieval or generation, failure logged.
 - Classification prompt contains each space's name, description, **and keywords**; editing keywords changes the next prompt with no restart.
+- Exact normalized reviewed question uses its expected intent and records `review`; bounded reviewed examples reach centroids and escalation prompts; deleted-intent labels are ignored.
 - Retrieval receives an explicit space list and never computes it itself.
 
 ### 4.6 Formatting (`spec: knowledge-retrieval`, `frontend-integration`)
@@ -109,11 +110,11 @@ Deterministic, no I/O beyond a temp SQLite file. Grouped by the component bounda
 - Channel profile reaches the generation prompt (assert on the fake's recorded prompt).
 
 ### 4.7 Credential storage (`spec: frontend-integration`)
-- Saved credential is ciphertext at rest — assert the raw DB column does not contain the plaintext.
+- Saved credential is Fernet-encrypted before SQLite persistence; the database contains ciphertext and no plaintext bundle.
 - API and console reads return last-4 only; plaintext never crosses the API boundary.
-- Missing or malformed `CREDENTIAL_ENCRYPTION_KEY` → startup fails; **assert no plaintext fallback occurs**.
-- Credential encrypted under a rotated-away key → channel Disconnected with "re-enter", service still running.
-- First-run environment fallback used when no stored credential exists, and flagged as env-sourced.
+- Missing or invalid encryption key rejects startup and never creates a plaintext fallback.
+- Wrong-key or corrupted ciphertext → sanitized error and channel Disconnected.
+- Save, replacement, clear, and restart preserve the documented channel behavior.
 
 ### 4.8 Logging (`spec: analytics-and-history`)
 - Each status recorded correctly: `success`, `no_match`, `failed`.
@@ -172,7 +173,7 @@ Run the 40-question golden set through classification. Report a confusion matrix
 - **Gate: ≥ 80% correct on the 30 unambiguous questions.** The brief requires a ≥70% *confidence threshold*, which is a different quantity — this is measured accuracy against human labels, and it needs a higher bar than the routing threshold to be meaningful.
 - **Gate: ≥ 70% of the 10 ambiguous questions fall back** rather than being confidently misrouted. A classifier that is confidently wrong is worse than one that abstains.
 - Report mean confidence for correct vs incorrect classifications. If they are not separated, the threshold mechanism is not doing useful work and `design § Decision 7`'s stated calibration caveat has become a real problem — record the finding either way.
-- **Keyword-tuning loop**: take the worst-performing space, add keywords from its misrouted questions, re-run. Accuracy for that space should improve. This is the test that proves the brief's "admin-guided accuracy improvement" is real rather than decorative.
+- **Admin-guided tuning loop**: take the worst-performing space, add keywords or expected-intent labels from a training subset, then re-run a disjoint holdout set. Holdout accuracy should improve. This proves the feedback controls are useful without counting memorized exact repeats as generalization.
 
 ### 6.2 Answer quality
 For each question with a known expected source document:

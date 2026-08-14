@@ -59,7 +59,7 @@ Every clause of the source document is listed below with where it is covered. `s
 | Source clause | Covered by |
 | --- | --- |
 | **Multi-Frontend Integration** — integrate 2 tools | spec: frontend-integration |
-| Admin credential configuration (secure storage) | spec: frontend-integration — Admin credential configuration, Secure credential storage (Fernet-encrypted at rest, console-managed, last-4 masking) |
+| Admin credential configuration (secure storage) | spec: frontend-integration — Admin credential configuration, Fernet-encrypted SQLite storage, console-managed, last-4 masking |
 | Real-time query/response sync ≤3s latency | spec: frontend-integration — Response latency; design § Latency budget |
 | Status monitoring + error logging | spec: frontend-integration — Connection status monitoring, Channel error logging |
 | End-to-end test function | spec: frontend-integration — End-to-end integration test |
@@ -72,7 +72,7 @@ Every clause of the source document is listed below with where it is covered. `s
 | **Orchestrator** — 3 default spaces (HR, Legal, Finance) + custom add/edit/delete | spec: intent-management — 5 defaults incl. Operations and General; custom CRUD |
 | AI-powered classification, ≥70% configurable confidence | spec: query-orchestration — embedding-centroid classification with softmax confidence, escalating to an LLM below threshold; spec: intent-management — threshold default 0.70. Confidence is a real probability distribution rather than a model self-report. |
 | Fallback to "General" space | Deliberate safety deviation: General is used only for an explicit above-threshold classification; failed or uncertain classification returns a retryable error before retrieval. See design decision 12. |
-| Admin-guided accuracy improvement | spec: intent-management — Classification keywords; design § Decision 13 |
+| Admin-guided accuracy improvement | spec: intent-management — Classification keywords and bounded reviewed-label feedback; design § Decision 10 |
 | Route queries to relevant KB domains post-classification | spec: query-orchestration — Routing hand-off |
 | **Knowledge Retrieval & Response** — concise, cited responses from KB | spec: knowledge-retrieval — Grounded answer generation, Citation verification |
 | Adapt format to frontend tools | spec: knowledge-retrieval — Channel-aware answer formatting; spec: frontend-integration — outbound formatting |
@@ -89,7 +89,7 @@ Every clause of the source document is listed below with where it is covered. `s
 | Source clause | Covered by |
 | --- | --- |
 | Option A: Python (FastAPI/Streamlit) + SQLite/FAISS + AI tools | design § Architecture, § Storage |
-| Prohibition: complex frameworks / cloud services; lightweight only | design § Goals / Non-Goals; Docker and tunnel demoted to optional |
+| Prohibition: complex frameworks / cloud services; lightweight only | design § Goals / Non-Goals; one Fernet-encrypted SQLite path, no cloud secret service or platform-specific runtime dependency |
 
 ## §3 Delivery Requirements
 
@@ -102,17 +102,26 @@ Every clause of the source document is listed below with where it is covered. `s
 | AI scenario 1: PDF tables (HR salary grids) → structured data, searchable | spec: document-ingestion — AI-assisted recovery of poorly extracted tables; design § RAG write path |
 | AI scenario 2: adapt responses to each frontend's format constraints | spec: knowledge-retrieval — Channel-aware answer formatting; design § Decision 8 |
 
-## Deviations from the source document
+## Deviations and owner-directed extensions
 
-Two remain, both confirmed with the project owner.
+Two deviations remain, both confirmed with the project owner.
 
 | # | Source says | This spec does | Why |
 | --- | --- | --- | --- |
 | 1 | "fully functional, **deployed** KMS"; references Render/Vercel | Local run is the supported path; Docker and a public tunnel are optional extras | Confirmed with the project owner. The source's own Delivery section permits "deployed/**local**", so a local demo satisfies it. |
 | 2 | "Key Reference: LangChain Document Loaders" | Direct use of `pypdf`/`pdfplumber`/`python-docx`/`openpyxl`, no LangChain | Listed as a reference, not a mandate. LangChain adds a large dependency tree and its own abstractions for a surface we use thinly, against the "lightweight only" prohibition. |
 
-**Resolved:** an earlier draft stored chat credentials in `.env` without encryption. The project owner confirmed that "secure storage" is core functionality, so the spec now requires console-managed, Fernet-encrypted-at-rest credentials with last-4 masking and fail-fast on a missing key.
+The project owner later requested secure frontend credential management. The
+MVP stores console-managed channel credentials as Fernet ciphertext in SQLite
+and keeps the key in the private environment. This is portable, lightweight,
+and protects a database copied without its key. Vault integration, credential
+versioning, rollback, and audit are deliberate production non-goals until a
+concrete hosting target and threat model require them.
+
+The project owner also explicitly replaced the brief's silent General fallback
+with fail-closed classification after observing real misrouting. This is recorded
+in the table above and in design decision 12.
 
 ## Items the source does not require, and that this spec does not build
 
-Recorded so their absence is visibly deliberate: multi-tenancy, RBAC, per-user document permissions, rate limiting, audit logging, conversational memory, streaming responses, automatic document sync from external drives, horizontal scale, OCR for scanned PDFs, and a cross-encoder re-ranker (see design § RAG read path for why the last one is deferred).
+Recorded so their absence is visibly deliberate: multi-tenancy, RBAC, per-user document permissions, rate limiting, general application audit logging, conversational memory, streaming responses, automatic document sync from external drives, horizontal scale, and OCR for scanned PDFs. Cross-encoder reranking is implemented because measured retrieval latency remained within the MVP target; it is not a deferred item.

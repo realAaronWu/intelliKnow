@@ -8,6 +8,7 @@ data/
 uploads/
 .run/
 backups/
+dist/
 
 # Python
 __pycache__/

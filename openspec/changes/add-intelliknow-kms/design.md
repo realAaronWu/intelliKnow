@@ -1,6 +1,6 @@
 ## Context
 
-IntelliKnow is a seven-day, single-developer MVP for document-backed question answering in Telegram and Microsoft Teams. The repository already contains the configuration/provider foundation, document ingestion and indexing, and the RAG read path. The remaining work is channel delivery, an authenticated admin API, a five-view Streamlit console, and delivery evidence.
+IntelliKnow is a seven-day, single-developer MVP for document-backed question answering in Telegram and Microsoft Teams. The repository now contains the configuration/provider foundation, document ingestion and indexing, RAG read path, both channel adapters, an authenticated admin API, and the five-view Streamlit console. Remaining acceptance work is a labelled quality evaluation, a real Teams tenant round trip, and full demo evidence.
 
 The implementation uses FastAPI, Streamlit, SQLite/FTS5, FAISS, sentence-transformers, and provider adapters. It is a single-process application with background ingestion jobs. That constraint makes in-process concurrency, startup recovery, and clear runtime-configuration boundaries more important than distributed-system abstractions.
 
@@ -43,8 +43,8 @@ Streamlit console ─> authenticated /admin API
                          ├─> intents and safe runtime settings
                          └─> analytics and review feedback
 
-config.yaml ─> ConfigService       .env ─> service secrets
-SQLite ─> metadata, FTS5, logs     encrypted integration rows ─> chat credentials
+config.yaml ─> ConfigService       .env ─> service/admin secrets + Fernet key
+SQLite ─> metadata, FTS5, logs, encrypted chat credentials
 FAISS files ─> per-intent vectors
 ```
 
@@ -119,18 +119,16 @@ Channel latency is measured from accepted inbound message through completion of 
 
 Each successful inbound exchange records the most recent reply reference for that channel. The admin-triggered channel test sends to that destination. If none exists, the API reports that a real user must message the bot first instead of reporting a misleading success.
 
-The database stores only secret-manager references and credential lifecycle
-metadata. Production credential values live in Azure Key Vault, accessed through
-managed identity; the laptop demo uses macOS Keychain through the same
-`SecretStore` contract. APIs return provider identity and setup state, never a
-secret or secret fragment. Credential changes rebuild only the affected channel
-adapter; they do not reload unrelated application services.
+Telegram and Teams credential bundles are Fernet-encrypted before being written
+to SQLite. `CREDENTIAL_ENCRYPTION_KEY` remains in the private environment,
+separate from the database. APIs return masked last-four-character details,
+never a usable credential, and credential changes are read on the next channel
+operation without a restart. Missing, invalid, or mismatched keys fail closed.
 
-Replacement is staged and checked against Telegram or Microsoft before an
-atomic active-version switch. Failed validation preserves the existing active
-version. The former Fernet ciphertext column is a temporary one-way migration
-source only. See `docs/PRODUCTION-INTEGRATION-CREDENTIALS.md` for the lifecycle,
-rotation, audit, outage, and deployment contracts.
+This intentionally small design protects a copied database and avoids
+platform-specific or cloud infrastructure in the seven-day MVP. It does not
+claim protection after full host compromise or theft of both SQLite and `.env`.
+See `docs/PRODUCTION-INTEGRATION-CREDENTIALS.md`.
 
 ### 9. Use one admin router and one Streamlit application
 
@@ -150,9 +148,16 @@ Confidence is not correctness. The query log stores optional admin feedback: exp
 
 The existing high-confidence share may be shown as a separate confidence metric, but it must not be labelled accuracy. Model-quality acceptance requires a labelled question set; until that set exists, calibration results are diagnostic only.
 
+Reviewed labels also form a bounded classifier feedback set. An exact normalized
+repeat uses the admin's expected intent directly. Up to 8 recent examples per
+intent (30 total, 240 characters each) contribute individual embeddings to the intent centroid and to low-confidence LLM
+escalation. Deleted-intent labels are ignored. This is an immediate MVP feedback
+loop, not model fine-tuning; its effect must still be evaluated on a separate
+labelled holdout set before accuracy is claimed.
+
 ### 11. Prefer focused tests and real acceptance gates
 
-Unit tests cover pure formatting, configuration allow-listing, credential encryption, normalization, handlers, auth, analytics, and failure isolation. Integration tests use real SQLite/FTS5/FAISS with fake providers. Captured platform payloads test adapters without contacting live services.
+Unit tests cover pure formatting, configuration allow-listing, encrypted credentials, normalization, handlers, auth, analytics, classifier feedback, and failure isolation. Integration tests use real SQLite/FTS5/FAISS with fake providers. Captured platform payloads test adapters without contacting live services.
 
 Final delivery additionally requires:
 
@@ -185,24 +190,12 @@ Uploads perform one cheap structured-output preflight before the document row an
 
 ### Task 05: Channels
 
-1. Implement encrypted credentials plus channel status/error/reply-reference persistence.
+1. Implement Fernet-encrypted credentials plus channel status/error/reply-reference persistence.
 2. Implement normalized messages, the shared handler, and query logging.
 3. Implement Telegram polling and captured-payload tests.
 4. Implement the Teams Bot Framework endpoint and captured-activity tests.
 5. Add authenticated integration APIs and a destination-aware end-to-end test action.
 6. Verify real Telegram and real Teams round trips and record full delivery latency.
-
-### Task 07: Production integration credentials
-
-1. Add a provider-neutral, versioned `SecretStore` with Azure Key Vault,
-   macOS Keychain, and in-memory test implementations.
-2. Replace credential ciphertext writes with reference-only metadata and add a
-   one-way migration from existing Fernet rows.
-3. Stage and provider-validate replacements before atomic activation.
-4. Add rotation, rollback, emergency disable, bounded caching, and metadata-only
-   credential audit events.
-5. Prefer Teams certificate credentials and remove legacy ciphertext support
-   after the migration rollback window.
 
 ### Task 06: Admin and delivery
 
@@ -215,14 +208,19 @@ Uploads perform one cheap structured-output preflight before the document row an
 
 - **One-process lock:** simple and sufficient for the MVP, but running multiple API workers can corrupt or desynchronize FAISS state. Deployment documentation must specify one worker.
 - **Synchronous model latency:** the three-second target depends on provider and model choices. Measure full delivery latency and report misses honestly rather than hiding them behind typing indicators.
+- **Latency controls:** typing is best-effort and bounded to 400 milliseconds; query
+  classification returns only slug and confidence with a 48-token ceiling, and
+  concise answers use a 128-token ceiling. The console reports per-channel p50,
+  p95, maximum, pass rate, and the three-second gate.
 - **Config restarts:** fewer live controls reduce surprise and keep service wiring truthful. The console must label restart-required fields as read-only.
 - **Real Teams verification:** it requires an Azure Bot registration, reachable HTTPS endpoint, and tenant setup. These are deployment prerequisites, not optional proof replaced by an emulator.
 - **Accuracy sample size:** reviewed accuracy is honest but may initially have no data. The UI must distinguish unavailable accuracy from confidence distribution.
+- **Feedback overfitting:** reviewed examples improve immediate routing but can encode label mistakes and repeated wording. Keep them bounded, allow labels to be corrected, and judge quality on a separate labelled set.
 - **Interrupted re-parse:** startup recovery marks work failed rather than resuming it. This favors transparent retry behavior over a durable queue outside MVP scope.
 
 ## Migration Plan
 
-There is no deployed predecessor. Existing local databases gain additive columns/tables through idempotent schema initialization. On the first startup after Task 0, interrupted documents are marked failed. Existing configuration files remain valid; unsupported fields remain readable but may no longer be changed through the live admin update endpoint.
+There is no deployed predecessor. Existing local databases gain additive columns/tables through idempotent schema initialization. On the first startup after Task 0, interrupted documents are marked failed. Existing configuration files remain valid; unsupported fields remain readable but may no longer be changed through the live admin update endpoint. One short-lived prior build stored Keychain references; its explicit migration script converts those values back to Fernet ciphertext atomically.
 
 Rollback is code rollback plus restoring the automatically retained `config.yaml` backup. Database changes are additive and do not require destructive rollback.
 

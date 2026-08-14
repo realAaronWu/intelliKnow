@@ -12,7 +12,7 @@ The first generated approach treated most extracted content as plain text. It wa
 
 Intent spaces are represented by their name, description, and admin-editable keywords. Their embeddings form centroids, so the common path can classify a query without an LLM call. When confidence is below the configured threshold, an LLM performs constrained classification against the same current intent definitions.
 
-The implementation was iterated to reuse the query embedding for classification and retrieval, rebuild centroids after live keyword edits, and stop before retrieval when classification is uncertain or unavailable. General is accepted only as an explicit above-threshold model result. Admin review records expected intent and correctness. Only reviewed rows contribute to displayed accuracy; raw confidence is kept as a separate diagnostic.
+The implementation was iterated to reuse the query embedding for classification and retrieval, rebuild centroids after live keyword or reviewed-label changes, and stop before retrieval when classification is uncertain or unavailable. General is accepted only as an explicit above-threshold model result. Admin review records expected intent and correctness. An exact reviewed repeat follows that label; a small bounded set of recent labels contributes examples to centroids and low-confidence LLM classification. Only reviewed rows contribute to displayed accuracy; raw confidence is kept as a separate diagnostic.
 
 ## Grounded response generation
 
@@ -28,5 +28,6 @@ AI-assisted development was used to compare the original brief with the implemen
 
 - AI does not decide whether a classification is correct; an administrator supplies review feedback.
 - Accuracy is unavailable until reviewed samples exist, rather than inferred from model confidence.
+- Reviewed examples can overfit or contain human mistakes; release-quality claims require a separate labelled holdout set, not the examples used for tuning.
 - HR, legal, and financial answers remain source-backed assistance, not professional advice.
 - Live Telegram and Teams acceptance depends on platform credentials and tenant configuration outside the codebase.

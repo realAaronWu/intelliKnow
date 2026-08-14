@@ -60,15 +60,13 @@ You need access to the computer running IntelliKnow and a Telegram account.
 2. Send `/newbot` and follow the prompts. Choose a username ending in `bot`.
 3. BotFather displays the bot token. Treat it like a password.
 4. Open IntelliKnow's admin console, select **Frontend Integration**, enter the
-   token under **Telegram**, and select **Save**. IntelliKnow stores it in the
-   configured secret manager (macOS Keychain for the laptop demo).
+   token under **Telegram**, and select **Save**. IntelliKnow encrypts it in the
+   local database; the encryption key stays in the private `.env` file.
 
 5. If Telegram requires your organization's proxy, add the proxy variables used by your network. Example:
 
    ```dotenv
-   ALL_PROXY=socks5://127.0.0.1:8119
-   HTTPS_PROXY=socks5://127.0.0.1:8119
-   HTTP_PROXY=socks5://127.0.0.1:8119
+   TELEGRAM_PROXY_URL=socks5://127.0.0.1:8119
    ```
 
 6. In `config.yaml`, confirm `channels.telegram.enabled` is `true` and `mode` is `polling`.
@@ -84,8 +82,9 @@ By default, anyone who discovers the bot can send it a private message. Use only
 
 This setup normally requires help from a Microsoft 365 or Azure administrator. You need an Azure subscription or approved Azure Bot resource, permission to upload or publish a Teams app, and a public HTTPS address for IntelliKnow.
 
-1. Create or choose the Microsoft Entra application used by the bot.
-2. Record its **Application (client) ID**.
+1. Create or choose the Microsoft Entra application used by the bot. For a new
+   Azure Bot, use **Single Tenant**.
+2. Record its **Application (client) ID** and **Directory (tenant) ID**.
 3. Create a client secret and copy its **Value** immediately. Do not use the secret's identifier.
 4. Create or configure an [Azure Bot resource](https://learn.microsoft.com/en-us/azure/bot-service/bot-service-quickstart-registration?view=azure-bot-service-4.0) for that application.
 5. Enable the **Microsoft Teams** channel on the Azure Bot resource.
@@ -96,16 +95,42 @@ This setup normally requires help from a Microsoft 365 or Azure administrator. Y
    ```
 
 7. Enter that full address as the bot's messaging endpoint in Azure.
-8. In IntelliKnow's **Frontend Integration** page, enter the application ID and
-   client-secret value under **Microsoft Teams**, then select **Save**. Do not
-   enter the secret ID.
+8. In IntelliKnow's **Frontend Integration** page, enter the application ID,
+   client-secret value, and directory tenant ID under **Microsoft Teams**, then
+   select **Save**. Do not enter the secret ID.
 
 9. In `config.yaml`, set `channels.teams.enabled` to `true` and set `public_base_url` to the public HTTPS base address.
 10. Restart IntelliKnow.
-11. In the [Teams Developer Portal](https://dev.teams.microsoft.com/), create or update an app package that contains the bot's application ID and supports personal chat.
-12. Publish the app to your organization or use **Preview in Teams** if your tenant permits it.
+11. Build the included Teams app package:
+
+   ```bash
+   .venv/bin/python scripts/build_teams_app.py \
+     --app-id YOUR_APPLICATION_ID \
+     --public-url https://your-intelliknow-address
+   ```
+
+12. In **Teams > Apps > Manage your apps > Upload an app**, upload
+   `dist/intelliknow-teams.zip`. If **Upload an app** is absent, a Teams admin
+   must allow custom app upload or publish the package for the organization.
 13. Open IntelliKnow in Teams and send a question whose answer is in an uploaded document.
 14. Confirm the answer includes a source.
+15. Run the measured real-platform check:
+
+   ```bash
+   .venv/bin/python scripts/check_channel_acceptance.py \
+     --channel teams \
+     --require-real-platform \
+     --questions-file docs/acceptance-questions.txt \
+     --runs 4
+   ```
+
+   The command fails unless delivery succeeds from the stored real Teams
+   conversation and p95 end-to-end latency is at most three seconds.
+
+A personal Microsoft Teams account cannot upload and run this organization bot.
+Use a Microsoft 365 work or school tenant with custom-app permission. The local
+Emulator remains the account-free adapter demonstration, not real Teams
+acceptance.
 
 The public `/api/messages` endpoint is authenticated by the Microsoft Bot Framework. Do not place the IntelliKnow admin password in Teams or Azure Bot settings.
 
@@ -134,7 +159,9 @@ Credential-free Emulator access is accepted only from the same computer. Emulato
 
 **Telegram does not answer:** confirm the token, proxy, and `enabled` setting; ensure no Telegram webhook is configured because polling and webhooks cannot run together.
 
-**Teams reports unauthorized:** confirm the application ID, client-secret value, Azure Bot registration, and messaging endpoint. A secret identifier is not a secret value.
+**Teams reports unauthorized:** confirm the application ID, directory tenant ID,
+client-secret value, single-tenant Azure Bot registration, and messaging
+endpoint. A secret identifier is not a secret value.
 
 **Teams cannot reach IntelliKnow:** the endpoint must use public HTTPS with a valid certificate. `localhost` works only with the Emulator on the IntelliKnow computer.
 

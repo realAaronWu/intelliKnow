@@ -99,7 +99,7 @@ The system SHALL expose a Bot Framework messaging endpoint for Microsoft Teams, 
 
 ### Requirement: Admin credential configuration
 
-The system SHALL allow an admin to enter, update, and clear each channel's credentials from the console — a bot token for Telegram, an application identifier and password for Teams — and SHALL apply saved credentials without a service restart.
+The system SHALL allow an admin to enter, update, and clear each channel's credentials from the console — a bot token for Telegram, and an application identifier, password, and directory tenant identifier for Teams — and SHALL apply saved credentials without a service restart.
 
 #### Scenario: Telegram credentials configured from the console
 
@@ -108,8 +108,26 @@ The system SHALL allow an admin to enter, update, and clear each channel's crede
 
 #### Scenario: Teams credentials configured from the console
 
-- **WHEN** an admin saves a Teams application identifier and password
+- **WHEN** an admin saves a Teams application identifier, password, and directory tenant identifier
 - **THEN** the channel becomes usable without a restart
+
+### Requirement: Measured channel acceptance
+
+The system SHALL provide a repeatable real-channel acceptance command that
+measures from accepted inbound question through completed platform send and
+fails when p95 exceeds three seconds.
+
+#### Scenario: Teams Emulator cannot pass real acceptance
+
+- **WHEN** Teams acceptance is run with real-platform verification enabled
+- **AND** the stored conversation reference came from a loopback Emulator
+- **THEN** the acceptance command fails and identifies the destination as local
+
+#### Scenario: Real channel latency passes
+
+- **WHEN** representative questions complete through the real platform
+- **AND** p95 end-to-end latency is at most 3000 milliseconds
+- **THEN** the acceptance command exits successfully and reports p50, p95, and maximum latency
 
 #### Scenario: Credentials cleared
 
@@ -125,13 +143,15 @@ The system SHALL allow an admin to enter, update, and clear each channel's crede
 
 ### Requirement: Secure credential storage
 
-The system SHALL store chat platform credentials encrypted at rest using a symmetric key supplied by environment variable, SHALL never return a credential value in plaintext through the API or the console, and SHALL fail startup when the encryption key is missing or invalid rather than falling back to plaintext.
+The system SHALL encrypt chat platform credentials with Fernet before storing
+them in SQLite, SHALL keep the encryption key outside the database, and SHALL
+never return a usable credential through the API or console.
 
-#### Scenario: Credential encrypted on save
+#### Scenario: Credential encrypted at rest
 
 - **WHEN** an admin saves a credential
-- **THEN** the value is encrypted before being persisted
-- **AND** the persisted value is not readable without the encryption key
+- **THEN** SQLite stores Fernet ciphertext rather than the plaintext value
+- **AND** the encryption key remains in the process environment or private `.env`
 
 #### Scenario: Credential returned masked
 
@@ -139,28 +159,22 @@ The system SHALL store chat platform credentials encrypted at rest using a symme
 - **THEN** only the last four characters of the credential are included
 - **AND** the full value is never sent to the console
 
-#### Scenario: Missing encryption key blocks startup
+#### Scenario: Encryption configuration fails closed
 
-- **WHEN** the service starts without a valid credential encryption key
-- **THEN** startup fails with an error naming the missing environment variable
-- **AND** no credential is stored or read unencrypted
+- **WHEN** the credential-encryption key is missing or invalid
+- **THEN** startup fails with a clear configuration error
+- **AND** no plaintext fallback is written to SQLite, configuration, or logs
 
-#### Scenario: Encryption key never persisted
+#### Scenario: Secret value never persisted in configuration
 
 - **WHEN** credentials are stored
-- **THEN** the encryption key is read from the environment only
-- **AND** it does not appear in the database or the configuration file
+- **THEN** the plaintext credential value does not appear in the database or configuration file
 
-#### Scenario: Undecryptable credential reported
+#### Scenario: Credential cannot be decrypted
 
-- **WHEN** a stored credential cannot be decrypted with the current key
-- **THEN** the channel reports Disconnected with a message stating the credential must be re-entered
+- **WHEN** stored ciphertext does not match the configured encryption key
+- **THEN** the channel reports Disconnected with a sanitized decryption error
 - **AND** the service continues running
-
-#### Scenario: Environment fallback for first run
-
-- **WHEN** no credential is stored for a channel and a corresponding environment variable is set
-- **THEN** that value is used and the console indicates it came from the environment
 
 ### Requirement: Channel-appropriate outbound formatting
 

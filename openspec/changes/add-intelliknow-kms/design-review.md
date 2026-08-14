@@ -1,5 +1,9 @@
 # IntelliKnow KMS Design Review
 
+> Historical review of the original plan. Resolved decisions and current
+> implementation status live in `design.md`, `traceability.md`, and
+> `docs/REQUIREMENTS-AUDIT.md`; this file is retained as review history.
+
 Reviewed against `AD, Tech Lead, AKP.docx` and the seven-day, solo-developer MVP constraint.
 
 ## Overall assessment
@@ -134,4 +138,3 @@ Hybrid BM25 retrieval should be added only if the sample/golden questions prove 
 - Query history records timestamp, channel, intent, confidence, response, citations, status, and latency.
 - Analytics show common intent spaces and most accessed documents and can be exported.
 - The complete demo path meets the three-second target under a documented test setup.
-
