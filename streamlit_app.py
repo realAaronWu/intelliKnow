@@ -557,16 +557,34 @@ def knowledge_base() -> None:
         if not table:
             st.info("No documents match these filters.", icon=":material/search_off:")
             return
-        selection = st.dataframe(
-            table,
-            hide_index=True,
-            width="stretch",
-            on_select="rerun",
-            selection_mode="single-row",
-            key="document-table",
-        )
-        selected_rows = selection.selection.rows
-        selected_id = table[selected_rows[0]]["ID"] if selected_rows else table[0]["ID"]
+        document_ids = [item["ID"] for item in table]
+        selected_id = st.session_state.get("selected-document-id")
+        if selected_id not in document_ids:
+            selected_id = document_ids[0]
+            st.session_state["selected-document-id"] = selected_id
+
+        header = st.columns([3, 1.2, 0.8, 1, 1.1, 1.1])
+        for column, label in zip(
+            header,
+            ("Document", "Uploaded", "Format", "Size", "Intent", "Status"),
+        ):
+            column.caption(label.upper())
+        for item in table:
+            row = st.columns([3, 1.2, 0.8, 1, 1.1, 1.1], vertical_alignment="center")
+            if row[0].button(
+                item["Document Name"],
+                key=f"select-document-{item['ID']}",
+                type="primary" if item["ID"] == selected_id else "secondary",
+                icon=":material/description:",
+                use_container_width=True,
+            ):
+                selected_id = item["ID"]
+                st.session_state["selected-document-id"] = selected_id
+            row[1].write(item["Upload Date"])
+            row[2].write(item["Format"])
+            row[3].write(item["Size"])
+            row[4].write(item["Intent"].title())
+            row[5].write(item["Status"])
         detail = _call(_client().get, f"/documents/{selected_id}")
         if detail:
             st.divider()
