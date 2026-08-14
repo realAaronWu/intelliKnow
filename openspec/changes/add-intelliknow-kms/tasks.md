@@ -62,3 +62,12 @@ The implementation is organized by delivered increments, followed by a stabiliza
 - [x] 6.6 Complete Analytics, query detail, filters, and CSV export
 - [ ] 6.7 Run full demo, labelled quality checks, latency checks, and five-view acceptance
 - [x] 6.8 Complete README, integration/setup guides, troubleshooting, and AI usage notes
+
+## 7. Production frontend integration credentials
+
+- [x] 7.1 Add versioned SecretStore implementations for Azure Key Vault, macOS Keychain, and tests
+- [x] 7.2 Store only secret references and lifecycle metadata in the application database
+- [x] 7.3 Migrate legacy Fernet ciphertext to the configured secret store and clear it atomically
+- [ ] 7.4 Stage and provider-validate Telegram and Teams replacements before activation
+- [ ] 7.5 Add rotation, rollback, emergency disable, bounded caching, and credential audit records
+- [ ] 7.6 Add Teams certificate authentication and remove the legacy ciphertext migration path

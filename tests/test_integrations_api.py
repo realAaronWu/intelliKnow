@@ -12,6 +12,7 @@ from app.api.integrations import build_integrations_router
 from app.channels.store import ChannelStore
 from app.channels.tester import ChannelTestResult
 from app.db import create_engine_for, init_schema, integrations
+from app.secrets import MemorySecretStore
 
 
 class FakeTester:
@@ -29,7 +30,11 @@ class FakeTester:
 def _app(tmp_path):
     engine = create_engine_for(tmp_path / "api.db")
     init_schema(engine)
-    store = ChannelStore(engine, Fernet.generate_key().decode("ascii"))
+    store = ChannelStore(
+        engine,
+        Fernet.generate_key().decode("ascii"),
+        secret_store=MemorySecretStore(),
+    )
     store.initialize("telegram", enabled=False)
     store.initialize("teams", enabled=False)
     tester = FakeTester()
@@ -66,7 +71,7 @@ def test_all_integration_routes_require_admin_bearer(tmp_path):
     )
 
 
-def test_save_returns_masked_credential_and_persists_ciphertext(tmp_path):
+def test_save_returns_masked_credential_and_persists_only_a_reference(tmp_path):
     app, engine, _, _ = _app(tmp_path)
     client = _client(app)
 
@@ -82,12 +87,16 @@ def test_save_returns_masked_credential_and_persists_ciphertext(tmp_path):
     assert body["credentials"] == {"token": "****7890", "source": "stored"}
     assert "telegram-secret-7890" not in response.text
     with engine.connect() as conn:
-        raw = conn.execute(
-            select(integrations.c.credentials_encrypted).where(
-                integrations.c.channel == "telegram"
-            )
-        ).scalar_one()
-    assert "telegram-secret-7890" not in raw
+        row = conn.execute(
+            select(
+                integrations.c.credentials_encrypted,
+                integrations.c.secret_name,
+                integrations.c.active_secret_version,
+            ).where(integrations.c.channel == "telegram")
+        ).one()
+    assert row.credentials_encrypted is None
+    assert row.secret_name == "intelliknow-telegram-credentials"
+    assert row.active_secret_version
 
 
 def test_list_never_returns_the_reply_reference_or_plaintext(tmp_path):
@@ -122,6 +131,19 @@ def test_enable_requires_credentials_and_disable_retains_them(tmp_path):
     assert disabled.status_code == 200
     assert disabled.json()["enabled"] is False
     assert store.load_credentials("telegram") is not None
+
+
+def test_teams_can_be_enabled_without_credentials_for_loopback_emulator(tmp_path):
+    app, _, store, _ = _app(tmp_path)
+
+    response = _client(app).patch(
+        "/admin/integrations/teams/enabled", json={"enabled": True}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is True
+    assert response.json()["configured"] is False
+    assert store.is_enabled("teams") is True
 
 
 def test_clear_removes_stored_credentials_and_destination(tmp_path):

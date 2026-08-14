@@ -97,7 +97,11 @@ def build_integrations_router(
                 credentials = store.load_credentials(channel)
             except CredentialError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            if credentials is None:
+            # Teams supports a credential-free Bot Framework Emulator only
+            # on loopback. TeamsEndpoint independently rejects credential-free
+            # non-loopback requests, so enabling this state does not expose a
+            # public unauthenticated bot endpoint.
+            if credentials is None and channel != "teams":
                 raise HTTPException(
                     status_code=400,
                     detail=f"{channel} credentials must be configured before enabling",

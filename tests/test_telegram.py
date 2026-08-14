@@ -15,6 +15,7 @@ from app.channels.telegram import (
 from app.main import _poller_lifespan
 from app.db import create_engine_for, init_schema
 from app.channels.store import ChannelStore
+from app.secrets import MemorySecretStore
 
 
 TEXT_UPDATE = {
@@ -92,7 +93,11 @@ class FakeHandler:
 def _store(tmp_path, *, token="token-one"):
     engine = create_engine_for(tmp_path / "telegram.db")
     init_schema(engine)
-    store = ChannelStore(engine, Fernet.generate_key().decode("ascii"))
+    store = ChannelStore(
+        engine,
+        Fernet.generate_key().decode("ascii"),
+        secret_store=MemorySecretStore(),
+    )
     store.save_credentials("telegram", {"token": token})
     store.set_enabled("telegram", True)
     return store

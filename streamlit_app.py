@@ -6,9 +6,12 @@ import os
 import time
 from datetime import date, datetime, timedelta, timezone
 from html import escape
+from urllib.parse import urlencode
 
 import streamlit as st
+import streamlit.components.v1 as components
 
+from app.api.auth import ADMIN_SESSION_COOKIE
 from app.ui.client import APIClient, APIError
 from app.ui.style import apply_style, page_header, section_title, status_label
 
@@ -42,8 +45,43 @@ def _call(method, *args, **kwargs):
         return None
 
 
+def _browser_session_url(path: str, **params: str) -> str:
+    base_url = st.session_state.get(
+        "api_url", os.getenv("INTELLIKNOW_API_URL", "http://127.0.0.1:8000")
+    ).rstrip("/")
+    query = f"?{urlencode(params)}" if params else ""
+    return f"{base_url}{path}{query}"
+
+
+def _render_browser_session_action() -> None:
+    url = st.session_state.pop("_admin_browser_action", None)
+    if url:
+        components.iframe(url, height=1, scrolling=False)
+
+
+def _restore_admin_session() -> bool:
+    if st.session_state.get("_skip_cookie_restore"):
+        return False
+    token = st.context.cookies.get(ADMIN_SESSION_COOKIE)
+    if not token:
+        return False
+    api_url = st.session_state.get(
+        "api_url", os.getenv("INTELLIKNOW_API_URL", "http://127.0.0.1:8000")
+    ).rstrip("/")
+    try:
+        APIClient(api_url, token).get("/admin/session")
+    except APIError:
+        return False
+    st.session_state.api_url = api_url
+    st.session_state.admin_token = token
+    st.session_state.authenticated = True
+    return True
+
+
 def _sign_in() -> bool:
     if st.session_state.get("authenticated"):
+        return True
+    if _restore_admin_session():
         return True
     left, middle, right = st.columns([1, 1.15, 1])
     with middle:
@@ -67,15 +105,22 @@ def _sign_in() -> bool:
                     "Sign in", type="primary", icon=":material/login:", width="stretch"
                 )
             if submitted:
-                candidate = APIClient(api_url, password)
+                normalized_url = api_url.rstrip("/")
+                candidate = APIClient(normalized_url, "")
                 try:
-                    candidate.get("/admin/session")
+                    session = candidate.post(
+                        "/admin/session/login", json={"password": password}
+                    )
                 except APIError as exc:
                     st.error(str(exc), icon=":material/lock:")
                 else:
-                    st.session_state.api_url = api_url.rstrip("/")
-                    st.session_state.admin_token = password
+                    st.session_state.api_url = normalized_url
+                    st.session_state.admin_token = session["token"]
                     st.session_state.authenticated = True
+                    st.session_state.pop("_skip_cookie_restore", None)
+                    st.session_state._admin_browser_action = _browser_session_url(
+                        "/admin/session/browser", ticket=session["browser_ticket"]
+                    )
                     st.rerun()
     return False
 
@@ -92,6 +137,10 @@ def _sidebar() -> str:
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
         st.caption(st.session_state.api_url)
         if st.button("Sign out", icon=":material/logout:", width="stretch"):
+            st.session_state._admin_browser_action = _browser_session_url(
+                "/admin/session/logout"
+            )
+            st.session_state._skip_cookie_restore = True
             for key in ("authenticated", "admin_token"):
                 st.session_state.pop(key, None)
             st.rerun()
@@ -211,7 +260,7 @@ def frontend_integration() -> None:
                 setup = (
                     "Create a bot with Telegram BotFather, then enter its bot token."
                     if channel == "telegram"
-                    else "Register a Microsoft Bot application, then enter its application ID and password."
+                    else "Use Local Emulator without a Microsoft account, or enter registered Microsoft Bot credentials for real Teams."
                 )
                 st.info(setup, icon=":material/key:")
             if item.get("last_ok_at"):
@@ -219,6 +268,39 @@ def frontend_integration() -> None:
             if item.get("credential_error"):
                 st.error(item["credential_error"], icon=":material/lock:")
             with st.expander("Configuration", expanded=not item["configured"]):
+                if channel == "teams" and not item["configured"]:
+                    st.caption("LOCAL DEMO")
+                    st.write(
+                        "Bot Framework Emulator can connect from this laptop without "
+                        "an application ID or password. Non-local requests remain blocked."
+                    )
+                    local_action = "Disable local Emulator" if item["enabled"] else "Enable local Emulator"
+                    if st.button(
+                        local_action,
+                        key="teams-local-emulator",
+                        icon=(
+                            ":material/stop_circle:"
+                            if item["enabled"]
+                            else ":material/play_circle:"
+                        ),
+                    ):
+                        if _call(
+                            _client().patch,
+                            "/admin/integrations/teams/enabled",
+                            json={"enabled": not item["enabled"]},
+                        ) is not None:
+                            st.session_state["teams-local-emulator-message"] = (
+                                "Local Emulator enabled. Connect to the API's /api/messages endpoint."
+                                if not item["enabled"]
+                                else "Local Emulator disabled."
+                            )
+                            st.rerun()
+                    if message := st.session_state.pop(
+                        "teams-local-emulator-message", None
+                    ):
+                        st.success(message, icon=":material/check_circle:")
+                    st.divider()
+                    st.caption("REAL MICROSOFT TEAMS")
                 with st.form(f"config-{channel}"):
                     credentials = _credential_fields(channel)
                     enabled = st.toggle("Enabled", value=item["enabled"])
@@ -499,12 +581,124 @@ def knowledge_base() -> None:
                     st.write(chunk["text"])
 
 
+def _classification_review(intents: list[dict]) -> None:
+    queries = _call(_client().get, "/admin/queries", params={"limit": 50})
+    if not queries or not queries["items"]:
+        with st.container(border=True):
+            section_title("Review classifications", "No queries yet")
+            st.info("No query classifications have been logged yet.", icon=":material/history:")
+        return
+
+    items = queries["items"]
+    unreviewed_count = sum(item["reviewed_correct"] is None for item in items)
+    with st.container(border=True):
+        section_title(
+            "Review classifications",
+            f"{unreviewed_count} need review" if unreviewed_count else "Up to date",
+        )
+        review_filter = st.segmented_control(
+            "Review status",
+            ["Needs review", "All recent", "Reviewed"],
+            default="Needs review",
+        )
+        if review_filter == "Needs review":
+            visible_items = [item for item in items if item["reviewed_correct"] is None]
+        elif review_filter == "Reviewed":
+            visible_items = [item for item in items if item["reviewed_correct"] is not None]
+        else:
+            visible_items = items
+
+        if not visible_items:
+            st.success("All recent classifications have an expected intent.")
+            return
+
+        table = [
+            {
+                "Detected intent": (item["intent_slug"] or "Unavailable").title(),
+                "Expected intent": (
+                    item["expected_intent_slug"].title()
+                    if item["expected_intent_slug"]
+                    else "Not reviewed"
+                ),
+                "Confidence": item["confidence"],
+                "Question": item["question"],
+                "Response": item["status"].replace("_", " ").title(),
+                "Time": item["created_at"],
+            }
+            for item in visible_items
+        ]
+        selection = st.dataframe(
+            table,
+            hide_index=True,
+            width="stretch",
+            on_select="rerun",
+            selection_mode="single-row",
+            key=f"classification-review-{review_filter}",
+            column_config={
+                "Detected intent": st.column_config.TextColumn(width="small"),
+                "Expected intent": st.column_config.TextColumn(width="small"),
+                "Question": st.column_config.TextColumn(width="large"),
+                "Confidence": st.column_config.NumberColumn(format="percent"),
+            },
+        )
+        selected_rows = selection.selection.rows
+        selected_index = selected_rows[0] if selected_rows else 0
+        selected = visible_items[selected_index]
+        intent_slugs = [item["slug"] for item in intents]
+        default_intent = selected["expected_intent_slug"] or selected["intent_slug"]
+        default_index = (
+            intent_slugs.index(default_intent) if default_intent in intent_slugs else 0
+        )
+
+        st.divider()
+        st.caption("SELECTED QUESTION")
+        st.write(f"**{selected['question']}**")
+        detected, confidence, response = st.columns(3)
+        detected.caption("DETECTED INTENT")
+        detected.write(f"**{(selected['intent_slug'] or 'Unavailable').title()}**")
+        confidence.caption("CONFIDENCE")
+        confidence.write(
+            f"**{selected['confidence']:.0%}**"
+            if selected["confidence"] is not None
+            else "**Unavailable**"
+        )
+        response.caption("RESPONSE")
+        response.write(f"**{selected['status'].replace('_', ' ').title()}**")
+
+        with st.form(f"classification-review-form-{selected['id']}"):
+            expected = st.selectbox(
+                "Expected intent",
+                intent_slugs,
+                index=default_index,
+                format_func=str.title,
+            )
+            save_review = st.form_submit_button(
+                "Save expected intent",
+                type="primary",
+                icon=":material/check_circle:",
+            )
+        if save_review:
+            result = _call(
+                _client().put,
+                f"/admin/queries/{selected['id']}/review",
+                json={"expected_intent_slug": expected},
+            )
+            if result:
+                verdict = "correct" if result["reviewed_correct"] else "incorrect"
+                st.session_state["classification-review-saved"] = (
+                    f"Expected intent saved. The original classification was {verdict}."
+                )
+                st.rerun()
+
+
 def intent_configuration() -> None:
     page_header("Intent Configuration", "Tune routing domains and review classification outcomes.", "purple")
     intents = _call(_client().get, "/admin/intents")
     config = _call(_client().get, "/admin/config")
     if intents is None or config is None:
         return
+    if message := st.session_state.pop("classification-review-saved", None):
+        st.success(message, icon=":material/check_circle:")
     cols = st.columns(3)
     for index, item in enumerate(intents):
         with cols[index % 3]:
@@ -593,41 +787,7 @@ def intent_configuration() -> None:
                 )
                 if result:
                     st.success("Thresholds apply to the next query.")
-    with st.container(border=True):
-        section_title("Classification log", "Review outcomes")
-        queries = _call(_client().get, "/admin/queries", params={"limit": 20})
-        if not queries or not queries["items"]:
-            st.info("No query classifications have been logged yet.", icon=":material/history:")
-            return
-        table = [
-            {
-                "ID": item["id"],
-                "Time": item["created_at"],
-                "Query": item["question"],
-                "Intent": item["intent_slug"],
-                "Confidence": f"{(item['confidence'] or 0):.0%}",
-                "Status": item["status"].replace("_", " ").title(),
-                "Reviewed": "Yes" if item["reviewed_correct"] is not None else "No",
-            }
-            for item in queries["items"]
-        ]
-        st.dataframe(table, hide_index=True, width="stretch")
-        review_cols = st.columns([1, 2, 2])
-        query_id = review_cols[0].selectbox(
-            "Query ID", [item["id"] for item in queries["items"]]
-        )
-        expected = review_cols[1].selectbox("Expected intent", [item["slug"] for item in intents])
-        if review_cols[2].button("Record review", type="primary", icon=":material/rate_review:"):
-            result = _call(
-                _client().put,
-                f"/admin/queries/{query_id}/review",
-                json={"expected_intent_slug": expected},
-            )
-            if result:
-                verdict = "correct" if result["reviewed_correct"] else "incorrect"
-                st.success(f"Review saved: classification was {verdict}.")
-                time.sleep(0.3)
-                st.rerun()
+    _classification_review(intents)
 
 
 def _date_params(period: str) -> dict[str, str]:
@@ -713,6 +873,11 @@ def analytics() -> None:
                 "Question": item["question"],
                 "Intent": item["intent_slug"],
                 "Confidence": f"{(item['confidence'] or 0):.0%}",
+                "Best relevance": (
+                    f"{item['best_relevance']:.0%}"
+                    if item["best_relevance"] is not None
+                    else ""
+                ),
                 "Status": item["status"].replace("_", " ").title(),
                 "Latency": f"{item['latency_ms']} ms" if item["latency_ms"] is not None else "",
             }
@@ -729,7 +894,15 @@ def analytics() -> None:
                 st.write(detail["answer"])
             if detail.get("error"):
                 st.error(detail["error"], icon=":material/error:")
-            st.caption(f"{detail['intent_slug']} · {detail['latency_ms']} ms · {detail['status']}")
+            relevance_label = (
+                f" · relevance {detail['best_relevance']:.0%}"
+                if detail["best_relevance"] is not None
+                else ""
+            )
+            st.caption(
+                f"{detail['intent_slug']} · {detail['latency_ms']} ms · "
+                f"{detail['status']}{relevance_label}"
+            )
             timings = detail.get("timings_ms") or {}
             if timings:
                 st.dataframe(
@@ -748,6 +921,7 @@ def analytics() -> None:
                 )
 
 
+_render_browser_session_action()
 if _sign_in():
     selected_view = _sidebar()
     {

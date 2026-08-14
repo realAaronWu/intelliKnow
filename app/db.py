@@ -94,6 +94,7 @@ query_log = Table(
     Column("retrieved_doc_ids_json", Text, nullable=True),
     Column("retrieved_documents_json", Text, nullable=True),
     Column("latency_ms", Integer, nullable=True),
+    Column("best_relevance", Float, nullable=True),
     Column("timings_json", Text, nullable=True),
     Column("error", Text, nullable=True),
     Column("expected_intent_slug", String, nullable=True),
@@ -107,7 +108,19 @@ integrations = Table(
     Column("channel", String, primary_key=True),
     Column("display_name", String, nullable=False),
     Column("enabled", Boolean, nullable=False, default=False),
+    # Legacy migration source only. New credential writes use the external
+    # secret store and persist references in the columns below.
     Column("credentials_encrypted", Text, nullable=True),
+    Column("secret_name", String, nullable=True),
+    Column("active_secret_version", String, nullable=True),
+    Column("previous_secret_version", String, nullable=True),
+    Column("pending_secret_version", String, nullable=True),
+    Column("credential_type", String, nullable=True),
+    Column("credential_status", String, nullable=True),
+    Column("external_identity", String, nullable=True),
+    Column("credential_configured_at", String, nullable=True),
+    Column("credential_verified_at", String, nullable=True),
+    Column("credential_verification_error", Text, nullable=True),
     Column("status", String, nullable=True),
     Column("last_ok_at", String, nullable=True),
     Column("last_error", Text, nullable=True),
@@ -228,16 +241,31 @@ def init_schema(engine: Engine) -> None:
             row.name
             for row in conn.execute(text("PRAGMA table_info(integrations)")).mappings()
         }
-        if "last_error_at" not in integration_columns:
-            conn.execute(text("ALTER TABLE integrations ADD COLUMN last_error_at TEXT"))
-        if "last_reply_ref" not in integration_columns:
-            conn.execute(text("ALTER TABLE integrations ADD COLUMN last_reply_ref TEXT"))
+        for name, sql_type in (
+            ("last_error_at", "TEXT"),
+            ("last_reply_ref", "TEXT"),
+            ("secret_name", "VARCHAR"),
+            ("active_secret_version", "VARCHAR"),
+            ("previous_secret_version", "VARCHAR"),
+            ("pending_secret_version", "VARCHAR"),
+            ("credential_type", "VARCHAR"),
+            ("credential_status", "VARCHAR"),
+            ("external_identity", "VARCHAR"),
+            ("credential_configured_at", "VARCHAR"),
+            ("credential_verified_at", "VARCHAR"),
+            ("credential_verification_error", "TEXT"),
+        ):
+            if name not in integration_columns:
+                conn.execute(
+                    text(f"ALTER TABLE integrations ADD COLUMN {name} {sql_type}")
+                )
         query_columns = {
             row.name
             for row in conn.execute(text("PRAGMA table_info(query_log)")).mappings()
         }
         for name, sql_type in (
             ("retrieved_documents_json", "TEXT"),
+            ("best_relevance", "FLOAT"),
             ("expected_intent_slug", "TEXT"),
             ("reviewed_correct", "BOOLEAN"),
             ("reviewed_at", "TEXT"),

@@ -8,8 +8,8 @@ The recommended commands are written for macOS and `zsh`, but the application it
 
 ```mermaid
 flowchart LR
-    Admin["Admin browser"] -->|"http://127.0.0.1:8501"| UI["Streamlit console"]
-    UI -->|"Bearer-authenticated HTTP"| API["FastAPI, one worker"]
+    Admin["Admin browser"] -->|"HTTPS, 127.0.0.1:8501"| UI["Streamlit console"]
+    UI -->|"Bearer-authenticated HTTPS"| API["FastAPI, one worker"]
     Telegram["Telegram"] -->|"Long polling"| API
     Emulator["Teams Bot Framework Emulator"] -->|"POST /api/messages"| API
     API --> DB["SQLite and FTS5"]
@@ -40,7 +40,7 @@ For a laptop that has already been installed and configured:
 ```bash
 cd /Users/aaron/workspace/intelliKnow
 ./scripts/laptop-demo start
-# Open http://127.0.0.1:8501
+# Open https://127.0.0.1:8501
 # After the demo:
 ./scripts/laptop-demo stop
 ```
@@ -100,12 +100,6 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-Generate the credential-encryption key:
-
-```bash
-uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-```
-
 Open `.env` in a text editor and set:
 
 ```dotenv
@@ -114,7 +108,6 @@ HF_TOKEN=your-hugging-face-read-token
 HF_HUB_DISABLE_XET=0
 HF_XET_HIGH_PERFORMANCE=1
 ADMIN_PASSWORD=use-at-least-12-private-characters
-CREDENTIAL_ENCRYPTION_KEY=paste-the-generated-fernet-key
 ```
 
 Create the credentials from their official services:
@@ -124,20 +117,22 @@ Create the credentials from their official services:
 | `ANTHROPIC_API_KEY` | The organization's Anthropic Console account | Yes for the checked-in provider configuration |
 | `HF_TOKEN` | A Read token from [Hugging Face access tokens](https://huggingface.co/settings/tokens) | Recommended for authenticated, higher-limit model downloads |
 | `ADMIN_PASSWORD` | A new private password chosen for this deployment | Yes; use at least 12 characters |
-| `CREDENTIAL_ENCRYPTION_KEY` | The Fernet generation command above | Yes |
-| `TELEGRAM_BOT_TOKEN` | Telegram `@BotFather` | Only for a Telegram demo |
-| `TEAMS_APP_ID` and `TEAMS_APP_PASSWORD` | Microsoft Entra/Azure Bot registration | Only for real Teams; not needed by the local Emulator demo |
 
 The recommended Xet settings provide visible, resumable transfers and enable
 additional download concurrency. If Xet cannot establish TLS through a
 particular corporate proxy, set `HF_HUB_DISABLE_XET=1` and retry with the
 standard HTTPS downloader.
 
-For a brand-new knowledge base, generate a new Fernet key on that laptop. For
-a restored or transferred `data/intelliknow.db`, securely provide the original
-`CREDENTIAL_ENCRYPTION_KEY` through the organization's password manager or
-secret store. A new key cannot decrypt Telegram or Teams credentials already
-stored in that database.
+Enter Telegram and Teams credentials only on the **Frontend Integrations**
+page. The laptop deployment stores them in the signed-in user's macOS Keychain;
+they are not written to `.env` or SQLite.
+
+Only an installation created before secret-store support may need
+`CREDENTIAL_ENCRYPTION_KEY`. For a restored legacy `data/intelliknow.db`,
+provide the original key in `.env` for one successful startup. IntelliKnow
+migrates the encrypted channel credentials to Keychain and clears the legacy
+database values. Remove the key from `.env` after confirming both integrations
+remain configured.
 
 If the laptop uses a local HTTP proxy, set all outbound proxy variables to its
 HTTP URL. For the MonoProxy setup used by this demo:
@@ -201,7 +196,7 @@ Run:
 ./scripts/laptop-demo preflight
 ```
 
-This validates the required secrets and Fernet key, then makes one real
+This validates the required secrets, then makes one real
 structured LLM request, one embedding call, and one two-passage reranker call.
 Startup uses cache-only mode and never downloads a model. It fails immediately
 with a `download-models` instruction when either local model is absent. It also
@@ -226,6 +221,20 @@ Make sure no older IntelliKnow process is running, then use one command:
 ./scripts/laptop-demo start
 ```
 
+HTTPS is enabled by default. On the first start, the helper uses `mkcert` to
+trust a local development certificate authority in the user's macOS login keychain and
+generates a certificate for `localhost`, `127.0.0.1`, and `::1`. macOS may ask
+you to unlock the login keychain. If `mkcert` is not installed, run:
+
+```bash
+brew install mkcert
+./scripts/laptop-demo setup-https
+```
+
+Certificate files are stored under `.run/laptop-demo/tls/`, which Git ignores.
+Do not share the generated private key or local root CA. To explicitly run an
+HTTP-only demo, use `INTELLIKNOW_HTTPS=0 ./scripts/laptop-demo start`.
+
 The helper performs these steps in order:
 
 1. Validates files and secrets.
@@ -236,9 +245,19 @@ The helper performs these steps in order:
 6. Waits for the console port to become available.
 7. Prints the URLs and log directory.
 
-Open [http://127.0.0.1:8501](http://127.0.0.1:8501), then sign in with the value of `ADMIN_PASSWORD`.
+Open [https://127.0.0.1:8501](https://127.0.0.1:8501), then sign in with the value of
+`ADMIN_PASSWORD`. IntelliKnow exchanges the password for an eight-hour browser
+session. Refreshing the page does not require another login. Use **Sign out** on
+the left when leaving the laptop; this removes the session cookie immediately.
 
-The API documentation is available at [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs).
+Use the same hostname in both URLs, as the helper does by default. For example,
+do not open Streamlit as `localhost:8501` while configuring the API as
+`127.0.0.1:8000`, because browser cookies are scoped by hostname. A production
+deployment should expose the API and console through HTTPS; IntelliKnow then
+marks the session cookie `Secure` in addition to `HttpOnly` and
+`SameSite=Strict`.
+
+The API documentation is available at [https://127.0.0.1:8000/docs](https://127.0.0.1:8000/docs).
 
 Check status at any time:
 
@@ -280,8 +299,9 @@ Do not trust a plausible answer without a verified source. For HR, legal, or fin
 Telegram is the easiest real chat demo because it uses outbound polling and needs no public URL.
 
 1. Create the bot with Telegram's verified `@BotFather`.
-2. Put `TELEGRAM_BOT_TOKEN` in `.env`, or save it in **Frontend Integration**.
-3. Restart IntelliKnow:
+2. Open **Frontend Integration**, enter the token, and select **Save**. The
+   token is stored in macOS Keychain.
+3. Restart IntelliKnow only if it is not already running:
 
    ```bash
    ./scripts/laptop-demo restart
@@ -354,7 +374,11 @@ mkdir -p backups
 tar -czf "backups/intelliknow-data-$(date +%Y%m%d-%H%M%S).tar.gz" data config.yaml
 ```
 
-Store `.env` separately in an approved password manager or secret store. A restored database with encrypted integration credentials also needs the original `CREDENTIAL_ENCRYPTION_KEY`.
+Store `.env` separately in an approved password manager or secret store. Back
+up or transfer Keychain credentials using the organization's approved macOS
+device-management procedure; SQLite backups contain references, not usable
+Telegram or Teams credentials. A legacy database that has not yet been
+migrated also needs its original `CREDENTIAL_ENCRYPTION_KEY` for one startup.
 
 To restore, stop IntelliKnow, restore `data/` and `config.yaml` together, restore the matching secrets securely, run `preflight`, then start.
 

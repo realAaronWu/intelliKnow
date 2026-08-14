@@ -40,10 +40,6 @@ def _retryable(exc: ClassificationError) -> HTTPException:
 def build_admin_router(service: AdminService) -> APIRouter:
     router = APIRouter(prefix="/admin")
 
-    @router.get("/session")
-    def session() -> dict:
-        return {"authenticated": True}
-
     @router.get("/dashboard")
     def dashboard() -> dict:
         return service.dashboard()

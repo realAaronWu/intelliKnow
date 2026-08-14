@@ -284,6 +284,7 @@ def test_12_3_empty_knowledge_base_is_no_match_not_an_error(
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "no_match"
+    assert body["best_relevance"] is None
     assert len(generate_llm.calls) == 0
 
 

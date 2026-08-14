@@ -40,12 +40,6 @@ uv sync
 cp .env.example .env
 ```
 
-Generate the required encryption key:
-
-```bash
-uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-```
-
 Set at least these values in `.env`:
 
 ```dotenv
@@ -53,7 +47,6 @@ ANTHROPIC_API_KEY=your-anthropic-api-key
 HF_TOKEN=your-hugging-face-read-token
 HF_HUB_DISABLE_XET=1
 ADMIN_PASSWORD=choose-a-private-password
-CREDENTIAL_ENCRYPTION_KEY=paste-the-generated-key
 ```
 
 Each laptop creates its own `.env` from the credential-free template; never copy
@@ -77,21 +70,31 @@ For the recommended laptop deployment, follow [IntelliKnow Laptop Demo Deploymen
 models to report ready; interrupted transfers can be resumed with the same
 command.
 
-The equivalent manual commands are below.
+The equivalent HTTPS commands are below after running
+`./scripts/laptop-demo setup-https`.
 
 Start the API with one worker:
 
 ```bash
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 \
+  --ssl-certfile .run/laptop-demo/tls/localhost.pem \
+  --ssl-keyfile .run/laptop-demo/tls/localhost-key.pem
 ```
 
 In a second terminal, start the console:
 
 ```bash
-INTELLIKNOW_API_URL=http://127.0.0.1:8000 uv run streamlit run streamlit_app.py
+INTELLIKNOW_API_URL=https://127.0.0.1:8000 \
+INTELLIKNOW_CA_CERT=.run/laptop-demo/tls/rootCA.pem \
+uv run streamlit run streamlit_app.py \
+  --server.sslCertFile .run/laptop-demo/tls/localhost.pem \
+  --server.sslKeyFile .run/laptop-demo/tls/localhost-key.pem
 ```
 
-Open [http://127.0.0.1:8501](http://127.0.0.1:8501) and sign in with `ADMIN_PASSWORD`.
+Open [https://127.0.0.1:8501](https://127.0.0.1:8501) and sign in with
+`ADMIN_PASSWORD`. The console keeps that browser signed in for eight hours across
+page refreshes. **Sign out** clears the session immediately; the password itself
+is never stored in the browser cookie.
 
 ## First demo
 
@@ -124,7 +127,7 @@ Slow tests that load real models are intentionally excluded by the default pytes
 
 ## Troubleshooting
 
-**API will not start:** ensure `ADMIN_PASSWORD` and a valid Fernet `CREDENTIAL_ENCRYPTION_KEY` are set.
+**API will not start:** ensure `ADMIN_PASSWORD` and the configured AI-provider key are set. For a legacy database containing encrypted channel credentials, provide its original `CREDENTIAL_ENCRYPTION_KEY` for one migration startup.
 
 **Console cannot connect:** confirm the API is running and `INTELLIKNOW_API_URL` points to the correct port.
 

@@ -256,6 +256,7 @@ class AdminService:
             "question": row["question"],
             "intent_slug": row["intent_slug"],
             "confidence": row["confidence"],
+            "best_relevance": row["best_relevance"],
             "classified_by": row["classified_by"],
             "fallback_used": bool(row["fallback_used"]),
             "status": row["status"],
@@ -423,6 +424,7 @@ class AdminService:
             ).mappings().all()
         fields = [
             "id", "created_at", "channel", "question", "intent_slug", "confidence",
+            "best_relevance",
             "classified_by", "fallback_used", "status", "answer", "citations_json",
             "retrieved_doc_ids_json", "latency_ms", "error", "expected_intent_slug",
             "timings_json",

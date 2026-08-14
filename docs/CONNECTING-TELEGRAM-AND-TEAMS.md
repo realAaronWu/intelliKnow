@@ -59,11 +59,9 @@ You need access to the computer running IntelliKnow and a Telegram account.
 1. In Telegram, open the verified [**@BotFather**](https://t.me/BotFather) account.
 2. Send `/newbot` and follow the prompts. Choose a username ending in `bot`.
 3. BotFather displays the bot token. Treat it like a password.
-4. On the IntelliKnow computer, open `.env` and add:
-
-   ```dotenv
-   TELEGRAM_BOT_TOKEN=the-token-from-BotFather
-   ```
+4. Open IntelliKnow's admin console, select **Frontend Integration**, enter the
+   token under **Telegram**, and select **Save**. IntelliKnow stores it in the
+   configured secret manager (macOS Keychain for the laptop demo).
 
 5. If Telegram requires your organization's proxy, add the proxy variables used by your network. Example:
 
@@ -98,12 +96,9 @@ This setup normally requires help from a Microsoft 365 or Azure administrator. Y
    ```
 
 7. Enter that full address as the bot's messaging endpoint in Azure.
-8. On the IntelliKnow computer, add the credentials to `.env`:
-
-   ```dotenv
-   TEAMS_APP_ID=the-application-client-id
-   TEAMS_APP_PASSWORD=the-client-secret-value
-   ```
+8. In IntelliKnow's **Frontend Integration** page, enter the application ID and
+   client-secret value under **Microsoft Teams**, then select **Save**. Do not
+   enter the secret ID.
 
 9. In `config.yaml`, set `channels.teams.enabled` to `true` and set `public_base_url` to the public HTTPS base address.
 10. Restart IntelliKnow.

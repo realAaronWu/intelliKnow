@@ -138,6 +138,21 @@ class StorageConfig(_StrictModel):
     upload_dir: str = "./data/uploads"
 
 
+class SecretStoreConfig(_StrictModel):
+    provider: Literal["macos-keychain", "azure-key-vault"] = "macos-keychain"
+    keychain_service: str = Field(default="IntelliKnow", min_length=1)
+    azure_vault_url: str | None = None
+    cache_ttl_seconds: int = Field(default=300, ge=0, le=300)
+
+    @model_validator(mode="after")
+    def _azure_requires_a_vault_url(self) -> "SecretStoreConfig":
+        if self.provider == "azure-key-vault" and not self.azure_vault_url:
+            raise ValueError(
+                "secret_store.azure_vault_url is required for azure-key-vault"
+            )
+        return self
+
+
 def _default_intent_spaces() -> list[IntentSpace]:
     return [
         IntentSpace(
@@ -197,6 +212,7 @@ class AppConfig(_StrictModel):
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     ingestion: IngestionConfig = Field(default_factory=IngestionConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
+    secret_store: SecretStoreConfig = Field(default_factory=SecretStoreConfig)
     public_base_url: str | None = None
 
     @model_validator(mode="after")

@@ -2,3 +2,13 @@
 # The localhost default enables developer shortcuts, including Control-C
 # for "Clear cache", which conflicts with normal text copying on macOS.
 toolbarMode = "viewer"
+
+[theme]
+base = "light"
+primaryColor = "#7C3AED"
+backgroundColor = "#F6F7F9"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#17202A"
+linkColor = "#175CD3"
+borderColor = "#D0D5DD"
+showWidgetBorder = true

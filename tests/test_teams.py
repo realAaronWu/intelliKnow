@@ -19,6 +19,7 @@ from app.channels.teams import (
     normalize_activity,
 )
 from app.db import create_engine_for, init_schema
+from app.secrets import MemorySecretStore
 
 
 CAPTURED_ACTIVITY = {
@@ -72,7 +73,11 @@ class FakeBotFrameworkAdapter:
 def _store(tmp_path, *, credentials=True):
     engine = create_engine_for(tmp_path / "teams.db")
     init_schema(engine)
-    store = ChannelStore(engine, Fernet.generate_key().decode("ascii"))
+    store = ChannelStore(
+        engine,
+        Fernet.generate_key().decode("ascii"),
+        secret_store=MemorySecretStore(),
+    )
     if credentials:
         store.save_credentials(
             "teams",

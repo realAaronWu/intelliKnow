@@ -39,31 +39,13 @@ Confirm that `.env` contains:
 
 ```dotenv
 ADMIN_PASSWORD=a-private-admin-password
-CREDENTIAL_ENCRYPTION_KEY=a-valid-fernet-key
 ```
-
-Generate a Fernet key when one is not already available:
-
-```bash
-uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-```
-
-Paste the generated value after `CREDENTIAL_ENCRYPTION_KEY=` in `.env`. Keep it private and do not commit `.env`.
 
 The configured AI provider must also be available:
 
 - For `llm.provider: local`, start the configured local OpenAI-compatible model server before IntelliKnow.
 - For `llm.provider: anthropic`, set `ANTHROPIC_API_KEY` in `.env` and configure supported Anthropic model names in `config.yaml`.
 - For `llm.provider: openai`, set `OPENAI_API_KEY` in `.env` and configure supported OpenAI model names.
-
-Confirm that `config.yaml` enables Teams:
-
-```yaml
-channels:
-  teams:
-    enabled: true
-    max_message_chars: 28000
-```
 
 No `TEAMS_APP_ID` or `TEAMS_APP_PASSWORD` is needed for the local Emulator demo.
 
@@ -79,19 +61,23 @@ Wait for:
 
 ```text
 IntelliKnow is ready.
-Admin console: http://127.0.0.1:8501
-API docs:     http://127.0.0.1:8000/docs
+Admin console: https://127.0.0.1:8501
+API docs:     https://127.0.0.1:8000/docs
 ```
 
 The helper runs provider checks, starts exactly one API worker and the admin console, verifies both processes, and writes logs under `.run/laptop-demo/`.
 
 Verify that the running build contains the Teams endpoint by opening:
 
-[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+[https://127.0.0.1:8000/docs](https://127.0.0.1:8000/docs)
 
 The page should list `POST /api/messages`.
 
 ## 4. Connect the Emulator
+
+First open IntelliKnow's **Frontend Integration** page. Expand Microsoft Teams
+**Configuration** and select **Enable local Emulator**. Do not enter an
+application ID or password.
 
 1. Open **Bot Framework Emulator**.
 2. Select **Open Bot**.
@@ -145,14 +131,15 @@ Stop IntelliKnow and then close the Emulator:
 ### The Emulator cannot connect
 
 - Confirm IntelliKnow is still running.
-- Use `http://localhost:8000/api/messages`, including `/api/messages`.
+- Use `https://localhost:8000/api/messages`, including `/api/messages`.
 - Confirm the App ID and password fields are empty.
-- Open `http://127.0.0.1:8000/docs` and verify `POST /api/messages` is listed.
-- If port `8000` is occupied, start IntelliKnow with `INTELLIKNOW_API_PORT=8011 ./scripts/laptop-demo start` and use `http://localhost:8011/api/messages` in the Emulator.
+- Open `https://127.0.0.1:8000/docs` and verify `POST /api/messages` is listed.
+- If port `8000` is occupied, start IntelliKnow with `INTELLIKNOW_API_PORT=8011 ./scripts/laptop-demo start` and use `https://localhost:8011/api/messages` in the Emulator.
 
 ### `Teams is disabled`
 
-Set `channels.teams.enabled` to `true` in `config.yaml`, then restart IntelliKnow. If the integration was previously disabled in persistent state, re-enable it through the integration API when Task 04 is available or use a clean local demo database.
+Open **Frontend Integration**, expand Microsoft Teams **Configuration**, and
+select **Enable local Emulator**. No restart is needed.
 
 ### IntelliKnow starts but cannot answer
 

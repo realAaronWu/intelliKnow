@@ -12,7 +12,9 @@
 
 ## UI Acceptance
 
-- Sign-in hides all admin content until authentication; sign-out clears the session.
+- Sign-in hides all admin content until authentication. The browser receives an
+  `HttpOnly`, `SameSite=Strict` session cookie that survives page refreshes for
+  eight hours; sign-out expires it immediately.
 - Sidebar navigation exposes exactly five views at desktop and narrow widths without overlap.
 - Dashboard test query shows intent, confidence, grounded answer, sources, and latency.
 - Frontend Integration supports masked save/clear/test and readable errors.

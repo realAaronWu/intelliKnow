@@ -58,10 +58,24 @@ def test_all_tables_present(engine):
         assert name in table_names
 
 
+def test_query_log_has_relevance_observability_column(engine):
+    columns = {column["name"] for column in inspect(engine).get_columns("query_log")}
+
+    assert "best_relevance" in columns
+
+
 def test_integration_table_has_handler_persistence_columns(engine):
     columns = {column["name"] for column in inspect(engine).get_columns("integrations")}
 
-    assert {"last_reply_ref", "last_error_at"} <= columns
+    assert {
+        "last_reply_ref",
+        "last_error_at",
+        "secret_name",
+        "active_secret_version",
+        "previous_secret_version",
+        "pending_secret_version",
+        "credential_status",
+    } <= columns
 
 
 def test_init_schema_adds_handler_columns_to_an_existing_integration_table(tmp_path):
@@ -87,7 +101,13 @@ def test_init_schema_adds_handler_columns_to_an_existing_integration_table(tmp_p
     init_schema(old_engine)
 
     columns = {column["name"] for column in inspect(old_engine).get_columns("integrations")}
-    assert {"last_reply_ref", "last_error_at"} <= columns
+    assert {
+        "last_reply_ref",
+        "last_error_at",
+        "secret_name",
+        "active_secret_version",
+        "credential_status",
+    } <= columns
 
 
 def test_wal_journal_mode_enabled(engine):

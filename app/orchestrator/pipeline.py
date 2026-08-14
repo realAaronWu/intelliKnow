@@ -113,6 +113,7 @@ class QueryOutcome:
     latency_ms: int
     error: str | None
     timings_ms: dict[str, int] | None = None
+    best_relevance: float | None = None
 
 
 @dataclass
@@ -196,6 +197,7 @@ def _no_match_outcome(
     fallback_used: bool,
     latency_ms: int,
     timings_ms: dict[str, int],
+    best_relevance: float | None,
 ) -> QueryOutcome:
     domain = _domain_label(routing_spaces, cfg)
     message = (
@@ -217,6 +219,7 @@ def _no_match_outcome(
         latency_ms=latency_ms,
         error=None,
         timings_ms=timings_ms,
+        best_relevance=best_relevance,
     )
 
 
@@ -359,6 +362,7 @@ def answer_question(
         trace.ranked = ranked
 
     with _measure(timings, "relevance_gate"):
+        best_relevance = max((hit.relevance for hit in ranked), default=None)
         gate_passed = passes_gate(ranked, cfg.rag.relevance_floor)
     if trace is not None:
         trace.gate_passed = gate_passed
@@ -377,6 +381,7 @@ def answer_question(
             fallback_used=routing.fallback_used,
             latency_ms=latency_ms,
             timings_ms=completed_timings,
+            best_relevance=best_relevance,
         )
 
     with _measure(timings, "context_assembly"):
@@ -403,6 +408,7 @@ def answer_question(
             latency_ms=latency_ms,
             error=str(exc),
             timings_ms=completed_timings,
+            best_relevance=best_relevance,
         )
 
     with _measure(timings, "citation_formatting"):
@@ -421,6 +427,7 @@ def answer_question(
             fallback_used=routing.fallback_used,
             latency_ms=latency_ms,
             timings_ms=completed_timings,
+            best_relevance=best_relevance,
         )
     with _measure(timings, "channel_formatting"):
         formatted_answer = format_for_channel(cleaned_answer, citations, channel)
@@ -443,4 +450,5 @@ def answer_question(
         latency_ms=latency_ms,
         error=None,
         timings_ms=completed_timings,
+        best_relevance=best_relevance,
     )

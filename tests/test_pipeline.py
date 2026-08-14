@@ -233,6 +233,8 @@ def test_11_2_11_3_gate_rejection_yields_no_match_with_zero_generation_calls(
     assert "HR" in outcome.answer
     assert outcome.citations == []
     assert outcome.retrieved_doc_ids == []
+    assert outcome.best_relevance is not None
+    assert outcome.best_relevance < cfg.rag.relevance_floor
 
 
 # --- 11.4 Generation failure -----------------------------------------------------
@@ -276,6 +278,8 @@ def test_11_5_success_returns_verified_citations_and_retrieved_doc_ids(
     assert outcome.intent_slug == "hr"
     assert outcome.fallback_used is False
     assert outcome.classified_by == "centroid"
+    assert outcome.best_relevance is not None
+    assert outcome.best_relevance >= cfg.rag.relevance_floor
 
 
 def test_generated_answer_with_no_verified_citation_is_a_no_match(

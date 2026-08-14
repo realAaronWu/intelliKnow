@@ -9,6 +9,7 @@ from app.channels.handler import HandlerResult
 from app.channels.store import ChannelStore
 from app.channels.tester import ChannelTestService
 from app.db import create_engine_for, init_schema
+from app.secrets import MemorySecretStore
 
 
 class FakeHandler:
@@ -50,7 +51,11 @@ class FakeTeamsSDK:
 def _store(tmp_path):
     engine = create_engine_for(tmp_path / "tester.db")
     init_schema(engine)
-    return ChannelStore(engine, Fernet.generate_key().decode("ascii"))
+    return ChannelStore(
+        engine,
+        Fernet.generate_key().decode("ascii"),
+        secret_store=MemorySecretStore(),
+    )
 
 
 def _teams_reference():

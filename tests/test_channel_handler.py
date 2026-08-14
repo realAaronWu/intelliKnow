@@ -10,6 +10,7 @@ from app.channels.store import ChannelStore
 from app.db import create_engine_for, init_schema
 from app.orchestrator.pipeline import QueryOutcome
 from app.rag.generate import ChannelProfile
+from app.secrets import MemorySecretStore
 
 
 class FakeAdapter:
@@ -73,7 +74,11 @@ def _outcome(status="success"):
 def _store(tmp_path):
     engine = create_engine_for(tmp_path / "handler.db")
     init_schema(engine)
-    store = ChannelStore(engine, Fernet.generate_key().decode("ascii"))
+    store = ChannelStore(
+        engine,
+        Fernet.generate_key().decode("ascii"),
+        secret_store=MemorySecretStore(),
+    )
     store.set_enabled("telegram", True)
     return store
 

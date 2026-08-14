@@ -28,7 +28,7 @@ from sqlalchemy.engine import Engine
 from app.analytics.log import QueryLogger
 from app.admin.service import AdminService
 from app.api.admin import build_admin_router
-from app.api.auth import build_admin_auth
+from app.api.auth import AdminSessionManager, build_admin_auth, build_admin_session_router
 from app.api.documents import build_documents_router
 from app.api.integrations import build_integrations_router
 from app.api.query import build_query_router
@@ -48,6 +48,7 @@ from app.providers.base import ProviderError
 from app.rag.index_writer import IndexWriter
 from app.rag.retrieve.rerank import Reranker
 from app.rag.vector_store import VectorStore
+from app.secrets.factory import build_secret_store
 
 
 def create_app(
@@ -72,9 +73,12 @@ def create_app(
     is simply absent when it is not supplied.
     """
     fastapi_app = FastAPI(title="IntelliKnow KMS", lifespan=lifespan)
+    session_manager = AdminSessionManager(admin_password) if admin_password else None
     admin_dependencies = (
-        [Depends(build_admin_auth(admin_password))] if admin_password is not None else []
+        [Depends(build_admin_auth(session_manager))] if session_manager is not None else []
     )
+    if session_manager is not None:
+        fastapi_app.include_router(build_admin_session_router(session_manager))
     fastapi_app.include_router(
         build_documents_router(deps), dependencies=admin_dependencies
     )
@@ -220,10 +224,6 @@ def __getattr__(name: str):
         application = bootstrap()
         if not application.admin_password:
             raise RuntimeError("ADMIN_PASSWORD must be set before starting the API")
-        if not application.credential_encryption_key:
-            raise RuntimeError(
-                "CREDENTIAL_ENCRYPTION_KEY must be set before starting the API"
-            )
         cfg = application.config
         engine = create_engine_for(Path(cfg.storage.sqlite_path))
         init_schema(engine)
@@ -231,7 +231,8 @@ def __getattr__(name: str):
         channel_store = ChannelStore(
             engine,
             application.credential_encryption_key,
-            env=application.channel_env,
+            secret_store=build_secret_store(cfg.secret_store),
+            cache_ttl_seconds=cfg.secret_store.cache_ttl_seconds,
         )
         channel_store.initialize(
             "telegram", enabled=cfg.channels.telegram.enabled

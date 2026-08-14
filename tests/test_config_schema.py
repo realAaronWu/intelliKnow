@@ -412,13 +412,16 @@ def test_1_14_env_example_contents():
     for name in (
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
-        "TELEGRAM_BOT_TOKEN",
-        "TEAMS_APP_ID",
-        "TEAMS_APP_PASSWORD",
         "CREDENTIAL_ENCRYPTION_KEY",
         "ADMIN_PASSWORD",
     ):
         assert name in text
+    for channel_secret in (
+        "TELEGRAM_BOT_TOKEN=",
+        "TEAMS_APP_ID=",
+        "TEAMS_APP_PASSWORD=",
+    ):
+        assert channel_secret not in text
 
     # every KEY=... assignment line must have an empty value — no real secrets
     for line in text.splitlines():

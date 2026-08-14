@@ -28,7 +28,7 @@ from app.providers.factory import (
 # Operator secrets that every deployment needs regardless of which AI
 # backends are selected. `spec: configuration` § "Secrets separated from
 # configuration" names these alongside the provider API keys.
-_ALWAYS_REQUIRED_SECRETS = ("CREDENTIAL_ENCRYPTION_KEY", "ADMIN_PASSWORD")
+_ALWAYS_REQUIRED_SECRETS = ("ADMIN_PASSWORD",)
 
 
 def secret_status(cfg: AppConfig, env: Mapping[str, str]) -> dict[str, bool]:

@@ -18,10 +18,20 @@ _CSS = """
   --ik-coral: #d5533f;
 }
 .stApp { background: var(--ik-bg); color: var(--ik-ink); }
+[data-testid="stAppViewContainer"],
+[data-testid="stAppViewContainer"] h1,
+[data-testid="stAppViewContainer"] h2,
+[data-testid="stAppViewContainer"] h3,
+[data-testid="stAppViewContainer"] p,
+[data-testid="stAppViewContainer"] label { color: var(--ik-ink); }
+[data-testid="stCaptionContainer"] p,
+[data-testid="stWidgetLabel"] p,
+[data-testid="stMetricLabel"] p { color: #475467 !important; }
+[data-testid="stMetricValue"] { color: var(--ik-ink) !important; }
 [data-testid="stHeader"] { background: rgba(246,247,249,.94); }
 [data-testid="stMainBlockContainer"] { max-width: 1240px; padding-top: 2rem; }
 [data-testid="stSidebar"] { background: #ffffff; border-right: 1px solid var(--ik-line); }
-[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p { color: var(--ik-muted); }
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p { color: #475467; }
 [data-testid="stVerticalBlockBorderWrapper"] {
   border: 1px solid var(--ik-line) !important;
   border-radius: 12px !important;

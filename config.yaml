@@ -104,4 +104,9 @@ storage:
   sqlite_path: ./data/intelliknow.db
   faiss_dir: ./data/faiss
   upload_dir: ./data/uploads
+secret_store:
+  provider: macos-keychain
+  keychain_service: IntelliKnow
+  azure_vault_url: null
+  cache_ttl_seconds: 300
 public_base_url: null

@@ -17,6 +17,7 @@ from app.main import create_app
 from app.orchestrator.errors import ClassificationError
 from app.rag.index_writer import IndexWriter
 from app.rag.vector_store import VectorStore
+from app.secrets import MemorySecretStore
 from tests.doubles import FakeEmbeddingProvider, FakeLLMProvider
 
 
@@ -44,7 +45,11 @@ def _setup(tmp_path: Path, *, intent_validator=None):
         index_writer=IndexWriter(engine, vector_store, embedder),
         get_cfg=lambda: config_service.current,
     )
-    channel_store = ChannelStore(engine, Fernet.generate_key().decode("ascii"))
+    channel_store = ChannelStore(
+        engine,
+        Fernet.generate_key().decode("ascii"),
+        secret_store=MemorySecretStore(),
+    )
     channel_store.initialize("telegram", enabled=False)
     channel_store.initialize("teams", enabled=False)
     service = AdminService(
@@ -78,7 +83,16 @@ def _insert_doc(engine, *, slug="hr", name="handbook.pdf") -> int:
         return result.inserted_primary_key[0]
 
 
-def _insert_query(engine, *, doc_id=None, intent="hr", correct=None) -> int:
+def _insert_query(
+    engine,
+    *,
+    doc_id=None,
+    intent="hr",
+    correct=None,
+    confidence=0.91,
+    best_relevance=0.82,
+    status="success",
+) -> int:
     snapshots = [] if doc_id is None else [{"document_id": doc_id, "document_title": "handbook.pdf"}]
     with engine.begin() as conn:
         result = conn.execute(
@@ -88,15 +102,16 @@ def _insert_query(engine, *, doc_id=None, intent="hr", correct=None) -> int:
                 user_ref="u1",
                 question="How much leave?",
                 intent_slug=intent,
-                confidence=0.91,
+                confidence=confidence,
                 classified_by="centroid",
                 fallback_used=False,
-                status="success",
+                status=status,
                 answer="Twenty days. [1]",
                 citations_json=json.dumps([]),
                 retrieved_doc_ids_json=json.dumps([] if doc_id is None else [doc_id]),
                 retrieved_documents_json=json.dumps(snapshots),
                 latency_ms=220,
+                best_relevance=best_relevance,
                 timings_json=json.dumps({"generation": 180, "pipeline_total": 210}),
                 expected_intent_slug=intent if correct is not None else None,
                 reviewed_correct=correct,
@@ -126,6 +141,7 @@ def test_query_detail_returns_stage_latency_breakdown(tmp_path):
         "generation": 180,
         "pipeline_total": 210,
     }
+    assert response.json()["best_relevance"] == 0.82
 
 
 def test_intent_crud_protects_general_and_space_with_documents(tmp_path):

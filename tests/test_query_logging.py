@@ -31,6 +31,7 @@ def _outcome() -> QueryOutcome:
         retrieved_doc_ids=[7],
         latency_ms=120,
         error=None,
+        best_relevance=0.87,
     )
 
 
@@ -50,6 +51,7 @@ def test_query_logger_persists_delivery_latency_and_serialized_sources(tmp_path)
         {"document_id": 7, "document_title": "handbook.pdf", "source_ref": "p. 2"}
     ]
     assert json.loads(row.retrieved_doc_ids_json) == [7]
+    assert row.best_relevance == 0.87
 
 
 def test_query_logger_records_delivery_failure_with_pipeline_context(tmp_path):

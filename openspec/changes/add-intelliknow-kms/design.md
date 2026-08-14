@@ -62,7 +62,22 @@ This is deliberately small. It addresses concrete failure modes introduced by ba
 
 Production mounts administrative routes with a shared bearer-token dependency backed by `ADMIN_PASSWORD`. Comparison is constant-time. Public Bot Framework messaging remains outside this boundary and relies on Bot Framework authentication.
 
-The Streamlit API client sends the token on every administrative request. Tests may construct an application without production authentication when directly exercising isolated route behavior, but production startup must require a non-empty admin password.
+Interactive login exchanges `ADMIN_PASSWORD` for an HMAC-signed session token
+that expires after eight hours. A one-time, 60-second browser handoff ticket lets
+the API place that token in a host-scoped `HttpOnly`, `SameSite=Strict` cookie;
+HTTPS deployments also receive the `Secure` flag. Streamlit reads the cookie
+from its server-side request context and sends the token as a bearer credential
+on every administrative request, so the raw password is not retained by the
+browser and a page refresh does not require another login. Sign-out expires the
+cookie. Changing `ADMIN_PASSWORD` or passing the token's expiry invalidates the
+session.
+
+Direct password bearer authentication remains available for the laptop helper
+and administrative scripts. Tests may construct an application without
+production authentication when directly exercising isolated route behavior,
+but production startup must require a non-empty admin password. This remains a
+single-admin MVP session mechanism, not a substitute for production identity,
+per-user authorization, revocation, or audit controls.
 
 ### 3. Serialize all FAISS access with one `RLock`
 
@@ -104,7 +119,18 @@ Channel latency is measured from accepted inbound message through completion of 
 
 Each successful inbound exchange records the most recent reply reference for that channel. The admin-triggered channel test sends to that destination. If none exists, the API reports that a real user must message the bot first instead of reporting a misleading success.
 
-Credentials are Fernet-encrypted in the existing integration store using `CREDENTIAL_ENCRYPTION_KEY`. APIs return setup state and masked suffixes only. Credential changes rebuild only the affected channel adapter; they do not reload unrelated application services.
+The database stores only secret-manager references and credential lifecycle
+metadata. Production credential values live in Azure Key Vault, accessed through
+managed identity; the laptop demo uses macOS Keychain through the same
+`SecretStore` contract. APIs return provider identity and setup state, never a
+secret or secret fragment. Credential changes rebuild only the affected channel
+adapter; they do not reload unrelated application services.
+
+Replacement is staged and checked against Telegram or Microsoft before an
+atomic active-version switch. Failed validation preserves the existing active
+version. The former Fernet ciphertext column is a temporary one-way migration
+source only. See `docs/PRODUCTION-INTEGRATION-CREDENTIALS.md` for the lifecycle,
+rotation, audit, outage, and deployment contracts.
 
 ### 9. Use one admin router and one Streamlit application
 
@@ -165,6 +191,18 @@ Uploads perform one cheap structured-output preflight before the document row an
 4. Implement the Teams Bot Framework endpoint and captured-activity tests.
 5. Add authenticated integration APIs and a destination-aware end-to-end test action.
 6. Verify real Telegram and real Teams round trips and record full delivery latency.
+
+### Task 07: Production integration credentials
+
+1. Add a provider-neutral, versioned `SecretStore` with Azure Key Vault,
+   macOS Keychain, and in-memory test implementations.
+2. Replace credential ciphertext writes with reference-only metadata and add a
+   one-way migration from existing Fernet rows.
+3. Stage and provider-validate replacements before atomic activation.
+4. Add rotation, rollback, emergency disable, bounded caching, and metadata-only
+   credential audit events.
+5. Prefer Teams certificate credentials and remove legacy ciphertext support
+   after the migration rollback window.
 
 ### Task 06: Admin and delivery
 
