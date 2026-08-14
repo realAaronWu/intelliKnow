@@ -8,7 +8,7 @@ Every clause of the source document is listed below with where it is covered. `s
 
 | # | Source clause | Covered by |
 | --- | --- | --- |
-| 1 | Seamless integration with common frontend communication tools (Telegram, WhatsApp, Teams) | spec: frontend-integration — Telegram + Teams |
+| 1 | Seamless integration with common frontend communication tools (Telegram, WhatsApp, Teams) | spec: frontend-integration — Telegram + WhatsApp demonstrated; Teams optional |
 | 2 | Backend automatically building/updating a KB from uploaded documents (PDF, Word, Excel) | spec: document-ingestion |
 | 3 | Orchestrator categorising queries into predefined intent spaces to route to the relevant domain | spec: query-orchestration, intent-management |
 | — | Intuitive knowledge ingestion | spec: admin-console — upload area, search/filter |

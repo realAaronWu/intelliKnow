@@ -1,4 +1,4 @@
-# Using IntelliKnow in Telegram and Microsoft Teams
+# Using IntelliKnow in Telegram, WhatsApp, and Microsoft Teams
 
 IntelliKnow answers questions from your organization's approved documents. It is useful for everyday questions such as:
 
@@ -19,6 +19,17 @@ IntelliKnow shows the source document with its answer. If it cannot find support
 4. Wait for the answer and check the **Sources** shown beneath it.
 
 You never need the Telegram bot token. That token is a private administrator password and must not be shared with users.
+
+### WhatsApp
+
+1. Open the WhatsApp conversation with the IntelliKnow business number supplied
+   by your administrator.
+2. Type one clear text question and send it.
+3. Wait for the answer and check its cited sources.
+
+You do not need an access token or a Meta developer account. Those are private
+administrator credentials. During a Meta test setup, your personal number must
+be an approved recipient of the business sender.
 
 ### Microsoft Teams
 
@@ -78,7 +89,96 @@ Do not email, paste into chat, or commit the bot token to Git. If it is exposed,
 
 By default, anyone who discovers the bot can send it a private message. Use only non-sensitive demo documents until IntelliKnow has an approved user allowlist or another access-control layer.
 
+## For administrators: connect WhatsApp
+
+This setup uses Meta's WhatsApp Cloud API and requires a public HTTPS callback.
+For a laptop demo, a Cloudflare Quick Tunnel is sufficient.
+
+### 1. Prepare Meta
+
+1. Create or open a Meta developer app and add the **WhatsApp** product.
+2. In the WhatsApp setup, identify the business **sender** number. Do not use
+   **Add new number** for a personal recipient; that action registers a business
+   sender and may ask you to migrate an existing WhatsApp account.
+3. Note the **Phone-number ID** for the selected sender. The ID and sender must
+   remain matched. If Meta displays multiple test or business numbers, select
+   the number users will actually message before copying its ID.
+4. For a Meta test sender, add each personal WhatsApp number as a test
+   **recipient** under the send-message task. A recipient should already have a
+   WhatsApp account and does not need to be migrated.
+5. Obtain an access token with `whatsapp_business_messaging` and
+   `whatsapp_business_management`. A temporary setup token normally expires
+   after about 24 hours. A System User token is preferred for a stable demo and
+   may have no reported expiry, but remains revocable.
+6. Copy the Meta app secret from **App settings > Basic**.
+7. Generate a private verify token, for example:
+
+   ```bash
+   openssl rand -hex 32
+   ```
+
+### 2. Start a public callback
+
+With IntelliKnow running on HTTPS port 8012, start a tunnel:
+
+```bash
+cloudflared tunnel --protocol http2 \
+  --url https://localhost:8012 \
+  --origin-ca-pool .run/laptop-demo/tls/rootCA.pem
+```
+
+Record the printed `https://...trycloudflare.com` address. Quick Tunnel URLs
+are temporary and change when the tunnel is recreated.
+
+### 3. Save IntelliKnow credentials
+
+Open **Frontend Integration > WhatsApp** and enter:
+
+- **Access token:** the temporary or System User token
+- **Phone-number ID:** the ID belonging to the chosen sender
+- **Meta app secret:** the app's secret, used to authenticate callbacks
+- **Webhook verify token:** the random value created above
+
+Turn on **Enabled** and select **Save**. IntelliKnow encrypts all four values in
+SQLite and never returns them through the admin API.
+
+### 4. Configure and subscribe the webhook
+
+In Meta's WhatsApp **Configuration** page, set:
+
+```text
+Callback URL: https://YOUR-TUNNEL.trycloudflare.com/api/whatsapp/webhook
+Verify token:  the exact token saved in IntelliKnow
+```
+
+Select **Verify and save**, then subscribe to the **messages** field.
+
+Meta can create separate WhatsApp Business Accounts (WABAs) for a public test
+number and a real business sender. The IntelliKnow app must be subscribed to
+the WABA that owns the exact sender users will message. If verification works
+but inbound messages never reach the API, check this WABA subscription in
+Meta's configuration rather than changing the local webhook.
+
+### 5. Verify the round trip
+
+1. From an approved personal recipient, send a fresh text question to the
+   selected business sender.
+2. Confirm a cited response arrives in the same WhatsApp conversation.
+3. Confirm **Frontend Integration > WhatsApp** reports **Connected**.
+4. Use the integration **Test** button only after the first real message has
+   stored a reply destination and while the 24-hour customer-service window is
+   open.
+
+WhatsApp was verified end to end during the laptop demo. A real query completed
+through outbound delivery in 1,829 ms, within the three-second target.
+
 ## For administrators: connect Microsoft Teams
+
+The adapter, Bot Framework endpoint, app package, and local Emulator flow are
+implemented. Real tenant delivery has not been verified end to end in this
+project because it requires a Microsoft 365 work/school tenant with custom-app
+permission. Treat the steps below as deployment guidance, not recorded
+acceptance evidence.
 
 This setup normally requires help from a Microsoft 365 or Azure administrator. You need an Azure subscription or approved Azure Bot resource, permission to upload or publish a Teams app, and a public HTTPS address for IntelliKnow.
 
@@ -152,12 +252,28 @@ Credential-free Emulator access is accepted only from the same computer. Emulato
 - Keep `.env` private and out of source control.
 - Restrict who can install or access the Teams app through Microsoft 365 policies.
 - Remember that the current Telegram bot has no user allowlist.
+- Keep the WhatsApp app secret, access token, and verify token private.
+- Confirm that a WhatsApp Phone-number ID belongs to the intended sender.
 - Review cited documents for HR, legal, compliance, and financial decisions.
 - Remove outdated documents from IntelliKnow promptly.
 
 ## When setup fails
 
 **Telegram does not answer:** confirm the token, proxy, and `enabled` setting; ensure no Telegram webhook is configured because polling and webhooks cannot run together.
+
+**WhatsApp receives no inbound message:** confirm the tunnel URL is current,
+the webhook is subscribed to **messages**, and the app is subscribed to the
+WABA that owns the selected sender.
+
+**WhatsApp reports error 190:** the access token expired or was revoked. Create
+a new token and replace it on the Frontend Integration page.
+
+**WhatsApp reports error 131030:** the destination is not an approved test
+recipient. Add it as a recipient in Meta's send-message task, not as a new
+business sender.
+
+**Meta asks to migrate a personal number:** you opened the business-sender
+registration flow. Cancel it and add the number as a recipient instead.
 
 **Teams reports unauthorized:** confirm the application ID, directory tenant ID,
 client-secret value, single-tenant Azure Bot registration, and messaging

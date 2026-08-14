@@ -323,7 +323,7 @@ Only one process may poll a Telegram bot token. If Telegram reports another `get
 
 The MVP has no Telegram user allowlist. Anyone who discovers the bot can ask it questions, so use only non-sensitive demo documents.
 
-See [Using IntelliKnow in Telegram and Microsoft Teams](CONNECTING-TELEGRAM-AND-TEAMS.md) for complete setup.
+See [Using IntelliKnow in Telegram, WhatsApp, and Microsoft Teams](FRONTEND-INTEGRATIONS.md) for complete setup.
 
 ## 10. Optional local Teams demo
 

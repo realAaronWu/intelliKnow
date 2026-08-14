@@ -1,6 +1,6 @@
 # IntelliKnow KMS
 
-IntelliKnow is a lightweight, document-backed knowledge management system. It ingests PDF, DOCX, and XLSX files, classifies questions into intent spaces, retrieves relevant passages with FAISS and SQLite FTS5, and returns concise answers with verified citations through Telegram, Microsoft Teams, or the admin console.
+IntelliKnow is a lightweight, document-backed knowledge management system. It ingests PDF, DOCX, and XLSX files, classifies questions into intent spaces, retrieves relevant passages with FAISS and SQLite FTS5, and returns concise answers with verified citations through Telegram, WhatsApp, Microsoft Teams, or the admin console.
 
 ## What is included
 
@@ -8,7 +8,7 @@ IntelliKnow is a lightweight, document-backed knowledge management system. It in
 - PDF, DOCX, and XLSX ingestion with background processing, re-parsing, reassignment, and deletion
 - HR, Legal, Finance, Operations, and protected General intent spaces, plus custom intent CRUD
 - Hybrid semantic and keyword retrieval, reranking, relevance gating, and verified citations
-- Telegram long polling and a Microsoft Teams Bot Framework endpoint
+- Telegram long polling, a WhatsApp Cloud API webhook, and a Microsoft Teams Bot Framework endpoint
 - Encrypted integration credentials, connection status, retained errors, and delivery tests
 - Query history, reviewed classification accuracy, KB usage analytics, and CSV export
 
@@ -56,7 +56,7 @@ or commit another operator's file. `HF_TOKEN` is recommended for authenticated,
 higher-limit model downloads. The complete credential source and database
 transfer guidance is in [Configure secrets on each laptop](docs/LAPTOP-DEMO-DEPLOYMENT.md#4-configure-secrets-on-each-laptop).
 
-Telegram and Teams credentials entered in the console are encrypted in SQLite
+Telegram, WhatsApp, and Teams credentials entered in the console are encrypted in SQLite
 with `CREDENTIAL_ENCRYPTION_KEY`. The key stays in the private `.env`, separate
 from the database, and the API returns only masked values.
 
@@ -111,7 +111,7 @@ is never stored in the browser cookie.
 5. Open **Intent Configuration** to record expected intents and tune keywords or thresholds. Reviewed labels inform subsequent routing.
 6. Open **Analytics** to inspect history, document usage, and CSV export.
 
-Channel setup is covered in [Connecting Telegram and Microsoft Teams](docs/CONNECTING-TELEGRAM-AND-TEAMS.md). A tenant-free adapter demonstration is covered in [Local Microsoft Teams Demo](docs/LOCAL-TEAMS-DEMO.md).
+Employee and administrator setup is covered in [Frontend Integrations](docs/FRONTEND-INTEGRATIONS.md). A tenant-free adapter demonstration is covered in [Local Microsoft Teams Demo](docs/LOCAL-TEAMS-DEMO.md).
 
 Measured channel acceptance and the generated Teams app package are covered in
 [Channel Acceptance](docs/CHANNEL-ACCEPTANCE.md).
@@ -146,13 +146,13 @@ Slow tests that load real models are intentionally excluded by the default pytes
 
 **Document remains Error:** open its detail in Knowledge Base, read the parsing error, then re-parse or replace the source file.
 
-**Telegram or Teams is Disconnected:** open Frontend Integration to inspect recent errors and run the destination-aware test.
+**Telegram, WhatsApp, or Teams is Disconnected:** open Frontend Integration to inspect recent errors and run the destination-aware test.
 
 ## Documentation
 
 - [Laptop demo deployment runbook](docs/LAPTOP-DEMO-DEPLOYMENT.md)
 - [AI usage reflection](docs/AI_USAGE.md)
 - [Requirements audit and hiring review](docs/REQUIREMENTS-AUDIT.md)
-- [Telegram and Teams guide](docs/CONNECTING-TELEGRAM-AND-TEAMS.md)
+- [Telegram, WhatsApp, and Teams guide](docs/FRONTEND-INTEGRATIONS.md)
 - [Local Teams demo](docs/LOCAL-TEAMS-DEMO.md)
 - [OpenSpec design](openspec/changes/add-intelliknow-kms/design.md)

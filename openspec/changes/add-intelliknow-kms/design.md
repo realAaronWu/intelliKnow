@@ -1,6 +1,6 @@
 ## Context
 
-IntelliKnow is a seven-day, single-developer MVP for document-backed question answering in Telegram and Microsoft Teams. The repository now contains the configuration/provider foundation, document ingestion and indexing, RAG read path, both channel adapters, an authenticated admin API, and the five-view Streamlit console. Remaining acceptance work is a labelled quality evaluation, a real Teams tenant round trip, and full demo evidence.
+IntelliKnow is a seven-day, single-developer MVP for document-backed question answering in Telegram and WhatsApp. The repository also retains an optional Microsoft Teams adapter. It contains the configuration/provider foundation, document ingestion and indexing, RAG read path, three channel adapters, an authenticated admin API, and the five-view Streamlit console. Remaining acceptance work is a labelled quality evaluation and full demo evidence; real Teams tenant delivery is a documented limitation, not a claim.
 
 The implementation uses FastAPI, Streamlit, SQLite/FTS5, FAISS, sentence-transformers, and provider adapters. It is a single-process application with background ingestion jobs. That constraint makes in-process concurrency, startup recovery, and clear runtime-configuration boundaries more important than distributed-system abstractions.
 
@@ -10,7 +10,8 @@ The original design mixed MVP requirements with optional infrastructure: Telegra
 
 **Goals**
 
-- Deliver cited answers through a real Telegram bot and a real Microsoft Teams bot.
+- Deliver cited answers through real Telegram and WhatsApp conversations.
+- Retain Teams support without treating Emulator coverage as real-tenant proof.
 - Keep document ingestion, classification, retrieval, generation, and analytics understandable in one process.
 - Provide the five required admin views through one authenticated API and one Streamlit application.
 - Let admins tune intent spaces, classification confidence, and relevance floor without restarting.
@@ -29,7 +30,7 @@ The original design mixed MVP requirements with optional infrastructure: Telegra
 
 ```text
 Telegram polling ─┐
-                  ├─> ChannelHandler ─> QueryPipeline ─> channel send
+WhatsApp webhook ─┼─> ChannelHandler ─> QueryPipeline ─> channel send
 Teams endpoint ───┘          │                 │
                              │                 ├─> classifier
                              │                 ├─> FAISS + FTS5 retrieval
@@ -111,7 +112,7 @@ Documents left in `pending` or `parsing` after process termination are marked `f
 
 `InboundMessage` contains channel, user reference, text, and reply reference. `ChannelHandler` owns the shared sequence: validate input, send typing indication, invoke the pipeline once, deliver once, update status, and append analytics after delivery.
 
-Telegram uses long polling only. Webhook support does not improve the required demo and adds registration, duplicate-delivery, and public URL concerns. Teams uses one FastAPI Bot Framework endpoint. Emulator tests validate the adapter locally; a real Teams round trip is required before delivery is claimed complete.
+Telegram uses long polling only. WhatsApp uses one signed Cloud API webhook with GET challenge verification and POST HMAC validation. Teams uses one FastAPI Bot Framework endpoint. Emulator tests validate the Teams adapter locally, but the project does not claim real Teams tenant acceptance.
 
 Channel latency is measured from accepted inbound message through completion of the outbound send. Pipeline-only latency is retained as diagnostic data but does not satisfy the three-second requirement.
 
@@ -119,7 +120,7 @@ Channel latency is measured from accepted inbound message through completion of 
 
 Each successful inbound exchange records the most recent reply reference for that channel. The admin-triggered channel test sends to that destination. If none exists, the API reports that a real user must message the bot first instead of reporting a misleading success.
 
-Telegram and Teams credential bundles are Fernet-encrypted before being written
+Telegram, WhatsApp, and Teams credential bundles are Fernet-encrypted before being written
 to SQLite. `CREDENTIAL_ENCRYPTION_KEY` remains in the private environment,
 separate from the database. APIs return masked last-four-character details,
 never a usable credential, and credential changes are read on the next channel
@@ -164,7 +165,7 @@ Final delivery additionally requires:
 - OpenSpec strict validation;
 - the complete automated test suite;
 - real Telegram send and receive;
-- real Teams send and receive in the target tenant;
+- real WhatsApp send and receive;
 - two or more indexed documents with cited answers;
 - measured end-to-end latency;
 - all five admin views exercised;
@@ -194,8 +195,9 @@ Uploads perform one cheap structured-output preflight before the document row an
 2. Implement normalized messages, the shared handler, and query logging.
 3. Implement Telegram polling and captured-payload tests.
 4. Implement the Teams Bot Framework endpoint and captured-activity tests.
-5. Add authenticated integration APIs and a destination-aware end-to-end test action.
-6. Verify real Telegram and real Teams round trips and record full delivery latency.
+5. Implement the signed WhatsApp Cloud API webhook and captured-payload tests.
+6. Add authenticated integration APIs and a destination-aware end-to-end test action.
+7. Verify real Telegram and WhatsApp round trips and record full delivery latency.
 
 ### Task 06: Admin and delivery
 
@@ -213,7 +215,7 @@ Uploads perform one cheap structured-output preflight before the document row an
   concise answers use a 128-token ceiling. The console reports per-channel p50,
   p95, maximum, pass rate, and the three-second gate.
 - **Config restarts:** fewer live controls reduce surprise and keep service wiring truthful. The console must label restart-required fields as read-only.
-- **Real Teams verification:** it requires an Azure Bot registration, reachable HTTPS endpoint, and tenant setup. These are deployment prerequisites, not optional proof replaced by an emulator.
+- **Real Teams verification:** it requires an Azure Bot registration, reachable HTTPS endpoint, and tenant setup. This project documents those prerequisites but does not claim a real-tenant round trip.
 - **Accuracy sample size:** reviewed accuracy is honest but may initially have no data. The UI must distinguish unavailable accuracy from confidence distribution.
 - **Feedback overfitting:** reviewed examples improve immediate routing but can encode label mistakes and repeated wording. Keep them bounded, allow labels to be corrected, and judge quality on a separate labelled set.
 - **Interrupted re-parse:** startup recovery marks work failed rather than resuming it. This favors transparent retry behavior over a durable queue outside MVP scope.

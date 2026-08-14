@@ -1,12 +1,12 @@
 ## Purpose
 
-Connects the KMS to the chat tools people already use — Telegram and Microsoft Teams — by receiving messages over each platform's protocol, normalizing them for the orchestrator, delivering answers in each platform's native format, and giving admins connection status, error logging, and a test that proves the whole path works.
+Connects the KMS to the chat tools people already use — Telegram, WhatsApp, and Microsoft Teams — by receiving messages over each platform's protocol, normalizing them for the orchestrator, delivering answers in each platform's native format, and giving admins connection status, error logging, and a test that proves the whole path works.
 
 ## ADDED Requirements
 
 ### Requirement: Two chat channel integrations
 
-The system SHALL provide message integrations for Telegram and Microsoft Teams, each able to receive user questions and deliver answers independently of the other.
+The system SHALL provide message integrations for Telegram, WhatsApp, and Microsoft Teams. Telegram and WhatsApp SHALL form the two demonstrated real-user frontends; Teams SHALL remain independently configurable with local adapter verification.
 
 #### Scenario: Telegram question answered
 
@@ -19,6 +19,12 @@ The system SHALL provide message integrations for Telegram and Microsoft Teams, 
 - **WHEN** a user sends a question to the configured Teams bot
 - **THEN** the question is processed through the query pipeline
 - **AND** the answer is delivered back in the same Teams conversation
+
+#### Scenario: WhatsApp question answered
+
+- **WHEN** a user sends a text question to the configured WhatsApp business sender
+- **THEN** the signed webhook payload is processed through the query pipeline
+- **AND** the answer is delivered back to the same WhatsApp user
 
 #### Scenario: One channel unconfigured does not affect the other
 
@@ -87,9 +93,9 @@ The system SHALL expose a Bot Framework messaging endpoint for Microsoft Teams, 
 
 #### Scenario: Real Teams delivery acceptance
 
-- **WHEN** the channel increment is declared complete
-- **THEN** a question and cited answer have completed a round trip in the target Microsoft Teams tenant
-- **AND** emulator-only success is not treated as delivery acceptance
+- **WHEN** project acceptance evidence is reviewed
+- **THEN** Emulator success is identified as local adapter verification only
+- **AND** real Teams tenant delivery is not claimed unless a target-tenant round trip has actually completed
 
 #### Scenario: Unauthenticated activity rejected
 
@@ -99,7 +105,7 @@ The system SHALL expose a Bot Framework messaging endpoint for Microsoft Teams, 
 
 ### Requirement: Admin credential configuration
 
-The system SHALL allow an admin to enter, update, and clear each channel's credentials from the console — a bot token for Telegram, and an application identifier, password, and directory tenant identifier for Teams — and SHALL apply saved credentials without a service restart.
+The system SHALL allow an admin to enter, update, and clear each channel's credentials from the console — a bot token for Telegram; an access token, Phone-number ID, app secret, and verify token for WhatsApp; and an application identifier, password, and directory tenant identifier for Teams — and SHALL apply saved credentials without a service restart.
 
 #### Scenario: Telegram credentials configured from the console
 
@@ -110,6 +116,26 @@ The system SHALL allow an admin to enter, update, and clear each channel's crede
 
 - **WHEN** an admin saves a Teams application identifier, password, and directory tenant identifier
 - **THEN** the channel becomes usable without a restart
+
+#### Scenario: WhatsApp credentials configured from the console
+
+- **WHEN** an admin saves a WhatsApp access token, Phone-number ID, app secret, and verify token
+- **THEN** the webhook verifies signed callbacks and the channel becomes usable without a restart
+
+### Requirement: WhatsApp Cloud API integration
+
+The system SHALL expose a WhatsApp Cloud API webhook, verify Meta's challenge token, authenticate POST bodies with the app-secret HMAC, acknowledge callbacks promptly, ignore status-only events, and deliver text replies through the configured Phone-number ID.
+
+#### Scenario: Signed WhatsApp text received
+
+- **WHEN** Meta sends a valid signed text-message callback
+- **THEN** the callback is acknowledged and the normalized question reaches the shared handler
+
+#### Scenario: Invalid WhatsApp signature rejected
+
+- **WHEN** a callback's `X-Hub-Signature-256` does not match the raw body
+- **THEN** the callback is rejected
+- **AND** no query is processed
 
 ### Requirement: Measured channel acceptance
 
@@ -122,6 +148,11 @@ fails when p95 exceeds three seconds.
 - **WHEN** Teams acceptance is run with real-platform verification enabled
 - **AND** the stored conversation reference came from a loopback Emulator
 - **THEN** the acceptance command fails and identifies the destination as local
+
+#### Scenario: Demonstrated channels pass real acceptance
+
+- **WHEN** Telegram and WhatsApp representative questions complete through their real platforms
+- **THEN** each result records full delivery latency and platform mode
 
 #### Scenario: Real channel latency passes
 

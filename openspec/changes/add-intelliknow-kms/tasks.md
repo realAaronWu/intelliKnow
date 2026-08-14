@@ -50,7 +50,7 @@ The implementation is organized by delivered increments, followed by a stabiliza
 - [x] 5.5 Implement the authenticated Bot Framework messaging endpoint for Teams
 - [x] 5.6 Log query results after delivery and isolate analytics failures from user replies
 - [x] 5.7 Add authenticated integration status/configuration/test endpoints
-- [ ] 5.8 Verify real Telegram and real Teams round trips and measure latency through send completion
+- [x] 5.8 Verify real Telegram and real WhatsApp round trips and measure latency through send completion; retain Teams as locally verified but real-tenant unclaimed
 - [x] 5.9 Remove typing from the delivery critical path and bound classifier and answer token budgets
 - [x] 5.10 Add single-tenant Teams credentials, app-package builder, and a real-platform-aware latency gate
 
@@ -69,7 +69,7 @@ The implementation is organized by delivered increments, followed by a stabiliza
 
 ## 7. MVP frontend integration credentials
 
-- [x] 7.1 Encrypt Telegram and Teams credential bundles with Fernet before SQLite persistence
+- [x] 7.1 Encrypt Telegram, WhatsApp, and Teams credential bundles with Fernet before SQLite persistence
 - [x] 7.2 Require and validate a database-external `CREDENTIAL_ENCRYPTION_KEY`
 - [x] 7.3 Return masked values only and fail closed on decryption errors
 - [x] 7.4 Save, replace, clear, and use credentials without a service restart

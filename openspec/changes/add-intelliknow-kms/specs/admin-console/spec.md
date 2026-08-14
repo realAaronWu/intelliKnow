@@ -109,7 +109,7 @@ The system SHALL provide a Frontend Integration screen presenting one card per s
 #### Scenario: One card per tool
 
 - **WHEN** an admin opens Frontend Integration
-- **THEN** Telegram and Microsoft Teams each appear as their own card
+- **THEN** Telegram, WhatsApp, and Microsoft Teams each appear as their own card
 
 #### Scenario: Status indicator shown
 
