@@ -38,6 +38,7 @@ from app.channels.store import ChannelStore, ensure_no_legacy_secret_references
 from app.channels.telegram import TelegramBotAPI, TelegramPoller
 from app.channels.teams import TeamsEndpoint, build_teams_router
 from app.channels.tester import ChannelTestService
+from app.channels.whatsapp import WhatsAppEndpoint, build_whatsapp_router
 from app.db import create_engine_for, init_schema, recover_interrupted_documents
 from app.ingest.worker import IngestDeps
 from app.ingest.classify_doc import preflight_classifier
@@ -58,6 +59,7 @@ def create_app(
     admin_password: str | None = None,
     lifespan=None,
     teams_endpoint: TeamsEndpoint | None = None,
+    whatsapp_endpoint: WhatsAppEndpoint | None = None,
     integration_store: ChannelStore | None = None,
     channel_tester: ChannelTestService | None = None,
     admin_service: AdminService | None = None,
@@ -88,6 +90,8 @@ def create_app(
         )
     if teams_endpoint is not None:
         fastapi_app.include_router(build_teams_router(teams_endpoint))
+    if whatsapp_endpoint is not None:
+        fastapi_app.include_router(build_whatsapp_router(whatsapp_endpoint))
     if integration_store is not None and channel_tester is not None:
         fastapi_app.include_router(
             build_integrations_router(integration_store, channel_tester),
@@ -238,6 +242,7 @@ def __getattr__(name: str):
             "telegram", enabled=cfg.channels.telegram.enabled
         )
         channel_store.initialize("teams", enabled=cfg.channels.teams.enabled)
+        channel_store.initialize("whatsapp", enabled=cfg.channels.whatsapp.enabled)
         vector_store = VectorStore(Path(cfg.storage.faiss_dir), cfg.embedding.dimension)
 
         deps = _build_default_deps(application, engine, vector_store)
@@ -277,11 +282,17 @@ def __getattr__(name: str):
             channel_handler,
             max_message_chars=cfg.channels.teams.max_message_chars,
         )
+        whatsapp_endpoint = WhatsAppEndpoint(
+            channel_store,
+            channel_handler,
+            max_message_chars=cfg.channels.whatsapp.max_message_chars,
+        )
         channel_tester = ChannelTestService(
             channel_store,
             channel_handler,
             telegram_max_chars=cfg.channels.telegram.max_message_chars,
             teams_max_chars=cfg.channels.teams.max_message_chars,
+            whatsapp_max_chars=cfg.channels.whatsapp.max_message_chars,
             telegram_api_factory=telegram_api_factory,
             telegram_api_provider=lambda: telegram_poller.active_api,
         )
@@ -311,6 +322,7 @@ def __getattr__(name: str):
             admin_password=application.admin_password,
             lifespan=_poller_lifespan(telegram_poller),
             teams_endpoint=teams_endpoint,
+            whatsapp_endpoint=whatsapp_endpoint,
             integration_store=channel_store,
             channel_tester=channel_tester,
             admin_service=admin_service,
@@ -321,6 +333,7 @@ def __getattr__(name: str):
         fastapi_app.state.channel_handler = channel_handler
         fastapi_app.state.telegram_poller = telegram_poller
         fastapi_app.state.teams_endpoint = teams_endpoint
+        fastapi_app.state.whatsapp_endpoint = whatsapp_endpoint
         fastapi_app.state.channel_tester = channel_tester
         fastapi_app.state.admin_service = admin_service
         return fastapi_app

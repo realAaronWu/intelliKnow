@@ -127,7 +127,7 @@ def test_admin_router_is_authenticated_and_dashboard_handles_empty_data(tmp_path
     response = client.get("/admin/dashboard")
     assert response.status_code == 200
     assert response.json()["document_count"] == 0
-    assert len(response.json()["integrations"]) == 2
+    assert len(response.json()["integrations"]) == 3
 
 
 def test_query_detail_returns_stage_latency_breakdown(tmp_path):

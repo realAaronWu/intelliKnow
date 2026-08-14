@@ -123,6 +123,11 @@ class ChannelsConfig(_StrictModel):
     teams: ChannelConfig = Field(
         default_factory=lambda: ChannelConfig(enabled=False, max_message_chars=28000)
     )
+    whatsapp: ChannelConfig = Field(
+        default_factory=lambda: ChannelConfig(
+            enabled=False, mode=None, max_message_chars=4096
+        )
+    )
 
 
 class IngestionConfig(_StrictModel):

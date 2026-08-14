@@ -355,7 +355,7 @@ class AdminService:
                 high_confidence += 1
             if row["latency_ms"] is not None:
                 latency_values.append(row["latency_ms"])
-                if row["channel"] in {"telegram", "teams"}:
+                if row["channel"] in {"telegram", "whatsapp", "teams"}:
                     channel_latencies.setdefault(row["channel"], []).append(
                         row["latency_ms"]
                     )
@@ -429,7 +429,7 @@ class AdminService:
                     "enabled": self.channel_store.get(channel).enabled,
                     "last_error": self.channel_store.get(channel).last_error,
                 }
-                for channel in ("telegram", "teams")
+                for channel in ("telegram", "whatsapp", "teams")
             ],
             "config": self.config_summary(),
         }

@@ -252,6 +252,21 @@ def dashboard() -> None:
 def _credential_fields(channel: str) -> dict[str, str]:
     if channel == "telegram":
         return {"token": st.text_input("Bot token", type="password", key="telegram-token")}
+    if channel == "whatsapp":
+        return {
+            "access_token": st.text_input(
+                "Access token", type="password", key="whatsapp-access-token"
+            ),
+            "phone_number_id": st.text_input(
+                "Phone-number ID", key="whatsapp-phone-number-id"
+            ),
+            "app_secret": st.text_input(
+                "Meta app secret", type="password", key="whatsapp-app-secret"
+            ),
+            "verify_token": st.text_input(
+                "Webhook verify token", type="password", key="whatsapp-verify-token"
+            ),
+        }
     return {
         "app_id": st.text_input("Application ID", key="teams-id"),
         "app_password": st.text_input("Application password", type="password", key="teams-password"),
@@ -260,7 +275,11 @@ def _credential_fields(channel: str) -> dict[str, str]:
 
 
 def frontend_integration() -> None:
-    page_header("Frontend Integration", "Connect and verify Telegram and Microsoft Teams.", "blue")
+    page_header(
+        "Frontend Integration",
+        "Connect and verify Telegram, WhatsApp, and Microsoft Teams.",
+        "blue",
+    )
     items = _call(_client().get, "/admin/integrations")
     if items is None:
         return
@@ -277,17 +296,28 @@ def frontend_integration() -> None:
                 values = [f"{key.replace('_', ' ').title()}: {value}" for key, value in masked.items() if key != "source"]
                 st.caption("  ·  ".join(values) + f"  ·  {masked.get('source', 'stored').title()}")
             else:
-                setup = (
-                    "Create a bot with Telegram BotFather, then enter its bot token."
-                    if channel == "telegram"
-                    else "Use Local Emulator without a Microsoft account, or enter registered Microsoft Bot credentials for real Teams."
-                )
+                if channel == "telegram":
+                    setup = "Create a bot with Telegram BotFather, then enter its bot token."
+                elif channel == "whatsapp":
+                    setup = (
+                        "Enter the values from Meta's WhatsApp API setup, plus a "
+                        "verify token you choose for webhook verification."
+                    )
+                else:
+                    setup = "Use Local Emulator without a Microsoft account, or enter registered Microsoft Bot credentials for real Teams."
                 st.info(setup, icon=":material/key:")
             if item.get("last_ok_at"):
                 st.caption(f"Last successful exchange: {item['last_ok_at']}")
             if item.get("credential_error"):
                 st.error(item["credential_error"], icon=":material/lock:")
             with st.expander("Configuration", expanded=not item["configured"]):
+                if channel == "whatsapp":
+                    st.caption("META WEBHOOK")
+                    st.code("/api/whatsapp/webhook", language=None)
+                    st.write(
+                        "Use this path after your public HTTPS tunnel URL. Subscribe "
+                        "the Meta webhook to the messages field."
+                    )
                 if channel == "teams" and not item["configured"]:
                     st.caption("LOCAL DEMO")
                     st.write(
@@ -882,7 +912,11 @@ def analytics() -> None:
         filters = st.columns(3)
         intent = filters[0].selectbox("Intent", ["All"] + [item["slug"] for item in intents], key="analytics-intent")
         status = filters[1].selectbox("Status", ["All", "success", "no_match", "failed"], key="analytics-status")
-        channel = filters[2].selectbox("Channel", ["All", "admin", "telegram", "teams"], key="analytics-channel")
+        channel = filters[2].selectbox(
+            "Channel",
+            ["All", "admin", "telegram", "whatsapp", "teams"],
+            key="analytics-channel",
+        )
         query_params = {**params, "limit": 100}
         if intent != "All":
             query_params["intent_slug"] = intent

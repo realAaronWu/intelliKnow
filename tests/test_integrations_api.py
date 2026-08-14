@@ -35,6 +35,7 @@ def _app(tmp_path):
     )
     store.initialize("telegram", enabled=False)
     store.initialize("teams", enabled=False)
+    store.initialize("whatsapp", enabled=False)
     tester = FakeTester()
     app = FastAPI()
     app.include_router(

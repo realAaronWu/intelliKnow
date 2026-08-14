@@ -100,6 +100,10 @@ channels:
     enabled: false
     mode: null
     max_message_chars: 28000
+  whatsapp:
+    enabled: false
+    mode: null
+    max_message_chars: 4096
 ingestion:
   max_upload_mb: 25
   allowed_extensions:

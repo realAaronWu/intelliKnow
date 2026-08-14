@@ -14,9 +14,14 @@ from app.db import integration_errors, integrations
 
 CredentialSource = Literal["stored"]
 
-_DISPLAY_NAMES = {"telegram": "Telegram", "teams": "Microsoft Teams"}
+_DISPLAY_NAMES = {
+    "telegram": "Telegram",
+    "whatsapp": "WhatsApp",
+    "teams": "Microsoft Teams",
+}
 _CREDENTIAL_FIELDS = {
     "telegram": {"token"},
+    "whatsapp": {"access_token", "phone_number_id", "app_secret", "verify_token"},
     "teams": {"app_id", "app_password", "tenant_id"},
 }
 

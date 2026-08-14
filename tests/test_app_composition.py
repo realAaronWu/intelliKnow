@@ -159,6 +159,7 @@ def test_c1_second_document_visible_to_dense_retrieval_without_restart(
     assert fastapi_app.state.query_logger is not None
     assert fastapi_app.state.telegram_poller is not None
     assert fastapi_app.state.teams_endpoint is not None
+    assert fastapi_app.state.whatsapp_endpoint is not None
     assert fastapi_app.state.channel_tester is not None
 
     doc1_id = _upload(client, application.classify_llm, "handbook.pdf")

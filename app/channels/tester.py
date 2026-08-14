@@ -13,6 +13,7 @@ from app.channels.handler import ChannelHandler, HandlerResult
 from app.channels.store import ChannelStore, CredentialError
 from app.channels.teams import TeamsAdapter, deserialize_conversation_reference
 from app.channels.telegram import TelegramAdapter, TelegramBotAPI
+from app.channels.whatsapp import WhatsAppAdapter, WhatsAppCloudAPI
 
 TestStage = Literal[
     "setup", "credentials", "destination", "pipeline", "delivery", "complete"
@@ -49,17 +50,21 @@ class ChannelTestService:
         *,
         telegram_max_chars: int = 4096,
         teams_max_chars: int = 28000,
+        whatsapp_max_chars: int = 4096,
         telegram_api_factory=TelegramBotAPI,
         telegram_api_provider=None,
         teams_adapter_factory=None,
+        whatsapp_api_factory=WhatsAppCloudAPI,
     ) -> None:
         self._store = store
         self._handler = handler
         self._telegram_max_chars = telegram_max_chars
         self._teams_max_chars = teams_max_chars
+        self._whatsapp_max_chars = whatsapp_max_chars
         self._telegram_api_factory = telegram_api_factory
         self._telegram_api_provider = telegram_api_provider or (lambda: None)
         self._teams_adapter_factory = teams_adapter_factory or self._build_teams_adapter
+        self._whatsapp_api_factory = whatsapp_api_factory
 
     @staticmethod
     def _build_teams_adapter(
@@ -119,6 +124,13 @@ class ChannelTestService:
                 credentials.values["app_id"],
                 credentials.values["app_password"],
                 credentials.values["tenant_id"],
+            )
+        if channel == "whatsapp":
+            return await self._run_whatsapp(
+                question,
+                state.last_reply_ref,
+                credentials.values["access_token"],
+                credentials.values["phone_number_id"],
             )
         return ChannelTestResult(
             channel, False, "failed", "setup", 0, f"unsupported channel: {channel!r}"
@@ -192,6 +204,30 @@ class ChannelTestService:
             self._store.mark_disconnected("teams", error)
             return ChannelTestResult("teams", False, "failed", "delivery", 0, error)
         return self._from_handler("teams", captured, platform_mode=platform_mode)
+
+    async def _run_whatsapp(
+        self,
+        question: str,
+        reply_ref: str,
+        access_token: str,
+        phone_number_id: str,
+    ) -> ChannelTestResult:
+        try:
+            async with self._whatsapp_api_factory() as api:
+                adapter = WhatsAppAdapter(
+                    api,
+                    access_token,
+                    phone_number_id,
+                    max_message_chars=self._whatsapp_max_chars,
+                )
+                result = await self._handler.handle(
+                    InboundMessage("whatsapp", None, question, reply_ref), adapter
+                )
+        except Exception as exc:
+            self._store.mark_disconnected("whatsapp", str(exc))
+            stage: TestStage = "credentials" if _credential_failure(str(exc)) else "delivery"
+            return ChannelTestResult("whatsapp", False, "failed", stage, 0, str(exc))
+        return self._from_handler("whatsapp", result, platform_mode="real")
 
     @staticmethod
     def _from_handler(

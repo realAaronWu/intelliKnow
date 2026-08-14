@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.channels.store import ChannelStore, CredentialError
 from app.channels.tester import ChannelTestService
 
-CHANNELS = ("telegram", "teams")
+CHANNELS = ("telegram", "whatsapp", "teams")
 DEFAULT_TEST_QUESTION = "How many days of annual leave do full-time employees receive?"
 
 
