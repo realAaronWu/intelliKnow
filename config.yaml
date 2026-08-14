@@ -81,16 +81,6 @@ intent_spaces:
   name: General
   description: Cross-functional topics that do not belong to one specialist domain.
   keywords: []
-- slug: tech
-  name: Tech
-  description: NVIDIA tech questions for dynamo and nccl
-  keywords:
-  - NVIDIA
-  - tech
-  - design
-  - architecture
-  - dynamo
-  - nccl
 channels:
   telegram:
     enabled: true
