@@ -44,6 +44,11 @@ infrastructure.
 The API is the only owner of SQLite, FAISS, ingestion, and channel state.
 Streamlit is an API client and does not access storage directly.
 
+For the complete component design, including responsibilities, runtime
+boundaries, RAG ingestion and query flows, channel interactions, data
+ownership, security, failure handling, and MVP trade-offs, read the
+[Detailed System Design](docs/ARCHITECTURE.md).
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -179,6 +184,7 @@ assessment and production gaps.
 
 ## Documentation
 
+- [Detailed system design](docs/ARCHITECTURE.md)
 - [Deployment guide](docs/DEPLOYMENT.md)
 - [Telegram, WhatsApp, and Teams guide](docs/INTEGRATIONS.md)
 - [AI usage reflection](AI_USAGE.md)
